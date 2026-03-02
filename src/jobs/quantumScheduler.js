@@ -5,11 +5,13 @@ const { shouldSkipToday } = require('../config/israeliHolidays');
 // Lazy-load services to avoid circular deps
 function getScanPriority() { try { return require('../services/scanPriorityService'); } catch(e) { return null; } }
 function getSmartBatch() { try { return require('../services/smartBatchService'); } catch(e) { return null; } }
+function getNotificationService() { try { return require('../services/notificationService'); } catch(e) { return null; } }
 
 /**
- * QUANTUM Intelligent Scan Scheduler v2.0 - Deploy-Safe
+ * QUANTUM Intelligent Scan Scheduler v2.1 - Deploy-Safe
  * 
- * NEW in v2.0: Job persistence across Railway deploys
+ * v2.1: Fixed missing getNotificationService lazy-loader
+ * v2.0: Job persistence across Railway deploys
  * - Jobs persist to PostgreSQL scan_jobs table
  * - On deploy/restart, interrupted jobs auto-resume from last completed complex
  * - Chain queue persists across restarts
@@ -259,7 +261,7 @@ async function resumeInterruptedJobs() {
 // CRON INIT
 // ============================================================
 function initScheduler() {
-  logger.info('[SCHEDULER] QUANTUM Scheduler v2.0 (deploy-safe) initializing...');
+  logger.info('[SCHEDULER] QUANTUM Scheduler v2.1 (deploy-safe + notification fix) initializing...');
 
   // Job Monitor: every 2 min
   schedulerState.scheduledTasks.push(
@@ -357,10 +359,12 @@ function initScheduler() {
           const result = await y.scanAll({ staleOnly: false, limit: 50, iai_min: 60 });
           logger.info(`[SCHEDULER] Express scan: ${result.totalNew} new, ${result.totalAlerts} alerts`);
           // Immediately send any new alerts
-          const ns = getNotificationService();
-          if (ns?.sendPendingAlerts && (result.totalNew > 0 || result.totalAlerts > 0)) {
-            await ns.sendPendingAlerts();
-          }
+          try {
+            const ns = getNotificationService();
+            if (ns?.sendPendingAlerts && (result.totalNew > 0 || result.totalAlerts > 0)) {
+              await ns.sendPendingAlerts();
+            }
+          } catch (alertErr) { logger.warn('[SCHEDULER] Alert send after express scan failed', { error: alertErr.message }); }
         }
       } catch (e) { logger.warn('[SCHEDULER] Express scan failed', { error: e.message }); }
     }, { timezone: 'Asia/Jerusalem' })
@@ -407,7 +411,7 @@ function initScheduler() {
 // ============================================================
 function getSchedulerStatus() {
   return {
-    version: '2.0-deploy-safe',
+    version: '2.1-deploy-safe',
     activeJobs: Object.keys(schedulerState.activeJobs).length,
     activeJobDetails: schedulerState.activeJobs,
     chainQueue: schedulerState.chainQueue,
