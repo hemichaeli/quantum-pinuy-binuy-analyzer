@@ -1,7 +1,7 @@
 /**
- * QUANTUM WhatsApp Bot - v5.0
+ * QUANTUM WhatsApp Bot - v5.1
  * Unified: All WhatsApp via QUANTUM account (037572229)
- * Credentials from env vars: INFORU_USERNAME + INFORU_PASSWORD
+ * Fixed: Correct INFORU webhook payload parsing
  */
 
 const express = require('express');
@@ -15,6 +15,39 @@ function getBasicAuth() {
   const password = process.env.INFORU_PASSWORD;
   if (!username || !password) throw new Error('INFORU credentials not configured');
   return Buffer.from(`${username}:${password}`).toString('base64');
+}
+
+/**
+ * Parse INFORU webhook payload
+ * INFORU sends: { Data: [{ Value: "phone", Message: "text", Network: "WhatsApp", ... }], CustomerId, ProjectId }
+ */
+function parseInforuWebhook(body) {
+  // Format 1: INFORU standard webhook
+  if (body.Data && Array.isArray(body.Data) && body.Data.length > 0) {
+    const item = body.Data[0];
+    return {
+      phone: item.Value || item.Phone || null,
+      message: item.Message || item.Keyword || item.Text || null,
+      network: item.Network || 'Unknown',
+      channel: item.Channel || 'Unknown',
+      shortCode: item.ShortCode || null,
+      sessionId: item.MoSessionId || null,
+      customerParam: item.CustomerParam || null,
+      additionalInfo: item.AdditionalInfo ? (typeof item.AdditionalInfo === 'string' ? JSON.parse(item.AdditionalInfo) : item.AdditionalInfo) : null,
+      customerId: body.CustomerId || null,
+      projectId: body.ProjectId || null,
+      raw: body
+    };
+  }
+  
+  // Format 2: Simple format (manual trigger / other)
+  return {
+    phone: body.phone || body.from || body.Phone || null,
+    message: body.message || body.text || body.body || body.Message || null,
+    network: 'Direct',
+    channel: 'Direct',
+    raw: body
+  };
 }
 
 // Simple AI call function
@@ -64,23 +97,34 @@ const SALES_SYSTEM_PROMPT = `אתה QUANTUM Sales AI - המתווך הדיגיט
 // INFORU webhook receiver
 router.post('/whatsapp/webhook', async (req, res) => {
   try {
-    const messageData = req.body;
-    const phone = messageData.phone || messageData.from;
-    const message = messageData.message || messageData.text || messageData.body;
+    const parsed = parseInforuWebhook(req.body);
     
-    if (!phone || !message) {
-      console.log('Webhook received incomplete data:', messageData);
-      return res.status(400).json({ error: 'Missing phone or message', received: messageData });
+    if (!parsed.phone || !parsed.message) {
+      console.log('Webhook: incomplete data:', JSON.stringify(req.body).substring(0, 300));
+      return res.status(200).json({ 
+        received: true, 
+        processed: false, 
+        reason: 'Missing phone or message',
+        parsedPhone: parsed.phone,
+        parsedMessage: parsed.message
+      });
     }
     
     console.log('WEBHOOK: Message received:', { 
-      phone, 
-      message: message.substring(0, 50),
+      phone: parsed.phone, 
+      message: parsed.message.substring(0, 50),
+      network: parsed.network,
       timestamp: new Date().toISOString()
     });
     
+    // Only auto-reply to WhatsApp messages
+    if (parsed.network !== 'WhatsApp' && parsed.network !== 'Direct') {
+      console.log('Webhook: Non-WhatsApp message, skipping auto-reply:', parsed.network);
+      return res.json({ received: true, processed: false, reason: `Network: ${parsed.network}` });
+    }
+    
     // Generate AI response
-    const aiResponse = await callClaude(SALES_SYSTEM_PROMPT, message);
+    const aiResponse = await callClaude(SALES_SYSTEM_PROMPT, parsed.message);
     
     // Send response via QUANTUM credentials (037572229)
     const axios = require('axios');
@@ -89,7 +133,7 @@ router.post('/whatsapp/webhook', async (req, res) => {
     const result = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsAppChat`, {
       Data: { 
         Message: aiResponse, 
-        Phone: phone,
+        Phone: parsed.phone,
         Settings: {
           CustomerMessageId: `bot_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
           CustomerParameter: 'QUANTUM_BOT'
@@ -108,12 +152,14 @@ router.post('/whatsapp/webhook', async (req, res) => {
     console.log(`Bot reply ${success ? 'sent' : 'failed'}:`, { 
       status: result.data.StatusId, 
       description: result.data.StatusDescription,
-      phone 
+      phone: parsed.phone
     });
     
     res.json({ 
       success,
       processed: true,
+      incomingPhone: parsed.phone,
+      incomingMessage: parsed.message,
       autoReplyStatus: result.data.StatusId,
       autoReplyDescription: result.data.StatusDescription,
       deploymentTime: DEPLOYMENT_TIME
@@ -191,6 +237,7 @@ router.get('/whatsapp/stats', async (req, res) => {
         source: 'env vars (INFORU_USERNAME/INFORU_PASSWORD)',
         account: process.env.INFORU_USERNAME || 'NOT SET'
       },
+      webhookFormat: 'INFORU standard (Data array with Value/Message/Network)',
       status: 'ACTIVE - Send message to 037572229 to test'
     });
   } catch (error) {
