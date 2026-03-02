@@ -102,12 +102,66 @@ router.get('/schema/:table', async (req, res) => {
 router.post('/sql', async (req, res) => {
   try {
     const { query, params } = req.body;
-    const allowed = /^(SELECT|ALTER|CREATE (INDEX|TABLE)|UPDATE complexes SET|UPDATE listings SET|DELETE FROM complexes|DELETE FROM alerts|DELETE FROM listings)/i;
+    const allowed = /^(SELECT|ALTER|CREATE (INDEX|TABLE)|UPDATE complexes SET|UPDATE listings SET|UPDATE alerts SET|UPDATE buildings SET|UPDATE transactions SET|DELETE FROM complexes|DELETE FROM alerts|DELETE FROM listings)/i;
     if (!allowed.test(query.trim())) {
-      return res.status(403).json({ error: 'Only SELECT, ALTER, CREATE, UPDATE, and DELETE (complexes/alerts/listings) queries allowed' });
+      return res.status(403).json({ error: 'Only SELECT, ALTER, CREATE, UPDATE (complexes/listings/alerts/buildings/transactions), and DELETE (complexes/alerts/listings) queries allowed' });
     }
     const result = await pool.query(query, params || []);
     res.json({ rowCount: result.rowCount, rows: result.rows?.slice(0, 100) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/alerts/mark-old-sent - Mark old unsent alerts as sent
+router.post('/alerts/mark-old-sent', async (req, res) => {
+  try {
+    const { hoursBack = 24 } = req.body;
+    const result = await pool.query(
+      `UPDATE alerts SET sent_at = NOW() WHERE sent_at IS NULL AND created_at < NOW() - INTERVAL '1 hour' * $1`,
+      [hoursBack]
+    );
+    logger.info(`Marked ${result.rowCount} old alerts as sent (older than ${hoursBack}h)`);
+    
+    const remaining = await pool.query(
+      `SELECT severity, COUNT(*) as cnt FROM alerts WHERE sent_at IS NULL GROUP BY severity ORDER BY cnt DESC`
+    );
+    
+    res.json({
+      marked_as_sent: result.rowCount,
+      hours_back: hoursBack,
+      remaining_unsent: remaining.rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/notifications/send-pending - Trigger pending notification sending
+router.post('/notifications/send-pending', async (req, res) => {
+  try {
+    const notificationService = require('../services/notificationService');
+    const result = await notificationService.sendPendingAlerts();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/notifications/status - Check notification config
+router.get('/notifications/status', async (req, res) => {
+  try {
+    const notificationService = require('../services/notificationService');
+    const pending = await pool.query(
+      `SELECT severity, COUNT(*) as cnt FROM alerts WHERE sent_at IS NULL AND severity IN ('critical', 'high') GROUP BY severity`
+    );
+    res.json({
+      configured: notificationService.isConfigured(),
+      provider: notificationService.getProvider(),
+      email_from: process.env.EMAIL_FROM || 'default (onboarding@resend.dev)',
+      recipients: notificationService.NOTIFICATION_EMAILS,
+      pending_alerts: pending.rows
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -177,7 +231,7 @@ router.post('/cleanup-cities', async (req, res) => {
     // Step 2: Normalize cities
     for (const item of toNormalize) {
       const upd = await pool.query('UPDATE complexes SET city = $1 WHERE city = $2', [item.to, item.from]);
-      results.push(`${item.from} → ${item.to}: ${upd.rowCount} updated`);
+      results.push(`${item.from} -> ${item.to}: ${upd.rowCount} updated`);
     }
 
     // Step 3: Run dedup (same logic as /dedup endpoint)
