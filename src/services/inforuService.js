@@ -56,30 +56,26 @@ QUANTUM`,
 
 // --- WhatsApp Templates (INFORU approved - real template IDs) ---
 const WA_TEMPLATES = {
-  // Template: קישור לתיקייה ציבורית של דירה מעודכן
   file_link_updated: {
     templateId: '214803',
     name: 'קישור לתיקייה ציבורית של דירה מעודכן',
-    params: ['name'],  // היי [#1#]
+    params: ['name'],
     hasButtons: true,
     buttonType: 'URL'
   },
-  // Template: קישור לתיקייה ציבורית של דירה
   file_link_basic: {
     templateId: '213960',
     name: 'קישור לתיקייה ציבורית של דירה',
-    params: ['name'],  // היי [#1#]
+    params: ['name'],
     hasButtons: false
   },
-  // Template: אישור השתתפות לפרויקט
   project_attendance: {
     templateId: '212543',
     name: 'אישור השתתפות לפרויקט',
-    params: ['name', 'project_name'],  // שלום [#1#], פרויקט [#2#]
+    params: ['name', 'project_name'],
     hasButtons: true,
     buttonType: 'QUICK_REPLY'
   },
-  // Template: אישור השתתפות (מפורט)
   meeting_attendance: {
     templateId: '211339',
     name: 'אישור השתתפות',
@@ -87,21 +83,18 @@ const WA_TEMPLATES = {
     hasButtons: true,
     buttonType: 'QUICK_REPLY'
   },
-  // Template: מוסד 2 (tested and working!)
   institutional_message: {
     templateId: '200763',
     name: 'מוסד 2',
-    params: [],  // No parameters
+    params: [],
     hasButtons: false
   },
-  // Template: מוסד (original)
   institutional_original: {
     templateId: '200683',
     name: 'מוסד',
     params: [],
     hasButtons: false
   },
-  // Template: היכרות לנציגות מתחם 1 עם דן קושניר
   representative_intro: {
     templateId: '180735',
     name: 'היכרות לנציגות מתחם 1 עם דן קושניר',
@@ -111,13 +104,12 @@ const WA_TEMPLATES = {
   }
 };
 
-// QUANTUM-specific template mappings
 const QUANTUM_WA_MAPPINGS = {
-  seller_initial: 'file_link_basic',      // Use basic file link template
-  seller_followup: 'institutional_message', // Use working tested template
-  buyer_opportunity: 'project_attendance',   // Use project attendance template
-  kones_inquiry: 'representative_intro',     // Use intro template
-  test_message: 'institutional_message'      // For testing - working template
+  seller_initial: 'file_link_basic',
+  seller_followup: 'institutional_message',
+  buyer_opportunity: 'project_attendance',
+  kones_inquiry: 'representative_intro',
+  test_message: 'institutional_message'
 };
 
 // ==================== AUTH ====================
@@ -198,13 +190,8 @@ async function sendSms(recipients, message, options = {}) {
 
 /**
  * Send WhatsApp template message via CAPI
- * @param {string|string[]} recipients - Phone number(s)
- * @param {string} templateKey - Key from WA_TEMPLATES or QUANTUM_WA_MAPPINGS
- * @param {object} variables - Template parameter values
- * @param {object} options - Additional options
  */
 async function sendWhatsApp(recipients, templateKey, variables = {}, options = {}) {
-  // Map QUANTUM template keys to actual WA templates
   const actualTemplateKey = QUANTUM_WA_MAPPINGS[templateKey] || templateKey;
   const tmpl = WA_TEMPLATES[actualTemplateKey];
   
@@ -213,7 +200,6 @@ async function sendWhatsApp(recipients, templateKey, variables = {}, options = {
   const phones = (Array.isArray(recipients) ? recipients : [recipients]).map(normalizePhoneLocal).filter(Boolean);
   if (phones.length === 0) throw new Error('No valid phone numbers');
 
-  // Build template parameters (only if template has params)
   const templateParams = tmpl.params && tmpl.params.length > 0 
     ? tmpl.params.map((paramName, idx) => ({
         Name: `[#${idx + 1}#]`,
@@ -222,7 +208,6 @@ async function sendWhatsApp(recipients, templateKey, variables = {}, options = {
       }))
     : [];
 
-  // Build recipients array
   const recipientsArray = phones.map(phone => ({ Phone: phone }));
 
   const payload = {
@@ -256,23 +241,17 @@ async function sendWhatsApp(recipients, templateKey, variables = {}, options = {
       timestamp: new Date().toISOString()
     };
 
-    // Build message text for logging
     const msgText = `[WA Template: ${tmpl.name}] ${JSON.stringify(variables)}`;
     await logMessage(result, msgText, phones, { ...options, channel: 'whatsapp', templateKey: actualTemplateKey });
 
     if (data.StatusId === 1) {
       logger.info(`WhatsApp sent to ${data.Data?.Recipients} recipients`, { 
-        templateKey: actualTemplateKey, 
-        originalKey: templateKey,
-        templateId: tmpl.templateId,
-        phones 
+        templateKey: actualTemplateKey, templateId: tmpl.templateId, phones 
       });
     } else {
       logger.warn('WhatsApp send failed', { 
-        status: data.StatusId, 
-        description: data.StatusDescription, 
-        errors: data.Data?.Errors,
-        templateKey: actualTemplateKey
+        status: data.StatusId, description: data.StatusDescription, 
+        errors: data.Data?.Errors, templateKey: actualTemplateKey
       });
     }
 
@@ -285,10 +264,16 @@ async function sendWhatsApp(recipients, templateKey, variables = {}, options = {
 
 /**
  * Send WhatsApp chat message (only within 24h window)
+ * FIXED: Always include CustomerMessageId and CustomerParameter in Settings
+ * per INFORU API requirements (empty Settings causes 400 error)
  */
 async function sendWhatsAppChat(phone, message, options = {}) {
   const normalizedPhone = normalizePhoneLocal(phone);
   if (!normalizedPhone) throw new Error('Invalid phone number');
+
+  // Generate unique message ID if not provided
+  const customerMessageId = options.customerMessageId || `q_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const customerParameter = options.customerParameter || 'QUANTUM';
 
   const payload = {
     Data: {
@@ -296,11 +281,13 @@ async function sendWhatsAppChat(phone, message, options = {}) {
       Phone: normalizedPhone,
       ...(options.mediaUrl ? { MessageMedia: options.mediaUrl } : {}),
       Settings: {
-        ...(options.customerMessageId ? { CustomerMessageId: options.customerMessageId } : {}),
-        ...(options.customerParameter ? { CustomerParameter: options.customerParameter } : {})
+        CustomerMessageId: String(customerMessageId),
+        CustomerParameter: String(customerParameter)
       }
     }
   };
+
+  logger.info('SendWhatsAppChat payload', { phone: normalizedPhone, messageLength: message.length, customerMessageId });
 
   try {
     const response = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsAppChat`, payload, {
@@ -316,6 +303,7 @@ async function sendWhatsAppChat(phone, message, options = {}) {
       success: data.StatusId === 1,
       status: data.StatusId,
       description: data.StatusDescription,
+      customerMessageId,
       phone: normalizedPhone, channel: 'whatsapp_chat',
       timestamp: new Date().toISOString()
     };
@@ -323,7 +311,7 @@ async function sendWhatsAppChat(phone, message, options = {}) {
     await logMessage(result, message, [normalizedPhone], { ...options, channel: 'whatsapp_chat' });
     return result;
   } catch (err) {
-    logger.error('WhatsApp Chat API error', { error: err.message });
+    logger.error('WhatsApp Chat API error', { error: err.message, phone: normalizedPhone, payload: JSON.stringify(payload) });
     throw err;
   }
 }
@@ -406,13 +394,9 @@ async function pullWhatsAppDLR(batchSize = 100) {
 
 // ==================== DUAL CHANNEL ====================
 
-/**
- * Send message on both SMS and WhatsApp
- */
 async function sendDualChannel(recipients, templateKey, variables = {}, options = {}) {
   const results = { sms: null, whatsapp: null };
 
-  // Send SMS
   try {
     const smsMessage = fillTemplate(templateKey, variables);
     results.sms = await sendSms(recipients, smsMessage, options);
@@ -420,7 +404,6 @@ async function sendDualChannel(recipients, templateKey, variables = {}, options 
     results.sms = { success: false, error: err.message, channel: 'sms' };
   }
 
-  // Send WhatsApp (if mapping exists)
   if (QUANTUM_WA_MAPPINGS[templateKey] || WA_TEMPLATES[templateKey]) {
     try {
       results.whatsapp = await sendWhatsApp(recipients, templateKey, variables, options);
@@ -445,7 +428,6 @@ function normalizePhone(phone) {
   return null;
 }
 
-// For WhatsApp CAPI - keep local format (05x)
 function normalizePhoneLocal(phone) {
   if (!phone) return null;
   let cleaned = phone.toString().replace(/[\s\-\(\)\.]/g, '');
@@ -569,7 +551,6 @@ async function checkAccountStatus() {
 
   const result = { configured: true, credentialsValid: true, sms: null, whatsapp: null };
 
-  // Check SMS
   try {
     const xml = buildXmlPayload(username, password, '0000000000', 'QUANTUM test message', 'QUANTUM');
     const resp = await axios.post(INFORU_XML_URL, null, {
@@ -584,7 +565,6 @@ async function checkAccountStatus() {
     result.sms = { working: false, error: err.message };
   }
 
-  // Check WhatsApp
   try {
     const resp = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/GetTemplateList`,
       { Data: {} },
@@ -610,19 +590,13 @@ async function checkAccountStatus() {
 }
 
 module.exports = {
-  // SMS
   sendSms, fillTemplate, 
-  // WhatsApp
   sendWhatsApp, sendWhatsAppChat,
   getWhatsAppTemplates, getWhatsAppTemplate,
   pullIncomingWhatsApp, pullWhatsAppDLR,
-  // Dual
   sendDualChannel,
-  // Bulk
   bulkSend,
-  // Utils
   normalizePhone, normalizePhoneLocal,
   getStats, checkAccountStatus,
-  // Constants
   SMS_TEMPLATES, WA_TEMPLATES, QUANTUM_WA_MAPPINGS
 };
