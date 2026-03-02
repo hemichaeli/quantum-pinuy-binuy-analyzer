@@ -30,11 +30,14 @@ console.log('[TRACE] All requires done, setting up app...');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const VERSION = '4.34.0';
-const BUILD = '2026-03-01-v4.34.0-production-stable';
+const VERSION = '4.35.0';
+const BUILD = '2026-03-02-v4.35.0-scheduler-fix';
 
 // Store route loading results for diagnostics
 const routeLoadResults = [];
+
+// Scheduler reference (set after init)
+let schedulerRef = null;
 
 async function runAutoMigrations() {
   try {
@@ -73,7 +76,7 @@ async function runAutoMigrations() {
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at DESC)`);
     } catch (e) { /* table exists */ }
     
-    logger.info('Auto-migrations completed (v4.34.0 - production-stable)');
+    logger.info(`Auto-migrations completed (v${VERSION})`);
   } catch (error) {
     logger.error('Auto-migration error:', error.message);
   }
@@ -108,15 +111,15 @@ app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
     const duration = Date.now() - start;
-    if (req.path !== '/health' && req.path !== '/debug' && req.path !== '/robots.txt') {
+    if (req.path !== '/health' && req.path !== '/api/health' && req.path !== '/debug' && req.path !== '/robots.txt') {
       logger.info(`${req.method} ${req.path} ${res.statusCode} ${duration}ms`);
     }
   });
   next();
 });
 
-// Health check
-app.get('/health', async (req, res) => {
+// Health check handler (shared between /health and /api/health)
+async function handleHealthCheck(req, res) {
   try {
     const result = await pool.query('SELECT COUNT(*) FROM complexes');
     const txCount = await pool.query('SELECT COUNT(*) FROM transactions');
@@ -124,6 +127,27 @@ app.get('/health', async (req, res) => {
     const alertCount = await pool.query('SELECT COUNT(*) FROM alerts WHERE is_read = FALSE');
     let botLeadCount = 0;
     try { const bl = await pool.query("SELECT COUNT(*) FROM leads WHERE source IN ('whatsapp_bot', 'whatsapp_webhook')"); botLeadCount = parseInt(bl.rows[0].count); } catch (e) { /* table might not exist yet */ }
+    
+    // Scheduler status
+    let schedulerStatus = 'not_initialized';
+    if (schedulerRef) {
+      try {
+        const ss = schedulerRef.getSchedulerStatus();
+        schedulerStatus = `active (${ss.activeJobs} jobs, ${ss.stats.totalScans} scans)`;
+      } catch (e) { schedulerStatus = 'error'; }
+    }
+
+    // Last scan info
+    let lastScanInfo = null;
+    try {
+      const ls = await pool.query('SELECT id, scan_type, started_at, completed_at, status FROM scan_logs ORDER BY started_at DESC LIMIT 1');
+      if (ls.rows.length > 0) {
+        const scan = ls.rows[0];
+        const hoursAgo = ((Date.now() - new Date(scan.started_at).getTime()) / 3600000).toFixed(1);
+        lastScanInfo = { id: scan.id, type: scan.scan_type, status: scan.status, hours_ago: parseFloat(hoursAgo) };
+      }
+    } catch (e) { /* scan_logs might not exist */ }
+
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
@@ -136,13 +160,19 @@ app.get('/health', async (req, res) => {
       whatsapp_bot_leads: botLeadCount,
       unread_alerts: parseInt(alertCount.rows[0].count),
       notifications: notificationService.isConfigured() ? 'active' : 'disabled',
+      scheduler: schedulerStatus,
+      last_scan: lastScanInfo,
       routes_loaded: routeLoadResults.filter(r => r.status === 'ok').length,
       routes_failed: routeLoadResults.filter(r => r.status === 'failed').length
     });
   } catch (error) {
     res.status(500).json({ status: 'unhealthy', error: error.message, version: VERSION });
   }
-});
+}
+
+// Health check - both /health and /api/health
+app.get('/health', handleHealthCheck);
+app.get('/api/health', handleHealthCheck);
 
 // Route loading - SAFE VERSION
 function loadRoute(routePath, mountPath) {
@@ -212,8 +242,11 @@ app.get('/api/info', (req, res) => {
   res.json({
     name: 'QUANTUM - Pinuy Binuy Investment Analyzer',
     version: VERSION, build: BUILD,
+    scheduler: schedulerRef ? 'active' : 'not_initialized',
     endpoints: {
-      health: '/health', 
+      health: '/health',
+      health_api: '/api/health',
+      scheduler_status: '/api/scheduler/v2',
       whatsapp_webhook: '/api/whatsapp/webhook', 
       whatsapp_trigger: '/api/whatsapp/trigger',
       whatsapp_dashboard: '/api/whatsapp-dashboard', 
@@ -238,6 +271,22 @@ async function start() {
   logger.info(`=== ROUTE LOADING SUMMARY ===`);
   loaded.forEach(r => logger.info(`  OK: ${r.path}`));
   failed.forEach(r => logger.error(`  FAILED: ${r.path} -> ${r.error}`));
+
+  // =====================================================
+  // CRITICAL FIX: Initialize Scheduler Cron Jobs
+  // This was MISSING - cron jobs were never started!
+  // =====================================================
+  console.log('[TRACE] Initializing QUANTUM Scheduler...');
+  try {
+    const scheduler = require('./jobs/quantumScheduler');
+    scheduler.initScheduler();
+    schedulerRef = scheduler;
+    logger.info('[SCHEDULER] QUANTUM Scheduler v2.0 initialized successfully - cron jobs ACTIVE');
+    logger.info('[SCHEDULER] Schedule: Listings daily 07:00, SSI daily 09:00, Tier1 Sun 08:00, Express 11/15/19h');
+  } catch (err) {
+    logger.error(`[SCHEDULER] Failed to initialize: ${err.message}`);
+    console.error('[TRACE] Scheduler init failed:', err.message);
+  }
   
   // 404 handler - AFTER all routes
   app.use((req, res) => { res.status(404).json({ error: 'Not Found', path: req.path, version: VERSION }); });
@@ -248,6 +297,7 @@ async function start() {
     console.log(`[TRACE] Server listening on port ${PORT}`);
     logger.info(`Server running on port ${PORT}`);
     logger.info(`Routes: ${loaded.length} loaded, ${failed.length} failed`);
+    logger.info(`Scheduler: ${schedulerRef ? 'ACTIVE' : 'INACTIVE'}`);
     logger.info(`WhatsApp Bot: /api/bot/`);
     logger.info(`WhatsApp Webhook: /api/whatsapp/webhook`);
     logger.info(`WhatsApp Dashboard: /api/whatsapp-dashboard`);
