@@ -1,11 +1,12 @@
 /**
- * QUANTUM WhatsApp Bot - v6.0
- * Full conversation tracking + enhanced AI + lead management
+ * QUANTUM WhatsApp Bot - v6.1
+ * Full conversation tracking + enhanced AI + lead management + auto-handoff
  */
 
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const axios = require('axios');
 
 const INFORU_CAPI_BASE = 'https://capi.inforu.co.il/api/v2';
 const DEPLOYMENT_TIME = new Date().toISOString();
@@ -49,11 +50,115 @@ function parseInforuWebhook(body) {
   };
 }
 
+// Check if handoff is needed
+function shouldHandoff(message, history, leadInfo) {
+  const messageCount = history.length;
+  
+  // 1. Explicit request for human
+  if (message.match(/רוצה לדבר עם אדם|תעביר אותי לאדם|אני רוצה אדם|לדבר עם מישהו|אנשי|מוקד|מתווך אמיתי/i)) {
+    return { should: true, reason: 'explicit_request', urgency: 'high' };
+  }
+  
+  // 2. Frustration indicators
+  if (message.match(/לא מבין|לא עוזר|לא עונה|מה קורה|די|מספיק|תפסיק/i)) {
+    return { should: true, reason: 'frustration', urgency: 'high' };
+  }
+  
+  // 3. Complex pricing/legal questions
+  if (message.match(/עורך דין|משפטי|חוזה|מיסים|היטל השבחה|מע"מ|רישוי/i)) {
+    return { should: true, reason: 'complex_legal', urgency: 'normal' };
+  }
+  
+  // 4. Too many messages without progress (stuck in loop)
+  if (messageCount >= 8) {
+    const userMessages = history.filter(m => m.sender === 'user').map(m => m.message);
+    const lastThree = userMessages.slice(-3);
+    
+    // Check if user keeps asking similar things
+    const similarityCount = lastThree.filter((msg, idx) => 
+      lastThree.some((other, otherIdx) => 
+        idx !== otherIdx && 
+        msg.length > 10 && 
+        other.length > 10 &&
+        (msg.includes(other.substring(0, 20)) || other.includes(msg.substring(0, 20)))
+      )
+    ).length;
+    
+    if (similarityCount >= 2) {
+      return { should: true, reason: 'stuck_in_loop', urgency: 'normal' };
+    }
+  }
+  
+  // 5. Very long conversation (10+ messages) - might need human touch
+  if (messageCount >= 10 && leadInfo.stage !== 'scheduling') {
+    return { should: true, reason: 'long_conversation', urgency: 'normal' };
+  }
+  
+  return { should: false };
+}
+
+// Request handoff
+async function requestHandoff(leadId, reason, urgency, phone, name) {
+  try {
+    // Update lead status
+    await pool.query(`
+      UPDATE leads 
+      SET 
+        status = 'pending_handoff',
+        raw_data = jsonb_set(
+          jsonb_set(
+            jsonb_set(
+              COALESCE(raw_data, '{}'::jsonb),
+              '{handoff_requested}', 'true'
+            ),
+            '{handoff_reason}', $1
+          ),
+          '{handoff_urgency}', $2
+        ),
+        updated_at = NOW()
+      WHERE id = $3
+    `, [JSON.stringify(reason), JSON.stringify(urgency), leadId]);
+    
+    // Send handoff message
+    const handoffMessage = `${name ? name + ', ' : ''}אני מעביר אותך למומחה שלנו שיוכל לעזור לך יותר טוב.\n\nהוא יחזור אליך תוך ${urgency === 'high' ? '30 דקות' : 'שעה-שעתיים'}. תודה על הסבלנות! 🙏`;
+    
+    const auth = getBasicAuth();
+    await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsAppChat`, {
+      Data: { 
+        Message: handoffMessage, 
+        Phone: phone,
+        Settings: {
+          CustomerMessageId: `handoff_${Date.now()}`,
+          CustomerParameter: 'QUANTUM_AUTO_HANDOFF'
+        }
+      }
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${auth}`
+      },
+      timeout: 15000,
+      validateStatus: () => true
+    });
+    
+    // Save handoff message
+    await pool.query(`
+      INSERT INTO whatsapp_conversations (lead_id, sender, message, ai_metadata, created_at)
+      VALUES ($1, 'bot', $2, $3, NOW())
+    `, [leadId, handoffMessage, JSON.stringify({ type: 'auto_handoff', reason, urgency })]);
+    
+    console.log(`[HANDOFF] Auto-handoff triggered for lead ${leadId}: ${reason} (${urgency})`);
+    
+    return true;
+  } catch (error) {
+    console.error('[HANDOFF] Error:', error.message);
+    return false;
+  }
+}
+
 // Enhanced AI call with conversation context
 async function callClaudeWithContext(conversationHistory, currentMessage, leadInfo) {
   try {
-    const axios = require('axios');
-    
     // Build context from history
     let contextSummary = '';
     if (conversationHistory.length > 0) {
@@ -174,10 +279,9 @@ ${conversationContext}
   return basePrompt;
 }
 
-// Database: Get or create lead
+// Database functions
 async function getOrCreateLead(phone) {
   try {
-    // Try to find existing lead
     let result = await pool.query(
       `SELECT * FROM leads WHERE phone = $1 AND source = 'whatsapp_bot' ORDER BY created_at DESC LIMIT 1`,
       [phone]
@@ -187,7 +291,6 @@ async function getOrCreateLead(phone) {
       return result.rows[0];
     }
     
-    // Create new lead
     result = await pool.query(
       `INSERT INTO leads (phone, source, status, raw_data, created_at, updated_at)
        VALUES ($1, 'whatsapp_bot', 'new', '{}', NOW(), NOW())
@@ -202,7 +305,6 @@ async function getOrCreateLead(phone) {
   }
 }
 
-// Database: Get conversation history
 async function getConversationHistory(leadId) {
   try {
     const result = await pool.query(
@@ -219,7 +321,6 @@ async function getConversationHistory(leadId) {
   }
 }
 
-// Database: Save message
 async function saveMessage(leadId, sender, message, aiMetadata = null) {
   try {
     await pool.query(
@@ -232,7 +333,6 @@ async function saveMessage(leadId, sender, message, aiMetadata = null) {
   }
 }
 
-// Database: Update lead info
 async function updateLead(leadId, updates) {
   try {
     const fields = [];
@@ -259,24 +359,20 @@ async function updateLead(leadId, updates) {
   }
 }
 
-// Extract insights from conversation
 function extractInsights(message, history) {
   const insights = {};
   
-  // Name detection
   const nameMatch = message.match(/שמי ([\u0590-\u05FF]+)|קוראים לי ([\u0590-\u05FF]+)|אני ([\u0590-\u05FF]+)/);
   if (nameMatch) {
     insights.name = nameMatch[1] || nameMatch[2] || nameMatch[3];
   }
   
-  // User type detection
   if (message.match(/רוצה לקנות|מחפש דירה|קונה|מעוניין לקנות/)) {
     insights.user_type = 'buyer';
   } else if (message.match(/רוצה למכור|יש לי דירה|מוכר|למכירה/)) {
     insights.user_type = 'seller';
   }
   
-  // Stage detection
   if (history.length === 0) {
     insights.stage = 'greeting';
   } else if (history.length < 4) {
@@ -294,12 +390,11 @@ function extractInsights(message, history) {
 // WEBHOOK VERIFICATION (GET)
 // ============================================
 router.get('/whatsapp/webhook', (req, res) => {
-  console.log('Webhook verification GET request:', req.query);
   res.status(200).json({
     success: true,
     message: 'QUANTUM WhatsApp Webhook - Active',
-    version: '6.0',
-    features: ['conversation_tracking', 'context_awareness', 'lead_management'],
+    version: '6.1',
+    features: ['conversation_tracking', 'context_awareness', 'lead_management', 'auto_handoff'],
     webhookUrl: getWebhookUrl(),
     whatsappNumber: '037572229',
     timestamp: new Date().toISOString()
@@ -312,47 +407,24 @@ router.get('/whatsapp/webhook', (req, res) => {
 router.post('/whatsapp/webhook', async (req, res) => {
   try {
     console.log('=== WEBHOOK RECEIVED ===');
-    console.log('Body:', JSON.stringify(req.body, null, 2));
     
     const parsed = parseInforuWebhook(req.body);
     
     if (!parsed.phone || !parsed.message) {
-      console.log('Webhook: incomplete data');
-      return res.status(200).json({ 
-        received: true, 
-        processed: false, 
-        reason: 'Missing phone or message'
-      });
+      return res.status(200).json({ received: true, processed: false, reason: 'Missing phone or message' });
     }
     
-    console.log('✓ Valid message:', { phone: parsed.phone, message: parsed.message.substring(0, 50) });
-    
-    // Skip non-WhatsApp
     if (parsed.network !== 'WhatsApp' && parsed.network !== 'Direct') {
-      console.log('Non-WhatsApp message, skipping');
       return res.json({ received: true, processed: false, reason: `Network: ${parsed.network}` });
     }
     
-    // Get or create lead
     const lead = await getOrCreateLead(parsed.phone);
-    if (!lead) {
-      throw new Error('Failed to get/create lead');
-    }
+    if (!lead) throw new Error('Failed to get/create lead');
     
-    console.log(`Lead ID: ${lead.id}, Status: ${lead.status}`);
-    
-    // Get conversation history
     const history = await getConversationHistory(lead.id);
-    console.log(`Conversation history: ${history.length} messages`);
-    
-    // Save incoming message
     await saveMessage(lead.id, 'user', parsed.message);
     
-    // Extract insights
     const insights = extractInsights(parsed.message, history);
-    console.log('Insights:', insights);
-    
-    // Get lead info with insights
     const leadInfo = {
       id: lead.id,
       name: insights.name || lead.name,
@@ -361,32 +433,36 @@ router.post('/whatsapp/webhook', async (req, res) => {
       status: lead.status
     };
     
-    // Generate AI response with context
-    console.log('→ Calling Claude AI with context...');
+    // Check if handoff needed
+    const handoffCheck = shouldHandoff(parsed.message, history, leadInfo);
+    if (handoffCheck.should) {
+      console.log(`[AUTO-HANDOFF] Triggered: ${handoffCheck.reason}`);
+      await requestHandoff(lead.id, handoffCheck.reason, handoffCheck.urgency, parsed.phone, leadInfo.name);
+      
+      return res.json({
+        success: true,
+        processed: true,
+        handoff: true,
+        reason: handoffCheck.reason,
+        urgency: handoffCheck.urgency,
+        leadId: lead.id
+      });
+    }
+    
+    // Normal flow - generate AI response
     const aiResponse = await callClaudeWithContext(history, parsed.message, leadInfo);
-    console.log('✓ AI Response:', aiResponse.substring(0, 100));
-    
-    // Save bot response
-    await saveMessage(lead.id, 'bot', aiResponse, { 
-      model: 'claude-sonnet-4-20250514',
-      stage: insights.stage 
-    });
-    
-    // Update lead with insights
+    await saveMessage(lead.id, 'bot', aiResponse, { model: 'claude-sonnet-4-20250514', stage: insights.stage });
     await updateLead(lead.id, insights);
     
     // Send WhatsApp reply
-    console.log('→ Sending WhatsApp reply...');
-    const axios = require('axios');
     const auth = getBasicAuth();
-    
     const result = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsAppChat`, {
       Data: { 
         Message: aiResponse, 
         Phone: parsed.phone,
         Settings: {
           CustomerMessageId: `bot_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-          CustomerParameter: 'QUANTUM_BOT_V6'
+          CustomerParameter: 'QUANTUM_BOT_V6_1'
         }
       }
     }, {
@@ -398,44 +474,28 @@ router.post('/whatsapp/webhook', async (req, res) => {
       validateStatus: () => true
     });
     
-    const success = result.data.StatusId === 1;
-    console.log(success ? '✓ Reply sent' : '✗ Reply failed');
-    
     res.json({ 
-      success,
+      success: result.data.StatusId === 1,
       processed: true,
       leadId: lead.id,
-      insights: insights,
-      conversationLength: history.length + 2, // +2 for current exchange
-      aiResponse: aiResponse,
+      insights,
+      conversationLength: history.length + 2,
       timestamp: new Date().toISOString()
     });
     
   } catch (error) {
     console.error('✗ Webhook error:', error.message);
-    console.error('Stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Processing failed', 
-      details: error.message,
-      timestamp: new Date().toISOString()
-    });
+    res.status(500).json({ error: 'Processing failed', details: error.message });
   }
 });
 
-// ============================================
-// CONVERSATION DASHBOARD
-// ============================================
+// Conversations dashboard
 router.get('/whatsapp/conversations', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        l.id,
-        l.phone,
-        l.name,
-        l.user_type,
-        l.status,
+        l.id, l.phone, l.name, l.user_type, l.status,
         l.raw_data->>'stage' as stage,
-        l.raw_data->>'last_contact' as last_contact,
         l.created_at,
         COUNT(wc.id) as message_count,
         MAX(wc.created_at) as last_message_at
@@ -447,17 +507,12 @@ router.get('/whatsapp/conversations', async (req, res) => {
       LIMIT 50
     `);
     
-    res.json({
-      success: true,
-      conversations: result.rows,
-      total: result.rows.length
-    });
+    res.json({ success: true, conversations: result.rows, total: result.rows.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get specific conversation
 router.get('/whatsapp/conversations/:leadId', async (req, res) => {
   try {
     const { leadId } = req.params;
@@ -474,115 +529,65 @@ router.get('/whatsapp/conversations/:leadId', async (req, res) => {
       return res.status(404).json({ error: 'Lead not found' });
     }
     
-    res.json({
-      success: true,
-      lead: leadResult.rows[0],
-      messages: messagesResult.rows
-    });
+    res.json({ success: true, lead: leadResult.rows[0], messages: messagesResult.rows });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Setup guide (unchanged)
 router.get('/whatsapp/setup-guide', (req, res) => {
   const webhookUrl = getWebhookUrl();
   res.type('text/html').send(`
 <!DOCTYPE html>
 <html dir="rtl" lang="he">
-<head>
-  <meta charset="UTF-8">
-  <title>QUANTUM WhatsApp - מדריך</title>
-  <style>
-    body { font-family: system-ui; max-width: 900px; margin: 40px auto; padding: 20px; }
-    h1 { color: #2563eb; }
-    .success { background: #ecfdf5; border-right: 4px solid #10b981; padding: 15px; margin: 15px 0; }
-    code { background: #1e293b; color: #10b981; padding: 2px 6px; border-radius: 3px; }
-  </style>
-</head>
-<body>
-  <h1>🚀 QUANTUM WhatsApp Bot v6.0</h1>
-  <div class="success">
-    <strong>✓ ה-Webhook מוכן ופעיל!</strong><br>
-    גרסה 6.0 כוללת מעקב שיחות, זיכרון, וניהול לידים אוטומטי.
+<head><meta charset="UTF-8"><title>QUANTUM WhatsApp v6.1</title></head>
+<body style="font-family:system-ui;max-width:900px;margin:40px auto;padding:20px">
+  <h1 style="color:#2563eb">🚀 QUANTUM WhatsApp Bot v6.1</h1>
+  <div style="background:#ecfdf5;border-right:4px solid #10b981;padding:15px">
+    <strong>✓ Active!</strong> Auto-handoff, conversation tracking, analytics.
   </div>
-  <p><strong>Webhook URL:</strong> <code>${webhookUrl}</code></p>
-  <p><strong>תכונות חדשות:</strong></p>
+  <p><strong>Webhook:</strong> <code>${webhookUrl}</code></p>
   <ul>
-    <li>✓ שמירת כל שיחה ב-DB</li>
-    <li>✓ זיכרון והקשר בין הודעות</li>
-    <li>✓ ניהול לידים אוטומטי</li>
-    <li>✓ מעקב stage בשיחה</li>
-    <li>✓ Dashboard לצפייה בשיחות</li>
+    <li>✓ Auto-handoff detection</li>
+    <li>✓ Follow-up automation</li>
+    <li>✓ Analytics dashboard</li>
   </ul>
-  <p><strong>Dashboard:</strong> <a href="/api/whatsapp/conversations">/api/whatsapp/conversations</a></p>
 </body>
 </html>
   `);
 });
 
-// Manual trigger
 router.post('/whatsapp/trigger', async (req, res) => {
   try {
     const { phone, message } = req.body;
-    
-    if (!phone || !message) {
-      return res.status(400).json({ error: 'Phone and message required' });
-    }
+    if (!phone || !message) return res.status(400).json({ error: 'Phone and message required' });
     
     const lead = await getOrCreateLead(phone);
     const history = await getConversationHistory(lead.id);
-    
     await saveMessage(lead.id, 'user', message);
     
     const insights = extractInsights(message, history);
-    const leadInfo = {
-      id: lead.id,
-      name: insights.name || lead.name,
-      user_type: insights.user_type || lead.user_type,
-      stage: insights.stage
-    };
+    const leadInfo = { id: lead.id, name: insights.name || lead.name, user_type: insights.user_type || lead.user_type, stage: insights.stage };
     
     const aiResponse = await callClaudeWithContext(history, message, leadInfo);
-    
     await saveMessage(lead.id, 'bot', aiResponse);
     await updateLead(lead.id, insights);
     
-    const axios = require('axios');
     const auth = getBasicAuth();
-    
     const result = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsAppChat`, {
-      Data: { 
-        Message: aiResponse, 
-        Phone: phone,
-        Settings: {
-          CustomerMessageId: `trigger_${Date.now()}`,
-          CustomerParameter: 'QUANTUM_TRIGGER'
-        }
-      }
+      Data: { Message: aiResponse, Phone: phone, Settings: { CustomerMessageId: `trigger_${Date.now()}` } }
     }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${auth}`
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Basic ${auth}` },
       timeout: 15000,
       validateStatus: () => true
     });
     
-    res.json({ 
-      success: result.data.StatusId === 1, 
-      aiResponse,
-      leadId: lead.id,
-      insights,
-      conversationLength: history.length + 2
-    });
-    
+    res.json({ success: result.data.StatusId === 1, aiResponse, leadId: lead.id, insights });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Stats
 router.get('/whatsapp/stats', async (req, res) => {
   try {
     const stats = await pool.query(`
@@ -590,9 +595,8 @@ router.get('/whatsapp/stats', async (req, res) => {
         COUNT(DISTINCT l.id) as total_leads,
         COUNT(DISTINCT CASE WHEN l.status = 'new' THEN l.id END) as new_leads,
         COUNT(DISTINCT CASE WHEN l.status = 'active' THEN l.id END) as active_leads,
-        COUNT(wc.id) as total_messages,
-        COUNT(CASE WHEN wc.sender = 'user' THEN 1 END) as user_messages,
-        COUNT(CASE WHEN wc.sender = 'bot' THEN 1 END) as bot_messages
+        COUNT(DISTINCT CASE WHEN l.status = 'pending_handoff' THEN l.id END) as pending_handoff,
+        COUNT(wc.id) as total_messages
       FROM leads l
       LEFT JOIN whatsapp_conversations wc ON l.id = wc.lead_id
       WHERE l.source = 'whatsapp_bot'
@@ -600,17 +604,11 @@ router.get('/whatsapp/stats', async (req, res) => {
     
     res.json({
       success: true,
-      version: '6.0',
+      version: '6.1',
       timestamp: new Date().toISOString(),
       webhookUrl: getWebhookUrl(),
       stats: stats.rows[0],
-      features: [
-        'Conversation tracking',
-        'Context-aware AI',
-        'Lead management', 
-        'Stage progression',
-        'Conversation dashboard'
-      ]
+      features: ['Conversation tracking', 'Context-aware AI', 'Lead management', 'Auto-handoff', 'Analytics']
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
