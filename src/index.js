@@ -30,8 +30,8 @@ console.log('[TRACE] All requires done, setting up app...');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const VERSION = '4.38.0';
-const BUILD = '2026-03-03-v4.38.0-whatsapp-v6';
+const VERSION = '4.39.0';
+const BUILD = '2026-03-03-v4.39.0-whatsapp-full-suite';
 
 // Store route loading results for diagnostics
 const routeLoadResults = [];
@@ -215,7 +215,7 @@ async function handleHealthCheck(req, res) {
     if (schedulerRef) {
       try {
         const ss = schedulerRef.getSchedulerStatus();
-        schedulerStatus = `active (${ss.activeJobs} jobs, ${ss.stats.totalScans} scans)`;
+        schedulerStatus = `active (${ss.activeJobs} jobs, ${ss.stats.totalScans} scans, ${ss.stats.whatsappFollowups || 0} followups)`;
       } catch (e) { schedulerStatus = 'error'; }
     }
 
@@ -302,6 +302,7 @@ function loadAllRoutes() {
     ['./routes/leadRoutes', '/api/leads'],
     ['./routes/botRoutes', '/api/bot'],
     ['./routes/whatsappWebhookRoutes', '/api'],
+    ['./routes/whatsappAnalytics', '/api'], // WhatsApp analytics
     ['./routes/whatsappDashboardRoutes', '/api'], // Simple dashboard
     ['./routes/firefliesWebhookRoutes', '/api/fireflies'],
     ['./routes/mavatBuildingRoutes', '/api/mavat'],
@@ -334,6 +335,8 @@ app.get('/api/info', (req, res) => {
       whatsapp_webhook: '/api/whatsapp/webhook', 
       whatsapp_trigger: '/api/whatsapp/trigger',
       whatsapp_conversations: '/api/whatsapp/conversations',
+      whatsapp_analytics: '/api/whatsapp/analytics',
+      whatsapp_lead_quality: '/api/whatsapp/lead-quality',
       whatsapp_dashboard: '/api/whatsapp-dashboard', 
       whatsapp_stats: '/api/whatsapp/stats',
       bot_health: '/api/bot/health'
@@ -366,8 +369,8 @@ async function start() {
     const scheduler = require('./jobs/quantumScheduler');
     scheduler.initScheduler();
     schedulerRef = scheduler;
-    logger.info('[SCHEDULER] QUANTUM Scheduler v2.0 initialized successfully - cron jobs ACTIVE');
-    logger.info('[SCHEDULER] Schedule: Listings daily 07:00, SSI daily 09:00, Tier1 Sun 08:00, Express 11/15/19h');
+    logger.info('[SCHEDULER] QUANTUM Scheduler v2.2 initialized successfully - cron jobs ACTIVE');
+    logger.info('[SCHEDULER] Schedule: Listings daily 07:00, SSI daily 09:00, Tier1 Sun 08:00, WhatsApp followup Mon-Fri 14:00');
   } catch (err) {
     logger.error(`[SCHEDULER] Failed to initialize: ${err.message}`);
     console.error('[TRACE] Scheduler init failed:', err.message);
@@ -383,9 +386,8 @@ async function start() {
     logger.info(`Server running on port ${PORT}`);
     logger.info(`Routes: ${loaded.length} loaded, ${failed.length} failed`);
     logger.info(`Scheduler: ${schedulerRef ? 'ACTIVE' : 'INACTIVE'}`);
-    logger.info(`WhatsApp Bot: /api/bot/`);
-    logger.info(`WhatsApp Webhook v6.0: /api/whatsapp/webhook`);
-    logger.info(`WhatsApp Conversations: /api/whatsapp/conversations`);
+    logger.info(`WhatsApp Bot v6.1: Full suite active`);
+    logger.info(`WhatsApp Features: Auto-handoff, Follow-up, Analytics`);
   });
 }
 
