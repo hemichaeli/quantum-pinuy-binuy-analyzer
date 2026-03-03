@@ -18,39 +18,41 @@ function getBasicAuth() {
 // Build WhatsApp message for listing
 function buildListingMessage(listing, lead) {
   const name = lead.name || '';
-  const price = listing.price ? `${(listing.price / 1000000).toFixed(2)}M ₪` : 'לא צוין';
-  const rooms = listing.rooms || 'לא צוין';
-  const size = listing.size_sqm ? `${listing.size_sqm}m²` : 'לא צוין';
-  const floor = listing.floor ? `קומה ${listing.floor}` : '';
-  const complex = listing.complex_name || listing.complex_id || '';
+  const price = listing.price ? `₪${(listing.price / 1000000).toFixed(2)}M` : 'לפי בקשה';
+  const rooms = listing.rooms || '-';
+  const size = listing.size_sqm ? `${listing.size_sqm} מ"ר` : '';
+  const floor = listing.floor ? ` | קומה ${listing.floor}` : '';
   
-  let message = `${name ? name + ', ' : ''}🏠 *מודעה חדשה שתתאים לך!*\n\n`;
-  
-  if (listing.address) {
-    message += `📍 ${listing.address}\n`;
-  }
-  if (listing.city) {
-    message += `🏙 ${listing.city}\n`;
-  }
-  if (complex) {
-    message += `🏢 ${complex}\n`;
+  // Build location (city + street if available)
+  let location = listing.city || '';
+  if (listing.address && listing.address !== listing.city) {
+    // Extract street name only (not full address)
+    const streetMatch = listing.address.match(/רח['\']?\s+([^,\d]+)/);
+    if (streetMatch) {
+      location = `${listing.city} - רח' ${streetMatch[1].trim()}`;
+    }
   }
   
-  message += `\n💰 מחיר: *${price}*\n`;
-  message += `🛏 חדרים: ${rooms}\n`;
-  message += `📐 שטח: ${size}\n`;
-  if (floor) message += `🏗 ${floor}\n`;
+  // Build message with teaser approach
+  let message = `${name ? name + ', ' : ''}🏠 *נכס חדש התאים לחיפוש שלך!*\n\n`;
   
-  if (listing.description) {
-    const shortDesc = listing.description.substring(0, 100);
-    message += `\n📝 ${shortDesc}${listing.description.length > 100 ? '...' : ''}\n`;
+  if (location) {
+    message += `📍 ${location}\n`;
   }
   
-  if (listing.source_url) {
-    message += `\n🔗 לפרטים: ${listing.source_url}`;
-  }
+  // Core specs in compact format
+  message += `🛏️ ${rooms} חדרים`;
+  if (size) message += ` | ${size}`;
+  if (floor) message += floor;
+  message += `\n`;
   
-  message += `\n\n_התראה אוטומטית מ-QUANTUM_`;
+  message += `💰 מחיר: *${price}*\n`;
+  
+  // Urgency + CTA
+  message += `\n⚡ *נכס זה זמין כרגע.*\n`;
+  message += `הפרטים המלאים וגישה ישירה למוכר דרך QUANTUM בלבד.\n`;
+  message += `\n📞 *צור קשר עכשיו:* 03-757-2229\n`;
+  message += `או השב למסר זה לפרטים נוספים`;
   
   return message;
 }
