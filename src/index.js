@@ -30,8 +30,8 @@ console.log('[TRACE] All requires done, setting up app...');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const VERSION = '4.37.0';
-const BUILD = '2026-03-03-v4.37.0-scan-fixes-route';
+const VERSION = '4.38.0';
+const BUILD = '2026-03-03-v4.38.0-whatsapp-v6';
 
 // Store route loading results for diagnostics
 const routeLoadResults = [];
@@ -74,7 +74,31 @@ async function runAutoMigrations() {
       `);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_source ON leads(source)`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at DESC)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone)`);
     } catch (e) { /* table exists */ }
+
+    // WhatsApp conversations table (v4.38.0 - WhatsApp v6.0)
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS whatsapp_conversations (
+          id SERIAL PRIMARY KEY,
+          lead_id INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+          sender TEXT NOT NULL,
+          message TEXT NOT NULL,
+          ai_metadata JSONB,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_lead ON whatsapp_conversations(lead_id, created_at DESC)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_created ON whatsapp_conversations(created_at DESC)`);
+      logger.info('[MIGRATION] whatsapp_conversations table ready');
+    } catch (e) { 
+      if (e.message.includes('already exists')) {
+        logger.info('[MIGRATION] whatsapp_conversations table already exists');
+      } else {
+        logger.error('[MIGRATION] whatsapp_conversations error:', e.message);
+      }
+    }
 
     // v4.36.0: Widen columns that were VARCHAR(100/255) to TEXT
     // Prevents "value too long" errors during enrichment and yad2 scans
@@ -176,7 +200,15 @@ async function handleHealthCheck(req, res) {
     const listingCount = await pool.query('SELECT COUNT(*) FROM listings');
     const alertCount = await pool.query('SELECT COUNT(*) FROM alerts WHERE is_read = FALSE');
     let botLeadCount = 0;
-    try { const bl = await pool.query("SELECT COUNT(*) FROM leads WHERE source IN ('whatsapp_bot', 'whatsapp_webhook')"); botLeadCount = parseInt(bl.rows[0].count); } catch (e) { /* table might not exist yet */ }
+    let conversationCount = 0;
+    try { 
+      const bl = await pool.query("SELECT COUNT(*) FROM leads WHERE source IN ('whatsapp_bot', 'whatsapp_webhook')"); 
+      botLeadCount = parseInt(bl.rows[0].count); 
+    } catch (e) { /* table might not exist yet */ }
+    try {
+      const cc = await pool.query("SELECT COUNT(*) FROM whatsapp_conversations");
+      conversationCount = parseInt(cc.rows[0].count);
+    } catch (e) { /* table might not exist yet */ }
     
     // Scheduler status
     let schedulerStatus = 'not_initialized';
@@ -208,6 +240,7 @@ async function handleHealthCheck(req, res) {
       transactions: parseInt(txCount.rows[0].count),
       listings: parseInt(listingCount.rows[0].count),
       whatsapp_bot_leads: botLeadCount,
+      whatsapp_messages: conversationCount,
       unread_alerts: parseInt(alertCount.rows[0].count),
       notifications: notificationService.isConfigured() ? 'active' : 'disabled',
       scheduler: schedulerStatus,
@@ -300,6 +333,7 @@ app.get('/api/info', (req, res) => {
       scheduler_status: '/api/scheduler/v2',
       whatsapp_webhook: '/api/whatsapp/webhook', 
       whatsapp_trigger: '/api/whatsapp/trigger',
+      whatsapp_conversations: '/api/whatsapp/conversations',
       whatsapp_dashboard: '/api/whatsapp-dashboard', 
       whatsapp_stats: '/api/whatsapp/stats',
       bot_health: '/api/bot/health'
@@ -350,8 +384,8 @@ async function start() {
     logger.info(`Routes: ${loaded.length} loaded, ${failed.length} failed`);
     logger.info(`Scheduler: ${schedulerRef ? 'ACTIVE' : 'INACTIVE'}`);
     logger.info(`WhatsApp Bot: /api/bot/`);
-    logger.info(`WhatsApp Webhook: /api/whatsapp/webhook`);
-    logger.info(`WhatsApp Dashboard: /api/whatsapp-dashboard`);
+    logger.info(`WhatsApp Webhook v6.0: /api/whatsapp/webhook`);
+    logger.info(`WhatsApp Conversations: /api/whatsapp/conversations`);
   });
 }
 
