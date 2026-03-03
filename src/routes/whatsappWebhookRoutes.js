@@ -1,11 +1,11 @@
 /**
- * QUANTUM WhatsApp Bot - v5.2
- * Unified: All WhatsApp via QUANTUM account (037572229)
- * Added: Webhook verification + setup guide
+ * QUANTUM WhatsApp Bot - v6.0
+ * Full conversation tracking + enhanced AI + lead management
  */
 
 const express = require('express');
 const router = express.Router();
+const pool = require('../db/pool');
 
 const INFORU_CAPI_BASE = 'https://capi.inforu.co.il/api/v2';
 const DEPLOYMENT_TIME = new Date().toISOString();
@@ -17,18 +17,12 @@ function getBasicAuth() {
   return Buffer.from(`${username}:${password}`).toString('base64');
 }
 
-// Get webhook URL dynamically
 function getWebhookUrl() {
   const domain = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN || 'pinuy-binuy-analyzer-production-ab85.up.railway.app';
   return `https://${domain}/api/whatsapp/webhook`;
 }
 
-/**
- * Parse INFORU webhook payload
- * INFORU sends: { Data: [{ Value: "phone", Message: "text", Network: "WhatsApp", ... }], CustomerId, ProjectId }
- */
 function parseInforuWebhook(body) {
-  // Format 1: INFORU standard webhook
   if (body.Data && Array.isArray(body.Data) && body.Data.length > 0) {
     const item = body.Data[0];
     return {
@@ -46,7 +40,6 @@ function parseInforuWebhook(body) {
     };
   }
   
-  // Format 2: Simple format (manual trigger / other)
   return {
     phone: body.phone || body.from || body.Phone || null,
     message: body.message || body.text || body.body || body.Message || null,
@@ -56,23 +49,34 @@ function parseInforuWebhook(body) {
   };
 }
 
-// Simple AI call function
-async function callClaude(systemPrompt, userPrompt) {
+// Enhanced AI call with conversation context
+async function callClaudeWithContext(conversationHistory, currentMessage, leadInfo) {
   try {
     const axios = require('axios');
     
+    // Build context from history
+    let contextSummary = '';
+    if (conversationHistory.length > 0) {
+      const lastFew = conversationHistory.slice(-4); // Last 4 messages
+      contextSummary = lastFew.map(msg => 
+        `${msg.sender === 'user' ? 'לקוח' : 'אתה'}: ${msg.message}`
+      ).join('\n');
+    }
+    
+    const systemPrompt = buildEnhancedPrompt(leadInfo, contextSummary);
+    
     const response = await axios.post('https://api.anthropic.com/v1/messages', {
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
+      max_tokens: 400,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }]
+      messages: [{ role: 'user', content: currentMessage }]
     }, {
       headers: {
         'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json'
       },
-      timeout: 8000
+      timeout: 10000
     });
     
     return response.data.content[0].text;
@@ -82,44 +86,223 @@ async function callClaude(systemPrompt, userPrompt) {
   }
 }
 
-const SALES_SYSTEM_PROMPT = `אתה QUANTUM Sales AI - המתווך הדיגיטלי החכם ביותר בישראל.
-מומחה בפינוי-בינוי ואיכות מכירות מעולה.
+function buildEnhancedPrompt(leadInfo, conversationContext) {
+  const stage = leadInfo?.stage || 'greeting';
+  const name = leadInfo?.name || null;
+  const userType = leadInfo?.user_type || null;
+  
+  let basePrompt = `אתה QUANTUM Sales AI - הבוט החכם ביותר בתחום הנדל"ן בישראל.
 
-המטרה שלך היא:
-1. לזהות אם הלקוח קונה או מוכר
-2. לגלות מה המצב עם התיווך הנוכחי  
-3. להוביל לפגישה עם מומחה QUANTUM
+## זהות QUANTUM
+- מתווכים בוטיק עם מומחיות בפינוי-בינוי
+- "מח חד, הבנה עמוקה, גישה לנכסים סודיים"
+- כל לקוח מרגיש כמו "בן יחיד"
+- לא פלטפורמה טכנולוגית - אנשים אמיתיים עם יתרון טכנולוגי
 
-תגובות לפי סיטואציות:
-- פתיחה: "שלום! אני מ-QUANTUM 👋 איך קוראים לך?"
-- מוכר: "מעולה! איפה הנכס ומה סוגו? יש לנו קונים מחפשים"
-- קונה: "נהדר! איזה אזור מעניין אותך? יש לנו נכסים מיוחדים"
-- אין מתווך: "מעולה! יש לך יתרון - תוכל לבחור את הטובים ביותר"
-- יש מתווך: "איך אתה מרגיש עם ההתקדמות?"
-- לא מרוצה ממתווך: "יש לנו גישה לקונים/נכסים שאחרים לא מכירים"
+## הסגנון שלך
+- חד אבל חם - חכם אבל לא יהיר
+- ישיר אבל אכפתי
+- קצר - לא יותר מ-2-3 משפטים
+- אמוג'י במינון - רק 👋 בפתיחה או ✨ לנקודות חשובות
+- עברית טבעית - לא פורמלית מדי
 
-היה קצר, ישיר ומקצועי.`;
+## המטרה שלך (לפי שלבים)`;
+
+  // Stage-specific instructions
+  if (stage === 'greeting') {
+    basePrompt += `
+
+### שלב: פתיחה
+1. שאל את השם (אם אין)
+2. זהה מהר: קונה או מוכר?
+3. המשך ישר לשאלות הנכונות`;
+  } else if (stage === 'info_gathering') {
+    basePrompt += `
+
+### שלב: איסוף מידע
+${userType === 'buyer' ? `
+**קונה:**
+- איזה אזור מעניין?
+- באיזה תקציב?
+- יש מתווך כבר?
+- למה לא מצא עדיין? (חשוב!)
+` : userType === 'seller' ? `
+**מוכר:**
+- איפה הנכס ומה הסוג?
+- למה רוצה למכור? (דחיפות!)
+- יש מתווך כבר?
+- מה לא עובד עם המתווך הנוכחי?
+` : `
+- קודם כל: קונה או מוכר?
+`}`;
+  } else if (stage === 'scheduling') {
+    basePrompt += `
+
+### שלב: קביעת פגישה
+- "בוא נקבע שיחת היכרות קצרה עם [שם מומחה]"
+- שאל מתי נוח - היום? מחר?
+- אל תהיה לחוץ - תן ללקוח להחליט`;
+  }
+
+  // Add conversation context if exists
+  if (conversationContext) {
+    basePrompt += `
+
+## השיחה עד כה:
+${conversationContext}
+
+המשך את השיחה באופן טבעי בהתאם למה שכבר נאמר.`;
+  }
+
+  // Add name if we have it
+  if (name) {
+    basePrompt += `\n\nשם הלקוח: ${name} - השתמש בשם מדי פעם.`;
+  }
+
+  basePrompt += `
+
+## חוקי זהב
+❌ לעולם אל תשאל את אותה שאלה פעמיים
+❌ אל תהיה דוחף - תן ללקוח לנשום
+❌ אל תדבר יותר מדי - שאל, הקשב, המשך
+✓ היה אנושי - לא סקריפט
+✓ התאם את עצמך ללקוח - יש כאלה שרוצים עסקי, יש שרוצים יותר חברותי
+✓ אם הלקוח לא מעוניין - בסדר! "אם תשנה דעתך, אני כאן"
+
+תן תשובה אחת קצרה, ממוקדת, טבעית.`;
+
+  return basePrompt;
+}
+
+// Database: Get or create lead
+async function getOrCreateLead(phone) {
+  try {
+    // Try to find existing lead
+    let result = await pool.query(
+      `SELECT * FROM leads WHERE phone = $1 AND source = 'whatsapp_bot' ORDER BY created_at DESC LIMIT 1`,
+      [phone]
+    );
+    
+    if (result.rows.length > 0) {
+      return result.rows[0];
+    }
+    
+    // Create new lead
+    result = await pool.query(
+      `INSERT INTO leads (phone, source, status, raw_data, created_at, updated_at)
+       VALUES ($1, 'whatsapp_bot', 'new', '{}', NOW(), NOW())
+       RETURNING *`,
+      [phone]
+    );
+    
+    return result.rows[0];
+  } catch (error) {
+    console.error('DB error (getOrCreateLead):', error.message);
+    return null;
+  }
+}
+
+// Database: Get conversation history
+async function getConversationHistory(leadId) {
+  try {
+    const result = await pool.query(
+      `SELECT sender, message, created_at 
+       FROM whatsapp_conversations 
+       WHERE lead_id = $1 
+       ORDER BY created_at ASC`,
+      [leadId]
+    );
+    return result.rows;
+  } catch (error) {
+    console.error('DB error (getConversationHistory):', error.message);
+    return [];
+  }
+}
+
+// Database: Save message
+async function saveMessage(leadId, sender, message, aiMetadata = null) {
+  try {
+    await pool.query(
+      `INSERT INTO whatsapp_conversations (lead_id, sender, message, ai_metadata, created_at)
+       VALUES ($1, $2, $3, $4, NOW())`,
+      [leadId, sender, message, aiMetadata ? JSON.stringify(aiMetadata) : null]
+    );
+  } catch (error) {
+    console.error('DB error (saveMessage):', error.message);
+  }
+}
+
+// Database: Update lead info
+async function updateLead(leadId, updates) {
+  try {
+    const fields = [];
+    const values = [];
+    let idx = 1;
+    
+    if (updates.name) { fields.push(`name = $${idx++}`); values.push(updates.name); }
+    if (updates.user_type) { fields.push(`user_type = $${idx++}`); values.push(updates.user_type); }
+    if (updates.stage) { fields.push(`raw_data = jsonb_set(COALESCE(raw_data, '{}'::jsonb), '{stage}', $${idx++})`); values.push(JSON.stringify(updates.stage)); }
+    if (updates.status) { fields.push(`status = $${idx++}`); values.push(updates.status); }
+    
+    fields.push(`updated_at = NOW()`);
+    fields.push(`raw_data = jsonb_set(COALESCE(raw_data, '{}'::jsonb), '{last_contact}', $${idx++})`);
+    values.push(JSON.stringify(new Date().toISOString()));
+    
+    values.push(leadId);
+    
+    await pool.query(
+      `UPDATE leads SET ${fields.join(', ')} WHERE id = $${idx}`,
+      values
+    );
+  } catch (error) {
+    console.error('DB error (updateLead):', error.message);
+  }
+}
+
+// Extract insights from conversation
+function extractInsights(message, history) {
+  const insights = {};
+  
+  // Name detection
+  const nameMatch = message.match(/שמי ([\u0590-\u05FF]+)|קוראים לי ([\u0590-\u05FF]+)|אני ([\u0590-\u05FF]+)/);
+  if (nameMatch) {
+    insights.name = nameMatch[1] || nameMatch[2] || nameMatch[3];
+  }
+  
+  // User type detection
+  if (message.match(/רוצה לקנות|מחפש דירה|קונה|מעוניין לקנות/)) {
+    insights.user_type = 'buyer';
+  } else if (message.match(/רוצה למכור|יש לי דירה|מוכר|למכירה/)) {
+    insights.user_type = 'seller';
+  }
+  
+  // Stage detection
+  if (history.length === 0) {
+    insights.stage = 'greeting';
+  } else if (history.length < 4) {
+    insights.stage = 'info_gathering';
+  } else if (message.match(/פגישה|שיחה|נדבר|מתי נוח/)) {
+    insights.stage = 'scheduling';
+  } else {
+    insights.stage = 'info_gathering';
+  }
+  
+  return insights;
+}
 
 // ============================================
-// WEBHOOK VERIFICATION (GET) 
+// WEBHOOK VERIFICATION (GET)
 // ============================================
 router.get('/whatsapp/webhook', (req, res) => {
   console.log('Webhook verification GET request:', req.query);
   res.status(200).json({
     success: true,
     message: 'QUANTUM WhatsApp Webhook - Active',
+    version: '6.0',
+    features: ['conversation_tracking', 'context_awareness', 'lead_management'],
     webhookUrl: getWebhookUrl(),
     whatsappNumber: '037572229',
-    timestamp: new Date().toISOString(),
-    verification: 'OK',
-    acceptsMethods: ['POST'],
-    expectedPayload: {
-      Data: [{
-        Value: 'phone_number',
-        Message: 'message_text',
-        Network: 'WhatsApp'
-      }]
-    }
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -128,47 +311,71 @@ router.get('/whatsapp/webhook', (req, res) => {
 // ============================================
 router.post('/whatsapp/webhook', async (req, res) => {
   try {
-    // Log full payload for debugging
     console.log('=== WEBHOOK RECEIVED ===');
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
     console.log('Body:', JSON.stringify(req.body, null, 2));
-    console.log('========================');
     
     const parsed = parseInforuWebhook(req.body);
     
     if (!parsed.phone || !parsed.message) {
       console.log('Webhook: incomplete data');
-      console.log('Parsed phone:', parsed.phone);
-      console.log('Parsed message:', parsed.message);
-      console.log('Raw body:', JSON.stringify(req.body).substring(0, 500));
-      
       return res.status(200).json({ 
         received: true, 
         processed: false, 
-        reason: 'Missing phone or message',
-        parsedPhone: parsed.phone,
-        parsedMessage: parsed.message,
-        hint: 'Check INFORU webhook payload format'
+        reason: 'Missing phone or message'
       });
     }
     
-    console.log('✓ WEBHOOK: Valid message received');
-    console.log('  Phone:', parsed.phone);
-    console.log('  Message:', parsed.message.substring(0, 100));
-    console.log('  Network:', parsed.network);
+    console.log('✓ Valid message:', { phone: parsed.phone, message: parsed.message.substring(0, 50) });
     
-    // Only auto-reply to WhatsApp messages
+    // Skip non-WhatsApp
     if (parsed.network !== 'WhatsApp' && parsed.network !== 'Direct') {
-      console.log('Webhook: Non-WhatsApp message, skipping:', parsed.network);
+      console.log('Non-WhatsApp message, skipping');
       return res.json({ received: true, processed: false, reason: `Network: ${parsed.network}` });
     }
     
-    // Generate AI response
-    console.log('→ Calling Claude AI...');
-    const aiResponse = await callClaude(SALES_SYSTEM_PROMPT, parsed.message);
+    // Get or create lead
+    const lead = await getOrCreateLead(parsed.phone);
+    if (!lead) {
+      throw new Error('Failed to get/create lead');
+    }
+    
+    console.log(`Lead ID: ${lead.id}, Status: ${lead.status}`);
+    
+    // Get conversation history
+    const history = await getConversationHistory(lead.id);
+    console.log(`Conversation history: ${history.length} messages`);
+    
+    // Save incoming message
+    await saveMessage(lead.id, 'user', parsed.message);
+    
+    // Extract insights
+    const insights = extractInsights(parsed.message, history);
+    console.log('Insights:', insights);
+    
+    // Get lead info with insights
+    const leadInfo = {
+      id: lead.id,
+      name: insights.name || lead.name,
+      user_type: insights.user_type || lead.user_type,
+      stage: insights.stage,
+      status: lead.status
+    };
+    
+    // Generate AI response with context
+    console.log('→ Calling Claude AI with context...');
+    const aiResponse = await callClaudeWithContext(history, parsed.message, leadInfo);
     console.log('✓ AI Response:', aiResponse.substring(0, 100));
     
-    // Send response via QUANTUM credentials (037572229)
+    // Save bot response
+    await saveMessage(lead.id, 'bot', aiResponse, { 
+      model: 'claude-sonnet-4-20250514',
+      stage: insights.stage 
+    });
+    
+    // Update lead with insights
+    await updateLead(lead.id, insights);
+    
+    // Send WhatsApp reply
     console.log('→ Sending WhatsApp reply...');
     const axios = require('axios');
     const auth = getBasicAuth();
@@ -179,7 +386,7 @@ router.post('/whatsapp/webhook', async (req, res) => {
         Phone: parsed.phone,
         Settings: {
           CustomerMessageId: `bot_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-          CustomerParameter: 'QUANTUM_BOT'
+          CustomerParameter: 'QUANTUM_BOT_V6'
         }
       }
     }, {
@@ -192,194 +399,129 @@ router.post('/whatsapp/webhook', async (req, res) => {
     });
     
     const success = result.data.StatusId === 1;
-    console.log(success ? '✓ Reply sent successfully' : '✗ Reply failed');
-    console.log('  Status:', result.data.StatusId, result.data.StatusDescription);
+    console.log(success ? '✓ Reply sent' : '✗ Reply failed');
     
     res.json({ 
       success,
       processed: true,
-      incomingPhone: parsed.phone,
-      incomingMessage: parsed.message,
+      leadId: lead.id,
+      insights: insights,
+      conversationLength: history.length + 2, // +2 for current exchange
       aiResponse: aiResponse,
-      autoReplyStatus: result.data.StatusId,
-      autoReplyDescription: result.data.StatusDescription,
       timestamp: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('✗ Webhook processing error:', error.message);
+    console.error('✗ Webhook error:', error.message);
     console.error('Stack:', error.stack);
     res.status(500).json({ 
       error: 'Processing failed', 
       details: error.message,
-      webhookReceived: true,
       timestamp: new Date().toISOString()
     });
   }
 });
 
 // ============================================
-// SETUP GUIDE - Complete INFORU instructions
+// CONVERSATION DASHBOARD
 // ============================================
+router.get('/whatsapp/conversations', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        l.id,
+        l.phone,
+        l.name,
+        l.user_type,
+        l.status,
+        l.raw_data->>'stage' as stage,
+        l.raw_data->>'last_contact' as last_contact,
+        l.created_at,
+        COUNT(wc.id) as message_count,
+        MAX(wc.created_at) as last_message_at
+      FROM leads l
+      LEFT JOIN whatsapp_conversations wc ON l.id = wc.lead_id
+      WHERE l.source = 'whatsapp_bot'
+      GROUP BY l.id
+      ORDER BY MAX(wc.created_at) DESC NULLS LAST
+      LIMIT 50
+    `);
+    
+    res.json({
+      success: true,
+      conversations: result.rows,
+      total: result.rows.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get specific conversation
+router.get('/whatsapp/conversations/:leadId', async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    
+    const leadResult = await pool.query(`SELECT * FROM leads WHERE id = $1`, [leadId]);
+    const messagesResult = await pool.query(`
+      SELECT sender, message, ai_metadata, created_at 
+      FROM whatsapp_conversations 
+      WHERE lead_id = $1 
+      ORDER BY created_at ASC
+    `, [leadId]);
+    
+    if (leadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    
+    res.json({
+      success: true,
+      lead: leadResult.rows[0],
+      messages: messagesResult.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Setup guide (unchanged)
 router.get('/whatsapp/setup-guide', (req, res) => {
   const webhookUrl = getWebhookUrl();
-  
   res.type('text/html').send(`
 <!DOCTYPE html>
 <html dir="rtl" lang="he">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>QUANTUM WhatsApp Webhook - הוראות התקנה</title>
+  <title>QUANTUM WhatsApp - מדריך</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; background: #f5f5f5; }
-    .container { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    h1 { color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 10px; }
-    h2 { color: #1e40af; margin-top: 30px; }
-    .step { background: #eff6ff; border-right: 4px solid #2563eb; padding: 15px; margin: 15px 0; border-radius: 4px; }
-    .step-number { color: #2563eb; font-weight: bold; font-size: 18px; }
-    code { background: #1e293b; color: #10b981; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; }
-    .url-box { background: #1e293b; color: #10b981; padding: 15px; border-radius: 6px; font-family: 'Courier New', monospace; margin: 15px 0; font-size: 14px; word-break: break-all; }
-    .success { background: #ecfdf5; border-right: 4px solid #10b981; color: #065f46; padding: 15px; margin: 15px 0; border-radius: 4px; }
-    .warning { background: #fef3c7; border-right: 4px solid #f59e0b; color: #92400e; padding: 15px; margin: 15px 0; border-radius: 4px; }
-    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-    th, td { border: 1px solid #e5e7eb; padding: 12px; text-align: right; }
-    th { background: #f3f4f6; font-weight: bold; }
-    .test-section { background: #f9fafb; padding: 20px; border-radius: 6px; margin: 20px 0; }
+    body { font-family: system-ui; max-width: 900px; margin: 40px auto; padding: 20px; }
+    h1 { color: #2563eb; }
+    .success { background: #ecfdf5; border-right: 4px solid #10b981; padding: 15px; margin: 15px 0; }
+    code { background: #1e293b; color: #10b981; padding: 2px 6px; border-radius: 3px; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🚀 QUANTUM WhatsApp Webhook - מדריך התקנה מלא</h1>
-    
-    <div class="success">
-      <strong>✓ ה-Webhook מוכן ופעיל!</strong><br>
-      כעת נשאר רק להגדיר ב-INFORU שישלח הודעות נכנסות ל-URL הזה.
-    </div>
-
-    <h2>📋 פרטי ה-Webhook</h2>
-    <table>
-      <tr><th>פרמטר</th><th>ערך</th></tr>
-      <tr><td>Webhook URL</td><td><code>${webhookUrl}</code></td></tr>
-      <tr><td>שיטה (Method)</td><td><code>POST</code></td></tr>
-      <tr><td>Content-Type</td><td><code>application/json</code></td></tr>
-      <tr><td>מספר WhatsApp</td><td><code>037572229</code></td></tr>
-      <tr><td>חשבון INFORU</td><td><code>QUANTUM</code></td></tr>
-    </table>
-
-    <h2>🔧 שלבי ההתקנה ב-INFORU</h2>
-    
-    <div class="step">
-      <span class="step-number">שלב 1:</span> כניסה לממשק ניהול INFORU<br>
-      היכנס ל: <a href="https://www.inforu.co.il" target="_blank">www.inforu.co.il</a><br>
-      התחבר עם המשתמש: <code>QUANTUM</code>
-    </div>
-
-    <div class="step">
-      <span class="step-number">שלב 2:</span> ניווט להגדרות WhatsApp<br>
-      מסלול בממשק (בדרך כלל):<br>
-      <strong>הגדרות → WhatsApp Business API → Webhooks</strong><br>
-      או:<br>
-      <strong>Settings → Integrations → Webhooks</strong>
-    </div>
-
-    <div class="step">
-      <span class="step-number">שלב 3:</span> הוספת Webhook חדש<br>
-      לחץ על <strong>"הוסף Webhook"</strong> או <strong>"Add Webhook"</strong><br><br>
-      <strong>מלא את הפרטים הבאים:</strong><br>
-      • <strong>שם:</strong> QUANTUM Bot<br>
-      • <strong>URL:</strong> העתק את הכתובת הזו:<br>
-      <div class="url-box">${webhookUrl}</div>
-      • <strong>Method:</strong> POST<br>
-      • <strong>סוג אירוע:</strong> Incoming Message / הודעה נכנסת<br>
-      • <strong>ערוץ:</strong> WhatsApp<br>
-      • <strong>מספר:</strong> 037572229 (אם יש אפשרות לבחור)
-    </div>
-
-    <div class="step">
-      <span class="step-number">שלב 4:</span> בדיקת החיבור<br>
-      ב-INFORU יש בדרך כלל כפתור <strong>"בדיקה"</strong> או <strong>"Test"</strong><br>
-      לחץ עליו - אתה אמור לקבל תשובה: <code>{"success": true, "verification": "OK"}</code>
-    </div>
-
-    <div class="step">
-      <span class="step-number">שלב 5:</span> שמירה והפעלה<br>
-      לחץ על <strong>"שמור"</strong> ו-<strong>"הפעל"</strong><br>
-      ודא שה-Webhook מופעל (Status: Active)
-    </div>
-
-    <h2>🧪 בדיקה ידנית</h2>
-    <div class="test-section">
-      <strong>אפשרות 1: שליחת הודעה ל-WhatsApp</strong><br>
-      שלח הודעה WhatsApp ל: <code>037572229</code><br>
-      הבוט אמור להגיב תוך מספר שניות.<br><br>
-
-      <strong>אפשרות 2: Trigger ידני דרך API</strong><br>
-      <code>curl -X POST ${webhookUrl.replace('/webhook', '/trigger')} \\<br>
-  -H "Content-Type: application/json" \\<br>
-  -d '{"phone": "972501234567", "message": "היי"}'</code>
-    </div>
-
-    <h2>📊 מעקב וניטור</h2>
-    <p>
-      <strong>סטטוס ה-Webhook:</strong> <a href="${webhookUrl.replace('/webhook', '/stats')}" target="_blank">${webhookUrl.replace('/webhook', '/stats')}</a><br>
-      <strong>Dashboard:</strong> <a href="/api/whatsapp-dashboard" target="_blank">/api/whatsapp-dashboard</a>
-    </p>
-
-    <h2>🔍 פורמט ה-Payload מ-INFORU</h2>
-    <div class="warning">
-      <strong>חשוב:</strong> INFORU שולח את הנתונים בפורמט הבא:
-    </div>
-    <pre style="background: #1e293b; color: #10b981; padding: 15px; border-radius: 6px; overflow-x: auto; direction: ltr; text-align: left;">
-{
-  "Data": [{
-    "Value": "972501234567",     // מספר הטלפון
-    "Message": "היי",             // ההודעה
-    "Network": "WhatsApp",        // הרשת
-    "Channel": "WA_037572229",    // הערוץ
-    "MoSessionId": "...",         // מזהה סשן
-    "CustomerParam": "..."        // פרמטרים נוספים
-  }],
-  "CustomerId": 12345,
-  "ProjectId": 67890
-}</pre>
-
-    <h2>❓ פתרון בעיות</h2>
-    <table>
-      <tr><th>בעיה</th><th>פתרון</th></tr>
-      <tr>
-        <td>הבוט לא מגיב</td>
-        <td>1. בדוק שה-Webhook active ב-INFORU<br>2. בדוק Logs ב-Railway<br>3. נסה trigger ידני</td>
-      </tr>
-      <tr>
-        <td>שגיאת 404</td>
-        <td>וודא שה-URL נכון (צריך להיות <code>/api/whatsapp/webhook</code>)</td>
-      </tr>
-      <tr>
-        <td>שגיאת אימות</td>
-        <td>בדוק שמשתני הסביבה <code>INFORU_USERNAME</code> ו-<code>INFORU_PASSWORD</code> מוגדרים ב-Railway</td>
-      </tr>
-      <tr>
-        <td>התשובה לא נשלחת</td>
-        <td>בדוק שה-Claude API key תקין ב-Railway (<code>ANTHROPIC_API_KEY</code>)</td>
-      </tr>
-    </table>
-
-    <div class="success">
-      <strong>✓ הכל מוכן!</strong><br>
-      אחרי ההגדרה ב-INFORU, כל הודעה שתישלח ל-037572229 תיענה אוטומטית על ידי הבוט.
-    </div>
-
-    <p style="text-align: center; margin-top: 40px; color: #6b7280;">
-      <strong>QUANTUM</strong> | WhatsApp Bot v5.2 | ${new Date().toISOString()}
-    </p>
+  <h1>🚀 QUANTUM WhatsApp Bot v6.0</h1>
+  <div class="success">
+    <strong>✓ ה-Webhook מוכן ופעיל!</strong><br>
+    גרסה 6.0 כוללת מעקב שיחות, זיכרון, וניהול לידים אוטומטי.
   </div>
+  <p><strong>Webhook URL:</strong> <code>${webhookUrl}</code></p>
+  <p><strong>תכונות חדשות:</strong></p>
+  <ul>
+    <li>✓ שמירת כל שיחה ב-DB</li>
+    <li>✓ זיכרון והקשר בין הודעות</li>
+    <li>✓ ניהול לידים אוטומטי</li>
+    <li>✓ מעקב stage בשיחה</li>
+    <li>✓ Dashboard לצפייה בשיחות</li>
+  </ul>
+  <p><strong>Dashboard:</strong> <a href="/api/whatsapp/conversations">/api/whatsapp/conversations</a></p>
 </body>
 </html>
   `);
 });
 
-// Manual trigger for testing
+// Manual trigger
 router.post('/whatsapp/trigger', async (req, res) => {
   try {
     const { phone, message } = req.body;
@@ -388,9 +530,23 @@ router.post('/whatsapp/trigger', async (req, res) => {
       return res.status(400).json({ error: 'Phone and message required' });
     }
     
-    console.log('Manual trigger:', { phone, message });
+    const lead = await getOrCreateLead(phone);
+    const history = await getConversationHistory(lead.id);
     
-    const aiResponse = await callClaude(SALES_SYSTEM_PROMPT, message);
+    await saveMessage(lead.id, 'user', message);
+    
+    const insights = extractInsights(message, history);
+    const leadInfo = {
+      id: lead.id,
+      name: insights.name || lead.name,
+      user_type: insights.user_type || lead.user_type,
+      stage: insights.stage
+    };
+    
+    const aiResponse = await callClaudeWithContext(history, message, leadInfo);
+    
+    await saveMessage(lead.id, 'bot', aiResponse);
+    await updateLead(lead.id, insights);
     
     const axios = require('axios');
     const auth = getBasicAuth();
@@ -415,40 +571,45 @@ router.post('/whatsapp/trigger', async (req, res) => {
     
     res.json({ 
       success: result.data.StatusId === 1, 
-      aiResponse, 
-      inforuResult: result.data,
-      credentials: 'QUANTUM (env vars)',
-      whatsappNumber: '037572229',
-      deploymentTime: DEPLOYMENT_TIME
+      aiResponse,
+      leadId: lead.id,
+      insights,
+      conversationLength: history.length + 2
     });
     
   } catch (error) {
-    console.error('Manual trigger error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Stats endpoint  
+// Stats
 router.get('/whatsapp/stats', async (req, res) => {
   try {
+    const stats = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT l.id) as total_leads,
+        COUNT(DISTINCT CASE WHEN l.status = 'new' THEN l.id END) as new_leads,
+        COUNT(DISTINCT CASE WHEN l.status = 'active' THEN l.id END) as active_leads,
+        COUNT(wc.id) as total_messages,
+        COUNT(CASE WHEN wc.sender = 'user' THEN 1 END) as user_messages,
+        COUNT(CASE WHEN wc.sender = 'bot' THEN 1 END) as bot_messages
+      FROM leads l
+      LEFT JOIN whatsapp_conversations wc ON l.id = wc.lead_id
+      WHERE l.source = 'whatsapp_bot'
+    `);
+    
     res.json({
       success: true,
+      version: '6.0',
       timestamp: new Date().toISOString(),
-      deploymentTime: DEPLOYMENT_TIME,
       webhookUrl: getWebhookUrl(),
-      setupGuideUrl: getWebhookUrl().replace('/webhook', '/setup-guide'),
-      whatsappNumber: '037572229',
-      credentials: {
-        source: 'env vars (INFORU_USERNAME/INFORU_PASSWORD)',
-        account: process.env.INFORU_USERNAME || 'NOT SET'
-      },
-      webhookFormat: 'INFORU standard (Data array with Value/Message/Network)',
-      status: 'ACTIVE',
-      nextSteps: [
-        `1. Configure webhook in INFORU dashboard`,
-        `2. Set webhook URL to: ${getWebhookUrl()}`,
-        `3. Test by sending WhatsApp message to 037572229`,
-        `4. View setup guide at: ${getWebhookUrl().replace('/webhook', '/setup-guide')}`
+      stats: stats.rows[0],
+      features: [
+        'Conversation tracking',
+        'Context-aware AI',
+        'Lead management', 
+        'Stage progression',
+        'Conversation dashboard'
       ]
     });
   } catch (error) {
