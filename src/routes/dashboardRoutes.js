@@ -19,14 +19,14 @@ async function getCommitteesSummary() {
     } catch(e) { return { total: 0, approved: 0, pending: 0, rejected: 0 }; }
 }
 
-// Helper: Get enrichment stats
+// Helper: Get enrichment stats - uses correct column names
 async function getEnrichmentStats() {
     try {
         const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total,
-                SUM(CASE WHEN enrichment_data IS NOT NULL THEN 1 ELSE 0 END) as enriched,
-                SUM(CASE WHEN last_enrichment > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent
+                SUM(CASE WHEN enrichment_score IS NOT NULL AND enrichment_score > 0 THEN 1 ELSE 0 END) as enriched,
+                SUM(CASE WHEN iai_score IS NOT NULL AND iai_score > 0 THEN 1 ELSE 0 END) as recent
             FROM complexes
         `);
         return rows[0] || { total: 0, enriched: 0, recent: 0 };
@@ -39,8 +39,8 @@ async function getYad2Stats() {
         const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total_listings,
-                COUNT(DISTINCT complex_id) as complexes_with_listings,
-                SUM(CASE WHEN last_updated > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_updates
+                COUNT(DISTINCT COALESCE(complex_id::text, complex_name)) as complexes_with_listings,
+                SUM(CASE WHEN updated_at > NOW() - INTERVAL '7 days' OR last_updated > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_updates
             FROM yad2_listings
         `);
         return rows[0] || { total_listings: 0, complexes_with_listings: 0, recent_updates: 0 };
@@ -75,7 +75,7 @@ router.get('/', async (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QUANTUM Dashboard v4.44.0</title>
+    <title>QUANTUM Dashboard v4.45.0</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; direction: rtl; }
@@ -143,7 +143,7 @@ router.get('/', async (req, res) => {
 <body>
     <div class="header">
         <h1>🏢 QUANTUM Dashboard</h1>
-        <div class="version">v4.44.0 - PostgreSQL Edition</div>
+        <div class="version">v4.45.0 - PostgreSQL Edition</div>
     </div>
 
     <div class="container">
@@ -207,7 +207,7 @@ router.get('/', async (req, res) => {
         <div id="enrichment" class="tab-content">
             <div class="stats-grid">
                 <div class="stat-card"><h3>מועשרים</h3><div class="value">${enrichment.enriched}</div><div class="label">מתחמים עם מידע מועשר</div></div>
-                <div class="stat-card"><h3>עדכניים</h3><div class="value">${enrichment.recent}</div><div class="label">עודכנו ב-7 ימים האחרונים</div></div>
+                <div class="stat-card"><h3>עם IAI</h3><div class="value">${enrichment.recent}</div><div class="label">מתחמים עם ציון IAI</div></div>
                 <div class="stat-card"><h3>ממתינים</h3><div class="value">${enrichment.total - enrichment.enriched}</div><div class="label">מתחמים שטרם הועשרו</div></div>
                 <div class="stat-card"><h3>שיעור השלמה</h3><div class="value">${Math.round((enrichment.enriched / Math.max(enrichment.total,1)) * 100)}%</div><div class="label">מסך המתחמים</div></div>
             </div>
@@ -338,7 +338,7 @@ router.get('/', async (req, res) => {
 
         async function loadWSStats() {
             try {
-                const res = await fetch('/api/whatsapp/subscriptions/stats');
+                const res = await fetch('/api/dashboard/whatsapp/subscriptions/stats');
                 const data = await res.json();
                 document.getElementById('wsActiveCount').textContent = data.activeSubscriptions || 0;
                 document.getElementById('wsUniqueLeads').textContent = data.uniqueLeads || 0;
@@ -351,7 +351,7 @@ router.get('/', async (req, res) => {
             const leadId = document.getElementById('wsLeadSearch').value.trim();
             if (!leadId) { document.getElementById('wsSubscriptionsList').innerHTML = '<p style="color:#666;padding:1rem">הזן Lead ID לחיפוש</p>'; return; }
             try {
-                const res = await fetch(\`/api/whatsapp/subscriptions/\${leadId}\`);
+                const res = await fetch(\`/api/dashboard/whatsapp/subscriptions/\${leadId}\`);
                 const subs = await res.json();
                 document.getElementById('wsSubscriptionsList').innerHTML = subs.length === 0 ? '<p style="color:#666;padding:1rem">לא נמצאו מנויים</p>' : subs.map(renderWSSubscription).join('');
             } catch (err) { document.getElementById('wsSubscriptionsList').innerHTML = '<p style="color:red;padding:1rem">שגיאה בטעינת מנויים</p>'; }
@@ -367,8 +367,8 @@ router.get('/', async (req, res) => {
             return '<div class="ws-subscription-card ' + (sub.active ? '' : 'inactive') + '">' +
                 '<div class="ws-subscription-header"><strong>Lead ID: ' + sub.lead_id + '</strong>' +
                 '<div class="ws-subscription-controls">' +
-                '<div class="ws-toggle ' + (sub.active ? 'active' : '') + '" onclick="toggleWSSubscription(\'' + sub.id + '\', ' + (!sub.active) + ')"><div class="ws-toggle-handle"></div></div>' +
-                '<button class="ws-delete-btn" onclick="deleteWSSubscription(\'' + sub.id + '\')">מחק</button>' +
+                '<div class="ws-toggle ' + (sub.active ? 'active' : '') + '" onclick="toggleWSSubscription(\\'' + sub.id + '\\', ' + (!sub.active) + ')"><div class="ws-toggle-handle"></div></div>' +
+                '<button class="ws-delete-btn" onclick="deleteWSSubscription(\\'' + sub.id + '\\')">מחק</button>' +
                 '</div></div>' +
                 '<div class="ws-criteria-tags">' + tags.map(t => '<span class="ws-criteria-tag">' + t + '</span>').join('') + '</div>' +
                 '<div class="ws-stats"><span>התראות: ' + (sub.alerts_sent || 0) + '</span><span>אחרונה: ' + (sub.last_alert ? new Date(sub.last_alert).toLocaleDateString('he-IL') : 'אין') + '</span></div>' +
@@ -377,7 +377,7 @@ router.get('/', async (req, res) => {
 
         async function toggleWSSubscription(id, active) {
             try {
-                await fetch('/api/whatsapp/subscriptions/' + id + '/toggle', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({active}) });
+                await fetch('/api/dashboard/whatsapp/subscriptions/' + id + '/toggle', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({active}) });
                 loadWSSubscriptions(); loadWSStats();
             } catch (err) { alert('שגיאה בעדכון המנוי'); }
         }
@@ -385,7 +385,7 @@ router.get('/', async (req, res) => {
         async function deleteWSSubscription(id) {
             if (!confirm('האם אתה בטוח שברצונך למחוק מנוי זה?')) return;
             try {
-                await fetch('/api/whatsapp/subscriptions/' + id, {method:'DELETE'});
+                await fetch('/api/dashboard/whatsapp/subscriptions/' + id, {method:'DELETE'});
                 loadWSSubscriptions(); loadWSStats();
             } catch (err) { alert('שגיאה במחיקת המנוי'); }
         }
@@ -394,7 +394,7 @@ router.get('/', async (req, res) => {
             const criteria = buildWSCriteria();
             if (Object.keys(criteria).length === 0) { alert('אנא הגדר לפחות קריטריון אחד'); return; }
             try {
-                const res = await fetch('/api/whatsapp/subscriptions/test', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({criteria}) });
+                const res = await fetch('/api/dashboard/whatsapp/subscriptions/test', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({criteria}) });
                 const result = await res.json();
                 if (result.listings && result.listings.length > 0) {
                     alert('נמצאו ' + result.count + ' רישומים תואמים');
@@ -408,7 +408,7 @@ router.get('/', async (req, res) => {
             const criteria = buildWSCriteria();
             if (Object.keys(criteria).length === 0) { alert('אנא הגדר לפחות קריטריון אחד'); return; }
             try {
-                const res = await fetch('/api/whatsapp/subscriptions', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({leadId, criteria}) });
+                const res = await fetch('/api/dashboard/whatsapp/subscriptions', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({leadId, criteria}) });
                 if (res.ok) {
                     alert('המנוי נוצר בהצלחה!');
                     document.getElementById('wsLeadId').value = '';
@@ -422,7 +422,7 @@ router.get('/', async (req, res) => {
         async function loadCommittees() {
             const search = document.getElementById('committeeSearch')?.value.toLowerCase() || '';
             try {
-                const committees = await (await fetch('/api/committees')).json();
+                const committees = await (await fetch('/api/dashboard/committees')).json();
                 const filtered = committees.filter(c => !search || c.complex_name?.toLowerCase().includes(search) || c.city?.toLowerCase().includes(search));
                 let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>תאריך</th><th>סטטוס</th></tr></thead><tbody>';
                 filtered.forEach(c => { html += '<tr><td>' + (c.complex_name||'N/A') + '</td><td>' + (c.city||'N/A') + '</td><td>' + (c.date?new Date(c.date).toLocaleDateString('he-IL'):'N/A') + '</td><td><span class="status-badge status-' + c.status + '">' + getStatusText(c.status) + '</span></td></tr>'; });
@@ -433,7 +433,7 @@ router.get('/', async (req, res) => {
 
         async function loadComplexes() {
             try {
-                const complexes = await (await fetch('/api/complexes')).json();
+                const complexes = await (await fetch('/api/dashboard/complexes')).json();
                 let opts = '<option value="">-- בחר מתחם --</option>';
                 complexes.forEach(c => { opts += '<option value="' + c.id + '">' + c.name + ' - ' + c.city + '</option>'; });
                 document.getElementById('complexSelect').innerHTML = opts;
@@ -444,15 +444,15 @@ router.get('/', async (req, res) => {
             const complexId = document.getElementById('complexSelect').value;
             if (!complexId) { document.getElementById('enrichmentData').innerHTML = ''; return; }
             try {
-                const complex = await (await fetch('/api/complexes/' + complexId)).json();
-                document.getElementById('enrichmentData').innerHTML = '<div class="stat-card"><h3>' + complex.name + '</h3><p><strong>עיר:</strong> ' + complex.city + '</p><p><strong>דירות:</strong> ' + (complex.total_apartments||'N/A') + '</p><p><strong>חתימות:</strong> ' + (complex.signature_percentage||'N/A') + '%</p><p><strong>עדכון:</strong> ' + (complex.last_enrichment?new Date(complex.last_enrichment).toLocaleDateString('he-IL'):'לא עודכן') + '</p></div>';
+                const complex = await (await fetch('/api/dashboard/complexes/' + complexId)).json();
+                document.getElementById('enrichmentData').innerHTML = '<div class="stat-card"><h3>' + complex.name + '</h3><p><strong>עיר:</strong> ' + complex.city + '</p><p><strong>דירות:</strong> ' + (complex.total_apartments||'N/A') + '</p><p><strong>חתימות:</strong> ' + (complex.signature_percent||'N/A') + '%</p><p><strong>IAI:</strong> ' + (complex.iai_score||'N/A') + '</p><p><strong>העשרה:</strong> ' + (complex.enrichment_score||'N/A') + '</p></div>';
             } catch (err) { console.error('Complex data error:', err); }
         }
 
         async function loadYad2() {
             const search = document.getElementById('yad2Search')?.value.toLowerCase() || '';
             try {
-                const listings = await (await fetch('/api/yad2/listings')).json();
+                const listings = await (await fetch('/api/dashboard/yad2/listings')).json();
                 const filtered = listings.filter(l => !search || l.complex_name?.toLowerCase().includes(search) || l.city?.toLowerCase().includes(search));
                 let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>מחיר</th><th>חדרים</th><th>עדכון</th></tr></thead><tbody>';
                 filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.price?'₪'+l.price.toLocaleString():'N/A') + '</td><td>' + (l.rooms||'N/A') + '</td><td>' + (l.last_updated?new Date(l.last_updated).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
@@ -466,7 +466,7 @@ router.get('/', async (req, res) => {
         async function loadKones() {
             const search = document.getElementById('konesSearch')?.value.toLowerCase() || '';
             try {
-                const listings = await (await fetch('/api/kones/listings')).json();
+                const listings = await (await fetch('/api/dashboard/kones/listings')).json();
                 const filtered = listings.filter(l => !search || l.complex_name?.toLowerCase().includes(search) || l.city?.toLowerCase().includes(search));
                 let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>כתובת</th><th>סטטוס</th><th>תאריך</th></tr></thead><tbody>';
                 filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.address||'N/A') + '</td><td><span class="status-badge status-' + l.status + '">' + (l.status||'N/A') + '</span></td><td>' + (l.date?new Date(l.date).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
@@ -537,7 +537,7 @@ router.get('/', async (req, res) => {
 });
 
 // API: Get all committees
-router.get('/api/committees', async (req, res) => {
+router.get('/committees', async (req, res) => {
     try {
         const { rows } = await pool.query('SELECT * FROM committees ORDER BY date DESC');
         res.json(rows);
@@ -545,15 +545,15 @@ router.get('/api/committees', async (req, res) => {
 });
 
 // API: Get all complexes
-router.get('/api/complexes', async (req, res) => {
+router.get('/complexes', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT id, name, city FROM complexes ORDER BY name');
+        const { rows } = await pool.query('SELECT id, name, city, enrichment_score, iai_score, signature_percent FROM complexes ORDER BY name');
         res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Get complex by ID
-router.get('/api/complexes/:id', async (req, res) => {
+router.get('/complexes/:id', async (req, res) => {
     try {
         const { rows } = await pool.query('SELECT * FROM complexes WHERE id = $1', [req.params.id]);
         res.json(rows[0] || null);
@@ -561,15 +561,15 @@ router.get('/api/complexes/:id', async (req, res) => {
 });
 
 // API: Get yad2 listings
-router.get('/api/yad2/listings', async (req, res) => {
+router.get('/yad2/listings', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT * FROM yad2_listings ORDER BY last_updated DESC LIMIT 100');
+        const { rows } = await pool.query('SELECT * FROM yad2_listings ORDER BY id DESC LIMIT 100');
         res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Get kones listings
-router.get('/api/kones/listings', async (req, res) => {
+router.get('/kones/listings', async (req, res) => {
     try {
         const { rows } = await pool.query('SELECT * FROM kones_listings ORDER BY date DESC LIMIT 100');
         res.json(rows);
@@ -577,7 +577,7 @@ router.get('/api/kones/listings', async (req, res) => {
 });
 
 // API: WhatsApp subscription statistics
-router.get('/api/whatsapp/subscriptions/stats', async (req, res) => {
+router.get('/whatsapp/subscriptions/stats', async (req, res) => {
     try {
         const { rows } = await pool.query(`
             SELECT 
@@ -594,7 +594,7 @@ router.get('/api/whatsapp/subscriptions/stats', async (req, res) => {
 });
 
 // API: Get subscriptions by lead ID
-router.get('/api/whatsapp/subscriptions/:leadId', async (req, res) => {
+router.get('/whatsapp/subscriptions/:leadId', async (req, res) => {
     try {
         const { rows } = await pool.query(
             'SELECT * FROM whatsapp_subscriptions WHERE lead_id = $1 ORDER BY created_at DESC',
@@ -605,7 +605,7 @@ router.get('/api/whatsapp/subscriptions/:leadId', async (req, res) => {
 });
 
 // API: Test subscription criteria
-router.post('/api/whatsapp/subscriptions/test', express.json(), async (req, res) => {
+router.post('/whatsapp/subscriptions/test', express.json(), async (req, res) => {
     try {
         const { criteria } = req.body;
         if (!criteria || Object.keys(criteria).length === 0) return res.status(400).json({ error: 'Criteria required' });
@@ -632,7 +632,7 @@ router.post('/api/whatsapp/subscriptions/test', express.json(), async (req, res)
 });
 
 // API: Create subscription
-router.post('/api/whatsapp/subscriptions', express.json(), async (req, res) => {
+router.post('/whatsapp/subscriptions', express.json(), async (req, res) => {
     try {
         const { leadId, criteria } = req.body;
         if (!leadId || !criteria) return res.status(400).json({ error: 'Lead ID and criteria required' });
@@ -646,7 +646,7 @@ router.post('/api/whatsapp/subscriptions', express.json(), async (req, res) => {
 });
 
 // API: Toggle subscription active status
-router.patch('/api/whatsapp/subscriptions/:id/toggle', express.json(), async (req, res) => {
+router.patch('/whatsapp/subscriptions/:id/toggle', express.json(), async (req, res) => {
     try {
         const { active } = req.body;
         await pool.query('UPDATE whatsapp_subscriptions SET active = $1 WHERE id = $2', [active, req.params.id]);
@@ -655,7 +655,7 @@ router.patch('/api/whatsapp/subscriptions/:id/toggle', express.json(), async (re
 });
 
 // API: Delete subscription
-router.delete('/api/whatsapp/subscriptions/:id', async (req, res) => {
+router.delete('/whatsapp/subscriptions/:id', async (req, res) => {
     try {
         await pool.query('DELETE FROM whatsapp_subscriptions WHERE id = $1', [req.params.id]);
         res.json({ success: true });
