@@ -77,6 +77,38 @@ if (fs.existsSync(templateB64Path)) {
 }
 
 // ============================================================
+// Phase 1.6: Decompress .js.gz.b64 files in src/routes/
+// ============================================================
+console.log('[START] Checking for .js.gz.b64 compressed route files...');
+function decompressGzB64Routes(dir) {
+  let restored = 0;
+  if (!fs.existsSync(dir)) return restored;
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.js.gz.b64'));
+  for (const file of files) {
+    const b64Path = path.join(dir, file);
+    const jsPath = path.join(dir, file.replace('.gz.b64', ''));
+    try {
+      const b64Content = fs.readFileSync(b64Path, 'utf8').trim();
+      const gzBuffer = Buffer.from(b64Content, 'base64');
+      const jsContent = zlib.gunzipSync(gzBuffer).toString('utf8');
+      fs.writeFileSync(jsPath, jsContent, 'utf8');
+      console.log(`[START] Decompressed ${file} -> ${path.basename(jsPath)} (${jsContent.length} bytes)`);
+      restored++;
+    } catch (err) {
+      console.log(`[START] ERROR decompressing ${file}: ${err.message}`);
+    }
+  }
+  return restored;
+}
+
+const routesRestored = decompressGzB64Routes(path.join(__dirname, 'src', 'routes'));
+if (routesRestored > 0) {
+  console.log(`[START] Restored ${routesRestored} compressed route file(s)`);
+} else {
+  console.log('[START] No .js.gz.b64 route files found - skipping');
+}
+
+// ============================================================
 // Phase 2: Legacy fix-escapes - DISABLED (v4.43.0+)
 // ============================================================
 console.log('[START] fix-escapes: Skipped (legacy mode disabled)');
