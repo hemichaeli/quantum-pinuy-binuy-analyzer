@@ -45,6 +45,7 @@ function fixBase64Files(dir) {
 let totalFixed = 0;
 totalFixed += fixBase64Files(path.join(__dirname, 'src', 'routes'));
 totalFixed += fixBase64Files(path.join(__dirname, 'src', 'services'));
+totalFixed += fixBase64Files(path.join(__dirname, 'src', 'jobs'));
 totalFixed += fixBase64Files(path.join(__dirname, 'src'));
 
 if (totalFixed > 0) {
