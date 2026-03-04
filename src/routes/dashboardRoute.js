@@ -156,80 +156,70 @@ async function loadData() {
         
         const opportunities = oppData.opportunities || [];
 
-        // Hero Stats
-        document.getElementById('heroStats').innerHTML = [
-            { label: 'סה"כ מתחמים', value: health?.complexes || '696', change: '+12%', positive: true },
-            { label: 'הזדמנויות חמות', value: opportunities.length || '23', badge: 'רמת ביטחון גבוהה', primary: true },
+        // Hero Stats  
+        const heroHTML = [
+            { label: 'סה"כ מתחמים', value: health?.complexes || '698', change: '+12%', positive: true },
+            { label: 'הזדמנויות חמות', value: opportunities.length || '50', badge: 'רמת ביטחון גבוהה', primary: true },
             { label: 'ציון IAI ממוצע', value: '75', progress: true },
             { label: 'התראות חדשות', value: '5', badge: 'דרוש טיפול', pulse: true }
-        ].map(s => \`
-            <div class="bg-secondary p-6 rounded-2xl border border-white/5">
-                <p class="text-xs uppercase tracking-widest text-slate-500 mb-1">\${s.label}</p>
-                <div class="flex items-end justify-between">
-                    <h3 class="text-3xl font-bold \${s.primary ? 'text-primary' : ''}">\${s.value}</h3>
-                    \${s.change ? \`<span class="text-\${s.positive ? 'emerald' : 'red'}-500 text-xs">\${s.change}</span>\` : ''}
-                    \${s.badge ? \`<span class="bg-\${s.pulse ? 'red' : 'primary'}-500/20 text-\${s.pulse ? 'red' : 'primary'}-500 text-[10px] px-2 py-1 rounded-full \${s.pulse ? 'animate-pulse' : ''}">\${s.badge}</span>\` : ''}
-                    \${s.progress ? '<div class="w-12 h-2 bg-white/10 rounded-full mb-2 overflow-hidden"><div class="h-full iai-gradient w-3/4"></div></div>' : ''}
-                </div>
-            </div>
-        \`).join('');
+        ].map(s => {
+            let html = '<div class="bg-secondary p-6 rounded-2xl border border-white/5">';
+            html += '<p class="text-xs uppercase tracking-widest text-slate-500 mb-1">' + s.label + '</p>';
+            html += '<div class="flex items-end justify-between">';
+            html += '<h3 class="text-3xl font-bold ' + (s.primary ? 'text-primary' : '') + '">' + s.value + '</h3>';
+            if (s.change) html += '<span class="text-' + (s.positive ? 'emerald' : 'red') + '-500 text-xs">' + s.change + '</span>';
+            if (s.badge) html += '<span class="bg-' + (s.pulse ? 'red' : 'primary') + '-500/20 text-' + (s.pulse ? 'red' : 'primary') + '-500 text-[10px] px-2 py-1 rounded-full ' + (s.pulse ? 'animate-pulse' : '') + '">' + s.badge + '</span>';
+            if (s.progress) html += '<div class="w-12 h-2 bg-white/10 rounded-full mb-2 overflow-hidden"><div class="h-full iai-gradient w-3/4"></div></div>';
+            html += '</div></div>';
+            return html;
+        }).join('');
+        
+        document.getElementById('heroStats').innerHTML = heroHTML;
 
         // Opportunities Table
-        document.getElementById('opportunitiesTable').innerHTML = \`
-            <thead class="bg-white/[0.02]"><tr class="text-xs uppercase text-slate-500 text-right">
-                <th class="px-6 py-4 font-semibold">מתחם</th>
-                <th class="px-6 py-4 font-semibold">עיר</th>
-                <th class="px-6 py-4 font-semibold">IAI</th>
-                <th class="px-6 py-4 font-semibold">SSI</th>
-            </tr></thead>
-            <tbody>
-                \${opportunities.slice(0, 3).map(o => \`
-                    <tr class="hover:bg-white/[0.01] border-t border-white/5">
-                        <td class="px-6 py-4">
-                            <div class="flex items-center space-x-3 space-x-reverse">
-                                <div class="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center">
-                                    <span class="material-icons-round text-slate-400">domain</span>
-                                </div>
-                                <div>
-                                    <p class="font-semibold text-sm">\${o.address || o.name || 'מתחם'}</p>
-                                    <p class="text-xs text-slate-500">\${o.existing_units || '?'} יח"ד</p>
-                                </div>
-                            </div>
-                        </td>
-                        <td class="px-6 py-4 text-sm">\${o.city || 'לא ידוע'}</td>
-                        <td class="px-6 py-4">
-                            <div class="iai-gradient text-white text-[10px] font-bold px-2 py-1 rounded inline-flex shadow-lg shadow-primary/20">
-                                \${o.iai_score || 85} IAI
-                            </div>
-                        </td>
-                        <td class="px-6 py-4">
-                            <div class="w-32 h-2 bg-white/10 rounded-full relative overflow-hidden">
-                                <div class="absolute inset-y-0 right-0 \${o.ssi_score > 70 ? 'bg-orange-500' : 'bg-yellow-500'} rounded-full" style="width:\${o.ssi_score || 50}%"></div>
-                            </div>
-                        </td>
-                    </tr>
-                \`).join('')}
-            </tbody>
-        \`;
+        const tableHTML = '<thead class="bg-white/[0.02]"><tr class="text-xs uppercase text-slate-500 text-right">' +
+            '<th class="px-6 py-4 font-semibold">מתחם</th>' +
+            '<th class="px-6 py-4 font-semibold">עיר</th>' +
+            '<th class="px-6 py-4 font-semibold">IAI</th>' +
+            '<th class="px-6 py-4 font-semibold">SSI</th>' +
+            '</tr></thead><tbody>' +
+            opportunities.slice(0, 3).map(o => {
+                return '<tr class="hover:bg-white/[0.01] border-t border-white/5">' +
+                    '<td class="px-6 py-4">' +
+                    '<div class="flex items-center space-x-3 space-x-reverse">' +
+                    '<div class="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center">' +
+                    '<span class="material-icons-round text-slate-400">domain</span></div>' +
+                    '<div><p class="font-semibold text-sm">' + (o.address || o.name || 'מתחם') + '</p>' +
+                    '<p class="text-xs text-slate-500">' + (o.existing_units || '?') + ' יח"ד</p></div></div></td>' +
+                    '<td class="px-6 py-4 text-sm">' + (o.city || 'לא ידוע') + '</td>' +
+                    '<td class="px-6 py-4">' +
+                    '<div class="iai-gradient text-white text-[10px] font-bold px-2 py-1 rounded inline-flex shadow-lg shadow-primary/20">' +
+                    (o.iai_score || 85) + ' IAI</div></td>' +
+                    '<td class="px-6 py-4"><div class="w-32 h-2 bg-white/10 rounded-full relative overflow-hidden">' +
+                    '<div class="absolute inset-y-0 right-0 ' + (o.avg_ssi > 70 ? 'bg-orange-500' : 'bg-yellow-500') + ' rounded-full" style="width:' + (o.avg_ssi || 50) + '%"></div>' +
+                    '</div></td></tr>';
+            }).join('') +
+            '</tbody>';
+        
+        document.getElementById('opportunitiesTable').innerHTML = tableHTML;
 
         // Smart Insight
         document.getElementById('smartInsight').textContent = 
             'בת ים מציגה עלייה של 15% במדד לחץ מוכרים (SSI) ב-72 השעות האחרונות. מומלץ להתמקד בסריקות באזור זה.';
 
         // Alerts
-        document.getElementById('alertFeed').innerHTML = [
+        const alertsHTML = [
             { type: 'red', title: 'סריקה קריטית', msg: 'כינוס נכסים נפתח ב"מתחם הים" בת ים', time: 'לפני 2 דקות' },
             { type: 'primary', title: 'סף IAI', msg: 'מתחם "רוטשילד 45" חצה ציון 85', time: 'לפני 15 דקות' }
-        ].map(a => \`
-            <div class="flex space-x-4 space-x-reverse">
-                <div class="mt-1"><span class="block w-2 h-2 rounded-full bg-\${a.type} ring-4 ring-\${a.type}/20"></span></div>
-                <div>
-                    <p class="text-xs font-bold text-\${a.type} uppercase mb-1">\${a.title}</p>
-                    <p class="text-sm font-medium">\${a.msg}</p>
-                    <p class="text-[10px] opacity-50 mt-1">\${a.time}</p>
-                </div>
-            </div>
-        \`).join('');
+        ].map(a => {
+            return '<div class="flex space-x-4 space-x-reverse">' +
+                '<div class="mt-1"><span class="block w-2 h-2 rounded-full bg-' + a.type + ' ring-4 ring-' + a.type + '/20"></span></div>' +
+                '<div><p class="text-xs font-bold text-' + a.type + ' uppercase mb-1">' + a.title + '</p>' +
+                '<p class="text-sm font-medium">' + a.msg + '</p>' +
+                '<p class="text-[10px] opacity-50 mt-1">' + a.time + '</p></div></div>';
+        }).join('');
+        
+        document.getElementById('alertFeed').innerHTML = alertsHTML;
 
     } catch (e) { console.error('Load error:', e); }
 }
