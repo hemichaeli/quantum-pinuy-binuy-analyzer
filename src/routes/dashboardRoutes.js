@@ -25,7 +25,7 @@ async function getEnrichmentStats() {
         const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total,
-                SUM(CASE WHEN enrichment_score IS NOT NULL AND enrichment_score > 0 THEN 1 ELSE 0 END) as enriched,
+                SUM(CASE WHEN perplexity_summary IS NOT NULL THEN 1 ELSE 0 END) as enriched,
                 SUM(CASE WHEN iai_score IS NOT NULL AND iai_score > 0 THEN 1 ELSE 0 END) as recent
             FROM complexes
         `);
@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QUANTUM Dashboard v4.46.0</title>
+    <title>QUANTUM Dashboard v4.46.1</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; direction: rtl; }
@@ -111,7 +111,6 @@ router.get('/', async (req, res) => {
         .status-deposited, .status-pre_deposit, .status-planning, .status-declared { background: #fff3cd; color: #856404; }
         .status-construction { background: #d1ecf1; color: #0c5460; }
         .status-unknown { background: #e2e3e5; color: #383d41; }
-        .loading { text-align: center; padding: 3rem; color: white; font-size: 1.2rem; }
         .form-group { margin-bottom: 1.5rem; }
         .form-group label { display: block; margin-bottom: 0.5rem; color: #333; font-weight: 600; }
         .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem; transition: border-color 0.3s; }
@@ -145,7 +144,7 @@ router.get('/', async (req, res) => {
 <body>
     <div class="header">
         <h1>🏢 QUANTUM Dashboard</h1>
-        <div class="version">v4.46.0 - PostgreSQL Edition</div>
+        <div class="version">v4.46.1 - PostgreSQL Edition</div>
     </div>
 
     <div class="container">
@@ -208,9 +207,9 @@ router.get('/', async (req, res) => {
 
         <div id="enrichment" class="tab-content">
             <div class="stats-grid">
-                <div class="stat-card"><h3>מועשרים</h3><div class="value">${enrichment.enriched}</div><div class="label">מתחמים עם ניקוד העשרה</div></div>
+                <div class="stat-card"><h3>מועשרים</h3><div class="value">${enrichment.enriched}</div><div class="label">מתחמים עם סיכום Perplexity</div></div>
                 <div class="stat-card"><h3>עם IAI</h3><div class="value">${enrichment.recent}</div><div class="label">מתחמים עם ציון IAI</div></div>
-                <div class="stat-card"><h3>ממתינים</h3><div class="value">${enrichment.total - enrichment.enriched}</div><div class="label">מתחמים שטרם הועשרו</div></div>
+                <div class="stat-card"><h3>ממתינים</h3><div class="value">${parseInt(enrichment.total) - parseInt(enrichment.enriched)}</div><div class="label">מתחמים שטרם הועשרו</div></div>
                 <div class="stat-card"><h3>שיעור השלמה</h3><div class="value">${Math.round((enrichment.enriched / Math.max(enrichment.total,1)) * 100)}%</div><div class="label">מסך המתחמים</div></div>
             </div>
             <div class="action-section">
@@ -452,7 +451,7 @@ router.get('/', async (req, res) => {
                     '<p><strong>דירות קיימות:</strong> ' + (complex.existing_units||'N/A') + '</p>' +
                     '<p><strong>חתימות:</strong> ' + (complex.signature_percent||'N/A') + '%</p>' +
                     '<p><strong>IAI:</strong> ' + (complex.iai_score||'N/A') + '</p>' +
-                    '<p><strong>ניקוד העשרה:</strong> ' + (complex.enrichment_score||'N/A') + '</p>' +
+                    '<p><strong>עדכון Perplexity:</strong> ' + (complex.last_perplexity_update ? new Date(complex.last_perplexity_update).toLocaleDateString("he-IL") : "לא עודכן") + '</p>' +
                     '<p><strong>סטטוס:</strong> ' + getStatusText(complex.status) + '</p></div>';
             } catch (err) { console.error('Complex data error:', err); }
         }
@@ -561,7 +560,7 @@ router.get('/committees', async (req, res) => {
 // API: Get all complexes
 router.get('/complexes', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT id, name, city, enrichment_score, iai_score, signature_percent FROM complexes ORDER BY name');
+        const { rows } = await pool.query('SELECT id, name, city, iai_score, signature_percent FROM complexes ORDER BY name');
         res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
