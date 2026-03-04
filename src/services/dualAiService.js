@@ -1,9 +1,10 @@
 /**
- * Dual AI Service v2.1
+ * Dual AI Service v2.2
  *
  * Fast enrichment mode that uses Perplexity for web search
  * and Claude for validation/reasoning.
  *
+ * FIXED v2.2: incremental complexes_scanned counter update during scan
  * FIXED v2.1: dualScanAll now saves enriched data to DB + logging
  */
 
@@ -190,11 +191,11 @@ async function dualScanComplex(complexId, options = {}) {
 }
 
 /**
- * Dual scan for multiple complexes - FIXED v2.1: saves data to DB
+ * Dual scan for multiple complexes - v2.2: incremental progress tracking
  */
 async function dualScanAll(options = {}) {
   const pool = require('../db/pool');
-  const { limit = 20, city, staleOnly = true } = options;
+  const { limit = 20, city, staleOnly = true, scanId } = options;
 
   let query = `SELECT id, name, city, addresses, plan_number, status, developer, accurate_price_sqm FROM complexes WHERE 1=1`;
   const params = [];
@@ -217,6 +218,11 @@ async function dualScanAll(options = {}) {
       logger.info(`[DUAL-AI] Enriching: ${complex.name} (${complex.city}) [${results.scanned + 1}/${complexes.length}]`);
       const result = await standardEnrich(complex);
       results.scanned++;
+
+      // Update DB counter incrementally for live progress tracking
+      if (scanId) {
+        try { await pool.query('UPDATE scan_logs SET complexes_scanned = $1 WHERE id = $2', [results.scanned, scanId]); } catch(e) {}
+      }
 
       const fieldsFound = Object.keys(result.fields).length;
       if (fieldsFound > 0) {
