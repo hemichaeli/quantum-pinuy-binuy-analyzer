@@ -1,72 +1,64 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db/database');
+const pool = require('../db/pool');
 const fs = require('fs').promises;
 const path = require('path');
 
 // Helper: Get committees summary
 async function getCommitteesSummary() {
-    return new Promise((resolve, reject) => {
-        db.all(`
+    try {
+        const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
                 SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
             FROM committees
-        `, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows[0] || { total: 0, approved: 0, pending: 0, rejected: 0 });
-        });
-    });
+        `);
+        return rows[0] || { total: 0, approved: 0, pending: 0, rejected: 0 };
+    } catch(e) { return { total: 0, approved: 0, pending: 0, rejected: 0 }; }
 }
 
 // Helper: Get enrichment stats
 async function getEnrichmentStats() {
-    return new Promise((resolve, reject) => {
-        db.all(`
+    try {
+        const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN enrichment_data IS NOT NULL THEN 1 ELSE 0 END) as enriched,
-                SUM(CASE WHEN last_enrichment > datetime('now', '-7 days') THEN 1 ELSE 0 END) as recent
+                SUM(CASE WHEN last_enrichment > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent
             FROM complexes
-        `, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows[0] || { total: 0, enriched: 0, recent: 0 });
-        });
-    });
+        `);
+        return rows[0] || { total: 0, enriched: 0, recent: 0 };
+    } catch(e) { return { total: 0, enriched: 0, recent: 0 }; }
 }
 
 // Helper: Get yad2 stats
 async function getYad2Stats() {
-    return new Promise((resolve, reject) => {
-        db.all(`
+    try {
+        const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total_listings,
                 COUNT(DISTINCT complex_id) as complexes_with_listings,
-                SUM(CASE WHEN last_updated > datetime('now', '-7 days') THEN 1 ELSE 0 END) as recent_updates
+                SUM(CASE WHEN last_updated > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_updates
             FROM yad2_listings
-        `, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows[0] || { total_listings: 0, complexes_with_listings: 0, recent_updates: 0 });
-        });
-    });
+        `);
+        return rows[0] || { total_listings: 0, complexes_with_listings: 0, recent_updates: 0 };
+    } catch(e) { return { total_listings: 0, complexes_with_listings: 0, recent_updates: 0 }; }
 }
 
 // Helper: Get kones stats
 async function getKonesStats() {
-    return new Promise((resolve, reject) => {
-        db.all(`
+    try {
+        const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total_listings,
                 COUNT(DISTINCT complex_name) as unique_complexes,
                 SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_listings
             FROM kones_listings
-        `, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows[0] || { total_listings: 0, unique_complexes: 0, active_listings: 0 });
-        });
-    });
+        `);
+        return rows[0] || { total_listings: 0, unique_complexes: 0, active_listings: 0 };
+    } catch(e) { return { total_listings: 0, unique_complexes: 0, active_listings: 0 }; }
 }
 
 // Dashboard main page
@@ -83,7 +75,7 @@ router.get('/', async (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QUANTUM Dashboard v4.43.0</title>
+    <title>QUANTUM Dashboard v4.44.0</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; direction: rtl; }
@@ -151,7 +143,7 @@ router.get('/', async (req, res) => {
 <body>
     <div class="header">
         <h1>🏢 QUANTUM Dashboard</h1>
-        <div class="version">v4.43.0 - מערכת ניהול פרויקטים</div>
+        <div class="version">v4.44.0 - PostgreSQL Edition</div>
     </div>
 
     <div class="container">
@@ -325,7 +317,7 @@ router.get('/', async (req, res) => {
 
         function renderWSCityChips() {
             document.getElementById('wsCityChips').innerHTML = selectedWSCities.map(city =>
-                \`<div class="ws-chip">\${city}<button class="ws-chip-remove" onclick="removeWSCity('\${city}')">×</button></div>\`
+                \`<div class="ws-chip">\${city}<button class="ws-chip-remove" onclick="removeWSCity('\${city}')">x</button></div>\`
             ).join('');
         }
 
@@ -368,33 +360,33 @@ router.get('/', async (req, res) => {
         function renderWSSubscription(sub) {
             const criteria = sub.criteria || {};
             const tags = [];
-            if (criteria.cities && criteria.cities.length > 0) tags.push(\`ערים: \${criteria.cities.join(', ')}\`);
-            if (criteria.rooms) { const t = []; if (criteria.rooms.min) t.push(\`מ-\${criteria.rooms.min}\`); if (criteria.rooms.max) t.push(\`עד \${criteria.rooms.max}\`); tags.push(\`חדרים: \${t.join(' ')}\`); }
-            if (criteria.size) { const t = []; if (criteria.size.min) t.push(\`מ-\${criteria.size.min}\`); if (criteria.size.max) t.push(\`עד \${criteria.size.max}\`); tags.push(\`גודל: \${t.join(' ')} מ"ר\`); }
-            if (criteria.price) { const t = []; if (criteria.price.min) t.push(\`מ-₪\${criteria.price.min.toLocaleString()}\`); if (criteria.price.max) t.push(\`עד ₪\${criteria.price.max.toLocaleString()}\`); tags.push(\`מחיר: \${t.join(' ')}\`); }
-            return \`<div class="ws-subscription-card \${sub.active ? '' : 'inactive'}">
-                <div class="ws-subscription-header"><strong>Lead ID: \${sub.lead_id}</strong>
-                <div class="ws-subscription-controls">
-                    <div class="ws-toggle \${sub.active ? 'active' : ''}" onclick="toggleWSSubscription('\${sub.id}', \${!sub.active})"><div class="ws-toggle-handle"></div></div>
-                    <button class="ws-delete-btn" onclick="deleteWSSubscription('\${sub.id}')">מחק</button>
-                </div></div>
-                <div class="ws-criteria-tags">\${tags.map(t => \`<span class="ws-criteria-tag">\${t}</span>\`).join('')}</div>
-                <div class="ws-stats"><span>📊 התראות: \${sub.alerts_sent || 0}</span><span>📅 אחרונה: \${sub.last_alert ? new Date(sub.last_alert).toLocaleDateString('he-IL') : 'אין'}</span></div>
-            </div>\`;
+            if (criteria.cities && criteria.cities.length > 0) tags.push('ערים: ' + criteria.cities.join(', '));
+            if (criteria.rooms) { const t = []; if (criteria.rooms.min) t.push('מ-' + criteria.rooms.min); if (criteria.rooms.max) t.push('עד ' + criteria.rooms.max); tags.push('חדרים: ' + t.join(' ')); }
+            if (criteria.size) { const t = []; if (criteria.size.min) t.push('מ-' + criteria.size.min); if (criteria.size.max) t.push('עד ' + criteria.size.max); tags.push('גודל: ' + t.join(' ') + ' מ"ר'); }
+            if (criteria.price) { const t = []; if (criteria.price.min) t.push('מ-' + criteria.price.min.toLocaleString()); if (criteria.price.max) t.push('עד ' + criteria.price.max.toLocaleString()); tags.push('מחיר: ' + t.join(' ')); }
+            return '<div class="ws-subscription-card ' + (sub.active ? '' : 'inactive') + '">' +
+                '<div class="ws-subscription-header"><strong>Lead ID: ' + sub.lead_id + '</strong>' +
+                '<div class="ws-subscription-controls">' +
+                '<div class="ws-toggle ' + (sub.active ? 'active' : '') + '" onclick="toggleWSSubscription(\'' + sub.id + '\', ' + (!sub.active) + ')"><div class="ws-toggle-handle"></div></div>' +
+                '<button class="ws-delete-btn" onclick="deleteWSSubscription(\'' + sub.id + '\')">מחק</button>' +
+                '</div></div>' +
+                '<div class="ws-criteria-tags">' + tags.map(t => '<span class="ws-criteria-tag">' + t + '</span>').join('') + '</div>' +
+                '<div class="ws-stats"><span>התראות: ' + (sub.alerts_sent || 0) + '</span><span>אחרונה: ' + (sub.last_alert ? new Date(sub.last_alert).toLocaleDateString('he-IL') : 'אין') + '</span></div>' +
+                '</div>';
         }
 
         async function toggleWSSubscription(id, active) {
             try {
-                const res = await fetch(\`/api/whatsapp/subscriptions/\${id}/toggle\`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({active}) });
-                if (res.ok) { loadWSSubscriptions(); loadWSStats(); }
+                await fetch('/api/whatsapp/subscriptions/' + id + '/toggle', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({active}) });
+                loadWSSubscriptions(); loadWSStats();
             } catch (err) { alert('שגיאה בעדכון המנוי'); }
         }
 
         async function deleteWSSubscription(id) {
             if (!confirm('האם אתה בטוח שברצונך למחוק מנוי זה?')) return;
             try {
-                const res = await fetch(\`/api/whatsapp/subscriptions/\${id}\`, {method:'DELETE'});
-                if (res.ok) { loadWSSubscriptions(); loadWSStats(); }
+                await fetch('/api/whatsapp/subscriptions/' + id, {method:'DELETE'});
+                loadWSSubscriptions(); loadWSStats();
             } catch (err) { alert('שגיאה במחיקת המנוי'); }
         }
 
@@ -405,7 +397,7 @@ router.get('/', async (req, res) => {
                 const res = await fetch('/api/whatsapp/subscriptions/test', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({criteria}) });
                 const result = await res.json();
                 if (result.listings && result.listings.length > 0) {
-                    alert(\`נמצאו \${result.count} רישומים תואמים:\n\n\` + result.listings.map(l => \`• \${l.city}, \${l.rooms} חדרים, \${l.size}מ"ר, ₪\${l.price.toLocaleString()}\`).join('\n'));
+                    alert('נמצאו ' + result.count + ' רישומים תואמים');
                 } else { alert('לא נמצאו רישומים תואמים לקריטריונים'); }
             } catch (err) { alert('שגיאה בבדיקת קריטריונים'); }
         }
@@ -432,14 +424,19 @@ router.get('/', async (req, res) => {
             try {
                 const committees = await (await fetch('/api/committees')).json();
                 const filtered = committees.filter(c => !search || c.complex_name?.toLowerCase().includes(search) || c.city?.toLowerCase().includes(search));
-                document.getElementById('committeesTable').innerHTML = \`<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>תאריך</th><th>סטטוס</th></tr></thead><tbody>\${filtered.map(c => \`<tr><td>\${c.complex_name||'N/A'}</td><td>\${c.city||'N/A'}</td><td>\${c.date?new Date(c.date).toLocaleDateString('he-IL'):'N/A'}</td><td><span class="status-badge status-\${c.status}">\${getStatusText(c.status)}</span></td></tr>\`).join('')}</tbody></table>\`;
+                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>תאריך</th><th>סטטוס</th></tr></thead><tbody>';
+                filtered.forEach(c => { html += '<tr><td>' + (c.complex_name||'N/A') + '</td><td>' + (c.city||'N/A') + '</td><td>' + (c.date?new Date(c.date).toLocaleDateString('he-IL'):'N/A') + '</td><td><span class="status-badge status-' + c.status + '">' + getStatusText(c.status) + '</span></td></tr>'; });
+                html += '</tbody></table>';
+                document.getElementById('committeesTable').innerHTML = html;
             } catch (err) { console.error('Committees error:', err); }
         }
 
         async function loadComplexes() {
             try {
                 const complexes = await (await fetch('/api/complexes')).json();
-                document.getElementById('complexSelect').innerHTML = '<option value="">-- בחר מתחם --</option>' + complexes.map(c => \`<option value="\${c.id}">\${c.name} - \${c.city}</option>\`).join('');
+                let opts = '<option value="">-- בחר מתחם --</option>';
+                complexes.forEach(c => { opts += '<option value="' + c.id + '">' + c.name + ' - ' + c.city + '</option>'; });
+                document.getElementById('complexSelect').innerHTML = opts;
             } catch (err) { console.error('Complexes error:', err); }
         }
 
@@ -447,14 +444,9 @@ router.get('/', async (req, res) => {
             const complexId = document.getElementById('complexSelect').value;
             if (!complexId) { document.getElementById('enrichmentData').innerHTML = ''; return; }
             try {
-                const complex = await (await fetch(\`/api/complexes/\${complexId}\`)).json();
-                document.getElementById('enrichmentData').innerHTML = \`<div class="stat-card"><h3>\${complex.name}</h3><p><strong>עיר:</strong> \${complex.city}</p><p><strong>דירות:</strong> \${complex.total_apartments||'N/A'}</p><p><strong>חתימות:</strong> \${complex.signature_percentage||'N/A'}%</p><p><strong>עדכון:</strong> \${complex.last_enrichment?new Date(complex.last_enrichment).toLocaleDateString('he-IL'):'לא עודכן'}</p><button class="action-btn" onclick="enrichComplex(\${complexId})">🔄 הרץ העשרה</button></div>\`;
+                const complex = await (await fetch('/api/complexes/' + complexId)).json();
+                document.getElementById('enrichmentData').innerHTML = '<div class="stat-card"><h3>' + complex.name + '</h3><p><strong>עיר:</strong> ' + complex.city + '</p><p><strong>דירות:</strong> ' + (complex.total_apartments||'N/A') + '</p><p><strong>חתימות:</strong> ' + (complex.signature_percentage||'N/A') + '%</p><p><strong>עדכון:</strong> ' + (complex.last_enrichment?new Date(complex.last_enrichment).toLocaleDateString('he-IL'):'לא עודכן') + '</p></div>';
             } catch (err) { console.error('Complex data error:', err); }
-        }
-
-        async function enrichComplex(complexId) {
-            try { const res = await fetch(\`/api/enrich/\${complexId}\`, {method:'POST'}); if (res.ok) { alert('העשרה הושלמה!'); loadComplexData(); } }
-            catch (err) { alert('שגיאה בהעשרת מתחם'); }
         }
 
         async function loadYad2() {
@@ -462,7 +454,10 @@ router.get('/', async (req, res) => {
             try {
                 const listings = await (await fetch('/api/yad2/listings')).json();
                 const filtered = listings.filter(l => !search || l.complex_name?.toLowerCase().includes(search) || l.city?.toLowerCase().includes(search));
-                document.getElementById('yad2Table').innerHTML = \`<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>מחיר</th><th>חדרים</th><th>עדכון</th></tr></thead><tbody>\${filtered.slice(0,50).map(l => \`<tr><td>\${l.complex_name||'N/A'}</td><td>\${l.city||'N/A'}</td><td>₪\${l.price?.toLocaleString()||'N/A'}</td><td>\${l.rooms||'N/A'}</td><td>\${l.last_updated?new Date(l.last_updated).toLocaleDateString('he-IL'):'N/A'}</td></tr>\`).join('')}</tbody></table>\`;
+                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>מחיר</th><th>חדרים</th><th>עדכון</th></tr></thead><tbody>';
+                filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.price?'₪'+l.price.toLocaleString():'N/A') + '</td><td>' + (l.rooms||'N/A') + '</td><td>' + (l.last_updated?new Date(l.last_updated).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
+                html += '</tbody></table>';
+                document.getElementById('yad2Table').innerHTML = html;
             } catch (err) { console.error('Yad2 error:', err); }
         }
 
@@ -473,7 +468,10 @@ router.get('/', async (req, res) => {
             try {
                 const listings = await (await fetch('/api/kones/listings')).json();
                 const filtered = listings.filter(l => !search || l.complex_name?.toLowerCase().includes(search) || l.city?.toLowerCase().includes(search));
-                document.getElementById('konesTable').innerHTML = \`<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>כתובת</th><th>סטטוס</th><th>תאריך</th></tr></thead><tbody>\${filtered.slice(0,50).map(l => \`<tr><td>\${l.complex_name||'N/A'}</td><td>\${l.city||'N/A'}</td><td>\${l.address||'N/A'}</td><td><span class="status-badge status-\${l.status}">\${l.status||'N/A'}</span></td><td>\${l.date?new Date(l.date).toLocaleDateString('he-IL'):'N/A'}</td></tr>\`).join('')}</tbody></table>\`;
+                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>כתובת</th><th>סטטוס</th><th>תאריך</th></tr></thead><tbody>';
+                filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.address||'N/A') + '</td><td><span class="status-badge status-' + l.status + '">' + (l.status||'N/A') + '</span></td><td>' + (l.date?new Date(l.date).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
+                html += '</tbody></table>';
+                document.getElementById('konesTable').innerHTML = html;
             } catch (err) { console.error('Kones error:', err); }
         }
 
@@ -500,44 +498,32 @@ router.get('/', async (req, res) => {
                 const today = new Date();
                 const dayNames = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
                 const dateStr = 'יום ' + dayNames[today.getDay()] + ', ' + today.toLocaleDateString('he-IL');
-                const timeStr = today.toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'});
                 const totalOpp = opp.total || 0;
                 const topOpp = (opp.opportunities || []).slice(0, 5);
                 const alerts = (alertData.alerts || []).slice(0, 5);
                 let h = '<div style="direction:rtl">';
                 h += '<div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border-radius:12px;padding:24px;margin-bottom:24px;color:white">';
                 h += '<div style="font-size:24px;font-weight:700">☀ בוקר QUANTUM</div>';
-                h += '<div style="font-size:14px;opacity:0.85;margin-top:6px">' + dateStr + ' \u2022 ' + timeStr + '</div>';
-                h += '<div style="font-size:12px;opacity:0.7;margin-top:4px">סיכום יומי \u2014 כל מה שצריך לדעת במשפט אחד</div>';
+                h += '<div style="font-size:14px;opacity:0.85;margin-top:6px">' + dateStr + '</div>';
                 h += '<div style="display:flex;gap:16px;margin-top:16px">';
                 h += '<div style="background:rgba(255,255,255,0.2);border-radius:8px;padding:12px 20px;text-align:center"><div style="font-size:28px;font-weight:bold">' + totalOpp + '</div><div style="font-size:11px;opacity:0.85">הזדמנויות</div></div>';
                 h += '<div style="background:rgba(255,255,255,0.2);border-radius:8px;padding:12px 20px;text-align:center"><div style="font-size:28px;font-weight:bold">' + alerts.length + '</div><div style="font-size:11px;opacity:0.85">התראות</div></div>';
                 h += '</div></div>';
                 if (topOpp.length > 0) {
                     h += '<div style="background:white;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,0.08)">';
-                    h += '<h3 style="color:#667eea;margin-bottom:12px;font-size:15px">\uD83C\uDFC6 הזדמנויות מובילות היום</h3>';
-                    h += '<table style="width:100%;border-collapse:collapse;font-size:13px"><tr style="background:#f8f9fa"><th style="padding:8px;text-align:right;border-bottom:2px solid #eee">מתחם</th><th style="padding:8px;text-align:right">עיר</th><th style="padding:8px;text-align:right">IAI</th><th style="padding:8px;text-align:right">סטטוס</th></tr>';
+                    h += '<h3 style="color:#667eea;margin-bottom:12px;font-size:15px">הזדמנויות מובילות היום</h3>';
+                    h += '<table style="width:100%;border-collapse:collapse;font-size:13px"><tr style="background:#f8f9fa"><th style="padding:8px;text-align:right">מתחם</th><th style="padding:8px;text-align:right">עיר</th><th style="padding:8px;text-align:right">IAI</th></tr>';
                     topOpp.forEach(function(o) {
-                        h += '<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:8px;font-weight:500">' + (o.name||'') + '</td><td style="padding:8px;color:#555">' + (o.city||'') + '</td><td style="padding:8px"><span style="background:#667eea;color:white;padding:2px 8px;border-radius:10px;font-size:11px">' + (o.iai_score||'-') + '</span></td><td style="padding:8px;color:#764ba2;font-size:12px">' + (o.status||'') + '</td></tr>';
+                        h += '<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:8px">' + (o.name||'') + '</td><td style="padding:8px">' + (o.city||'') + '</td><td style="padding:8px">' + (o.iai_score||'-') + '</td></tr>';
                     });
                     h += '</table></div>';
-                }
-                if (alerts.length > 0) {
-                    h += '<div style="background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.08)">';
-                    h += '<h3 style="color:#e63946;margin-bottom:12px;font-size:15px">\uD83D\uDD14 התראות אחרונות</h3>';
-                    alerts.forEach(function(a) {
-                        const sev = a.severity === 'high' ? '#e63946' : a.severity === 'medium' ? '#f4a261' : '#6b7280';
-                        h += '<div style="padding:10px;border-right:3px solid ' + sev + ';margin-bottom:8px;background:#fafafa;border-radius:0 6px 6px 0"><div style="font-size:13px;font-weight:500;color:#333">' + (a.title||'') + '</div><div style="font-size:11px;color:#888;margin-top:3px">' + ((a.message||'').substring(0,120)) + '</div></div>';
-                    });
-                    h += '</div>';
                 }
                 h += '</div>';
                 mc.innerHTML = h;
                 loading.style.display = 'none';
                 mc.style.display = 'block';
             } catch (err) {
-                loading.innerHTML = '<div style="color:white">❌ שגיאה בטעינת דיווח בוקר</div>';
-                console.error('Morning error:', err);
+                loading.innerHTML = '<div style="color:white">שגיאה בטעינת דיווח בוקר</div>';
             }
         }
     </script>
@@ -551,111 +537,129 @@ router.get('/', async (req, res) => {
 });
 
 // API: Get all committees
-router.get('/api/committees', (req, res) => {
-    db.all('SELECT * FROM committees ORDER BY date DESC', (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+router.get('/api/committees', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM committees ORDER BY date DESC');
         res.json(rows);
-    });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Get all complexes
-router.get('/api/complexes', (req, res) => {
-    db.all('SELECT id, name, city FROM complexes ORDER BY name', (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+router.get('/api/complexes', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT id, name, city FROM complexes ORDER BY name');
         res.json(rows);
-    });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Get complex by ID
-router.get('/api/complexes/:id', (req, res) => {
-    db.get('SELECT * FROM complexes WHERE id = ?', [req.params.id], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(row);
-    });
+router.get('/api/complexes/:id', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM complexes WHERE id = $1', [req.params.id]);
+        res.json(rows[0] || null);
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Get yad2 listings
-router.get('/api/yad2/listings', (req, res) => {
-    db.all('SELECT * FROM yad2_listings ORDER BY last_updated DESC LIMIT 100', (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+router.get('/api/yad2/listings', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM yad2_listings ORDER BY last_updated DESC LIMIT 100');
         res.json(rows);
-    });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Get kones listings
-router.get('/api/kones/listings', (req, res) => {
-    db.all('SELECT * FROM kones_listings ORDER BY date DESC LIMIT 100', (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+router.get('/api/kones/listings', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM kones_listings ORDER BY date DESC LIMIT 100');
         res.json(rows);
-    });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: WhatsApp subscription statistics
-router.get('/api/whatsapp/subscriptions/stats', (req, res) => {
-    db.all(`
-        SELECT 
-            COUNT(*) as totalSubscriptions,
-            SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) as activeSubscriptions,
-            COUNT(DISTINCT lead_id) as uniqueLeads,
-            SUM(alerts_sent) as totalAlertsSent,
-            SUM(CASE WHEN last_alert > datetime('now', '-1 day') THEN alerts_sent ELSE 0 END) as alerts24h,
-            SUM(CASE WHEN last_alert > datetime('now', '-7 days') THEN alerts_sent ELSE 0 END) as alerts7d
-        FROM whatsapp_subscriptions
-    `, (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+router.get('/api/whatsapp/subscriptions/stats', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT 
+                COUNT(*) as "totalSubscriptions",
+                SUM(CASE WHEN active = true THEN 1 ELSE 0 END) as "activeSubscriptions",
+                COUNT(DISTINCT lead_id) as "uniqueLeads",
+                COALESCE(SUM(alerts_sent), 0) as "totalAlertsSent",
+                COALESCE(SUM(CASE WHEN last_alert > NOW() - INTERVAL '1 day' THEN alerts_sent ELSE 0 END), 0) as "alerts24h",
+                COALESCE(SUM(CASE WHEN last_alert > NOW() - INTERVAL '7 days' THEN alerts_sent ELSE 0 END), 0) as "alerts7d"
+            FROM whatsapp_subscriptions
+        `);
         res.json(rows[0] || { totalSubscriptions:0, activeSubscriptions:0, uniqueLeads:0, totalAlertsSent:0, alerts24h:0, alerts7d:0 });
-    });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Get subscriptions by lead ID
-router.get('/api/whatsapp/subscriptions/:leadId', (req, res) => {
-    db.all('SELECT * FROM whatsapp_subscriptions WHERE lead_id = ? ORDER BY created_at DESC', [req.params.leadId], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+router.get('/api/whatsapp/subscriptions/:leadId', async (req, res) => {
+    try {
+        const { rows } = await pool.query(
+            'SELECT * FROM whatsapp_subscriptions WHERE lead_id = $1 ORDER BY created_at DESC',
+            [req.params.leadId]
+        );
         res.json(rows.map(row => ({ ...row, criteria: row.criteria ? JSON.parse(row.criteria) : {} })));
-    });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Test subscription criteria
-router.post('/api/whatsapp/subscriptions/test', express.json(), (req, res) => {
-    const { criteria } = req.body;
-    if (!criteria || Object.keys(criteria).length === 0) return res.status(400).json({ error: 'Criteria required' });
-    let query = 'SELECT * FROM yad2_listings WHERE 1=1';
-    const params = [];
-    if (criteria.cities && criteria.cities.length > 0) { query += ` AND city IN (${criteria.cities.map(() => '?').join(',')})`; params.push(...criteria.cities); }
-    if (criteria.rooms) { if (criteria.rooms.min !== undefined) { query += ' AND rooms >= ?'; params.push(criteria.rooms.min); } if (criteria.rooms.max !== undefined) { query += ' AND rooms <= ?'; params.push(criteria.rooms.max); } }
-    if (criteria.size) { if (criteria.size.min !== undefined) { query += ' AND size >= ?'; params.push(criteria.size.min); } if (criteria.size.max !== undefined) { query += ' AND size <= ?'; params.push(criteria.size.max); } }
-    if (criteria.price) { if (criteria.price.min !== undefined) { query += ' AND price >= ?'; params.push(criteria.price.min); } if (criteria.price.max !== undefined) { query += ' AND price <= ?'; params.push(criteria.price.max); } }
-    query += ' LIMIT 10';
-    db.all(query, params, (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
+router.post('/api/whatsapp/subscriptions/test', express.json(), async (req, res) => {
+    try {
+        const { criteria } = req.body;
+        if (!criteria || Object.keys(criteria).length === 0) return res.status(400).json({ error: 'Criteria required' });
+        let query = 'SELECT * FROM yad2_listings WHERE 1=1';
+        const params = [];
+        let idx = 1;
+        if (criteria.cities && criteria.cities.length > 0) { query += ` AND city = ANY($${idx++})`; params.push(criteria.cities); }
+        if (criteria.rooms) {
+            if (criteria.rooms.min !== undefined) { query += ` AND rooms >= $${idx++}`; params.push(criteria.rooms.min); }
+            if (criteria.rooms.max !== undefined) { query += ` AND rooms <= $${idx++}`; params.push(criteria.rooms.max); }
+        }
+        if (criteria.size) {
+            if (criteria.size.min !== undefined) { query += ` AND size >= $${idx++}`; params.push(criteria.size.min); }
+            if (criteria.size.max !== undefined) { query += ` AND size <= $${idx++}`; params.push(criteria.size.max); }
+        }
+        if (criteria.price) {
+            if (criteria.price.min !== undefined) { query += ` AND price >= $${idx++}`; params.push(criteria.price.min); }
+            if (criteria.price.max !== undefined) { query += ` AND price <= $${idx++}`; params.push(criteria.price.max); }
+        }
+        query += ' LIMIT 10';
+        const { rows } = await pool.query(query, params);
         res.json({ count: rows.length, listings: rows });
-    });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Create subscription
-router.post('/api/whatsapp/subscriptions', express.json(), (req, res) => {
-    const { leadId, criteria } = req.body;
-    if (!leadId || !criteria) return res.status(400).json({ error: 'Lead ID and criteria required' });
-    const id = `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    db.run(`INSERT INTO whatsapp_subscriptions (id, lead_id, criteria, active, created_at) VALUES (?, ?, ?, 1, datetime('now'))`,
-        [id, leadId, JSON.stringify(criteria)],
-        (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ success: true, id }); }
-    );
+router.post('/api/whatsapp/subscriptions', express.json(), async (req, res) => {
+    try {
+        const { leadId, criteria } = req.body;
+        if (!leadId || !criteria) return res.status(400).json({ error: 'Lead ID and criteria required' });
+        const id = `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await pool.query(
+            `INSERT INTO whatsapp_subscriptions (id, lead_id, criteria, active, created_at) VALUES ($1, $2, $3, true, NOW())`,
+            [id, leadId, JSON.stringify(criteria)]
+        );
+        res.json({ success: true, id });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Toggle subscription active status
-router.patch('/api/whatsapp/subscriptions/:id/toggle', express.json(), (req, res) => {
-    const { active } = req.body;
-    db.run('UPDATE whatsapp_subscriptions SET active = ? WHERE id = ?', [active ? 1 : 0, req.params.id],
-        (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ success: true }); }
-    );
+router.patch('/api/whatsapp/subscriptions/:id/toggle', express.json(), async (req, res) => {
+    try {
+        const { active } = req.body;
+        await pool.query('UPDATE whatsapp_subscriptions SET active = $1 WHERE id = $2', [active, req.params.id]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Delete subscription
-router.delete('/api/whatsapp/subscriptions/:id', (req, res) => {
-    db.run('DELETE FROM whatsapp_subscriptions WHERE id = ?', [req.params.id],
-        (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ success: true }); }
-    );
+router.delete('/api/whatsapp/subscriptions/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM whatsapp_subscriptions WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;
