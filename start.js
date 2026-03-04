@@ -1,6 +1,7 @@
 // start.js - Combined startup script with auto-fix for base64-encoded files
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 // ============================================================
 // Phase 1: Fix base64-encoded .js files (caused by bad commits)
@@ -55,9 +56,28 @@ if (totalFixed > 0) {
 }
 
 // ============================================================
+// Phase 1.5: Restore Bloomberg Terminal HTML template from gz.b64
+// ============================================================
+const templateB64Path = path.join(__dirname, 'public', 'dashboard-template.html.gz.b64');
+const templateHtmlPath = path.join(__dirname, 'public', 'dashboard-template.html');
+
+if (fs.existsSync(templateB64Path)) {
+  try {
+    const b64Content = fs.readFileSync(templateB64Path, 'utf8').trim();
+    const gzBuffer = Buffer.from(b64Content, 'base64');
+    const htmlContent = zlib.gunzipSync(gzBuffer).toString('utf8');
+    fs.mkdirSync(path.join(__dirname, 'public'), { recursive: true });
+    fs.writeFileSync(templateHtmlPath, htmlContent, 'utf8');
+    console.log(`[START] Restored dashboard template: ${htmlContent.length} bytes`);
+  } catch (err) {
+    console.log(`[START] ERROR restoring dashboard template: ${err.message}`);
+  }
+} else {
+  console.log('[START] No dashboard template gz.b64 found - skipping');
+}
+
+// ============================================================
 // Phase 2: Legacy fix-escapes - DISABLED (v4.43.0+)
-// The fix-escapes phase was corrupting valid template literal
-// escape sequences in dashboardRoutes.js. No longer needed.
 // ============================================================
 console.log('[START] fix-escapes: Skipped (legacy mode disabled)');
 
