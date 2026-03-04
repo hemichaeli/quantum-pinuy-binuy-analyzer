@@ -13,8 +13,8 @@ const pool = require('./db/pool');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.41.0';
-const BUILD = '2026-03-04-v4.41.0-weekly-discovery';
+const VERSION = '4.42.0';
+const BUILD = '2026-03-04-v4.42.0-modern-dashboard';
 
 async function runAutoMigrations() {
   try {
@@ -54,6 +54,7 @@ const routeLoadResults = [];
 
 function loadAllRoutes() {
   const routeFiles = [
+    { path: '/dashboard', file: 'routes/dashboardRoute.js' },
     { path: '/api/projects', file: 'routes/projects.js' },
     { path: '/api', file: 'routes/opportunities.js' },
     { path: '/api/scan', file: 'routes/scan.js' },
@@ -96,7 +97,7 @@ app.get('/api/debug', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ name: 'QUANTUM Pinuy Binuy Analyzer API', version: VERSION, build: BUILD, endpoints: { health: 'GET /health', debug: 'GET /api/debug' } });
+  res.redirect('/dashboard');
 });
 
 async function start() {
@@ -122,6 +123,7 @@ async function start() {
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);
     logger.info(`Routes: ${loaded.length} loaded, ${failed.length} failed`);
+    logger.info(`Dashboard available at: /dashboard`);
   });
 }
 
