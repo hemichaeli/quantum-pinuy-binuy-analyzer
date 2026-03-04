@@ -54,29 +54,11 @@ if (totalFixed > 0) {
 }
 
 // ============================================================
-// Phase 2: Legacy fix-escapes for dashboardRoutes
+// Phase 2: Legacy fix-escapes - DISABLED (v4.43.0+)
+// The fix-escapes phase was corrupting valid template literal
+// escape sequences in dashboardRoutes.js. No longer needed.
 // ============================================================
-console.log('[START] Running fix-escapes...');
-
-const dashFile = path.join(__dirname, 'src', 'routes', 'dashboardRoutes.js');
-if (fs.existsSync(dashFile)) {
-  let content = fs.readFileSync(dashFile, 'utf8');
-  const before = content.length;
-  const BS = String.fromCharCode(92);
-  const BT = String.fromCharCode(96);
-  const DL = String.fromCharCode(36);
-  content = content.split(BS + BT).join(BT);
-  content = content.split(BS + DL).join(DL);
-  content = content.split(BS + BS + 'u').join(BS + 'u');
-  if (content.length !== before) {
-    fs.writeFileSync(dashFile, content, 'utf8');
-    console.log('[START] fix-escapes: Fixed (' + before + ' -> ' + content.length + ' bytes)');
-  } else {
-    console.log('[START] fix-escapes: No issues found');
-  }
-} else {
-  console.log('[START] fix-escapes: File not found, skipping');
-}
+console.log('[START] fix-escapes: Skipped (legacy mode disabled)');
 
 // ============================================================
 // Phase 3: Start server
