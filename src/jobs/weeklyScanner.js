@@ -111,7 +111,7 @@ async function sendSkipNotification(skipInfo) {
       
       <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
       <p style="font-size: 11px; color: #9ca3af; text-align: center;">
-        QUANTUM v4.8.2 - Direct API Mode (No Perplexity)
+        QUANTUM v4.8.3 - Direct API Mode (No Perplexity)
       </p>
     </div>
   `;
@@ -317,7 +317,7 @@ async function sendScanStatusNotification(result) {
       
       <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
       <p style="font-size: 11px; color: #9ca3af; text-align: center;">
-        QUANTUM v4.8.2 - Direct API Mode (nadlan + yad2 + mavat)<br>
+        QUANTUM v4.8.3 - Direct API Mode (nadlan + yad2 + mavat)<br>
         סריקה אוטומטית יומית ב-08:00 (ראשון-חמישי, לא בחגים)
       </p>
     </div>
@@ -335,14 +335,17 @@ async function sendScanStatusNotification(result) {
 
 /**
  * Run the daily scan with DIRECT JSON APIs (no Perplexity!)
- * v4.8.2: Direct API mode - nadlan.gov.il, yad2, mavat
+ * v4.8.3: Direct API mode - nadlan.gov.il, yad2, mavat
  * 
  * STALE LOGIC: Daily scan uses staleHours=20 so it always finds work
  * (since it runs every 24h, anything >20h old is eligible)
  * Manual scans keep the default 72h (3 day) threshold
+ * 
+ * Discovery is DISABLED by default in automated scans to prevent deployment interruptions.
+ * Run manual scan with includeDiscovery: true to discover new complexes.
  */
 async function runWeeklyScan(options = {}) {
-  const { forceAll = false, includeDiscovery = true } = options;
+  const { forceAll = false, includeDiscovery = false } = options; // Changed default to false
   if (isRunning) {
     logger.warn('Scan already running, skipping');
     return null;
@@ -367,7 +370,7 @@ async function runWeeklyScan(options = {}) {
     // (daily scan runs every 24h, so 20h threshold ensures continuous coverage)
     let directApiResults = { total: 0, scanned: 0, succeeded: 0, totalNewTransactions: 0, totalNewListings: 0 };
     try {
-      logger.info('Step 1/8: Running Direct API scan (nadlan + yad2 + mavat) [staleHours=20]...');
+      logger.info('Step 1/7: Running Direct API scan (nadlan + yad2 + mavat) [staleHours=20]...');
       directApiResults = await directApi.scanAll({ staleOnly, limit: 129, staleHours: 20 });
       logger.info(`Direct API: ${directApiResults.succeeded}/${directApiResults.total} ok, ${directApiResults.totalNewTransactions} tx, ${directApiResults.totalNewListings} listings`);
       tracker.add('direct_api', 'סריקת API ישיר (nadlan + yad2 + mavat)', true, 
@@ -380,7 +383,7 @@ async function runWeeklyScan(options = {}) {
     // Step 2: Nadlan transactions (dedicated scraper)
     let nadlanResults = { totalNew: 0 };
     try {
-      logger.info('Step 2/8: Running nadlan.gov.il scan...');
+      logger.info('Step 2/7: Running nadlan.gov.il scan...');
       nadlanResults = await nadlanScraper.scanAll({ staleOnly, limit: 50 });
       tracker.add('nadlan', 'עסקאות נדל"ן (nadlan.gov.il)', true,
         `${nadlanResults.totalNew || 0} עסקאות חדשות`);
@@ -392,7 +395,7 @@ async function runWeeklyScan(options = {}) {
     // Step 3: Benchmarks
     let benchmarkResults = { calculated: 0 };
     try {
-      logger.info('Step 3/8: Calculating benchmarks...');
+      logger.info('Step 3/7: Calculating benchmarks...');
       benchmarkResults = await calculateAllBenchmarks({ limit: 50 });
       tracker.add('benchmarks', 'חישוב benchmarks', true,
         `${benchmarkResults.calculated || 0} חושבו`);
@@ -404,7 +407,7 @@ async function runWeeklyScan(options = {}) {
     // Step 4: SSI calculation
     let ssiResults = { stressed: 0, very_stressed: 0 };
     try {
-      logger.info('Step 4/8: Calculating SSI scores...');
+      logger.info('Step 4/7: Calculating SSI scores...');
       ssiResults = await calculateAllSSI();
       tracker.add('ssi', 'חישוב SSI (לחץ מוכרים)', true,
         `${ssiResults.total || ssiResults.updated || 0} דורגו, ${ssiResults.highStress || 0} לחץ גבוה`);
@@ -415,7 +418,7 @@ async function runWeeklyScan(options = {}) {
 
     // Step 5: IAI recalculation
     try {
-      logger.info('Step 5/8: Recalculating IAI scores...');
+      logger.info('Step 5/7: Recalculating IAI scores...');
       await calculateAllIAI();
       tracker.add('iai', 'חישוב IAI (אטרקטיביות)', true, 'הושלם');
     } catch (e) {
@@ -423,95 +426,12 @@ async function runWeeklyScan(options = {}) {
       tracker.add('iai', 'חישוב IAI (אטרקטיביות)', false, 'נכשל', e.message);
     }
 
-    // Step 6: Discovery
-    let discoveryResults = { citiesScanned: 0, newAdded: 0, alreadyExisted: 0 };
-    if (includeDiscovery) {
-      const discoveryService = getDiscoveryService();
-      if (discoveryService) {
-        const allCities = discoveryService.ALL_TARGET_CITIES;
-        logger.info(`Step 6/8: 🔍 Discovery scan for ALL ${allCities.length} target cities...`);
-        
-        try {
-          let totalNew = 0;
-          let totalExisted = 0;
-          let citiesScanned = 0;
-          
-          for (let i = 0; i < allCities.length; i++) {
-            const city = allCities[i];
-            logger.info(`  [${i + 1}/${allCities.length}] Discovering in ${city}...`);
-            
-            try {
-              const cityResult = await discoveryService.discoverInCity(city);
-              citiesScanned++;
-              
-              if (cityResult?.discovered_complexes) {
-                for (const complex of cityResult.discovered_complexes) {
-                  if (complex.existing_units && complex.existing_units < discoveryService.MIN_HOUSING_UNITS) {
-                    continue;
-                  }
-                  
-                  const newId = await discoveryService.addNewComplex(complex, city, 'discovery-daily');
-                  if (newId) {
-                    totalNew++;
-                    logger.info(`  ✨ NEW: ${complex.name} (${city}) - ${complex.existing_units || '?'} units`);
-                    
-                    await createAlert({
-                      complexId: newId,
-                      type: 'new_complex',
-                      severity: 'high',
-                      title: `🆕 מתחם חדש התגלה: ${complex.name} (${city})`,
-                      message: `נמצא מתחם חדש: ${complex.existing_units || '?'} יח"ד קיימות, ` +
-                        `${complex.planned_units || '?'} יח"ד מתוכננות. ` +
-                        `סטטוס: ${complex.status}. יזם: ${complex.developer || 'לא ידוע'}.`,
-                      data: {
-                        addresses: complex.addresses,
-                        source: complex.source,
-                        plan_number: complex.plan_number
-                      }
-                    });
-                  } else {
-                    totalExisted++;
-                  }
-                }
-              }
-              
-              if (i < allCities.length - 1) {
-                await new Promise(r => setTimeout(r, 3000));
-              }
-            } catch (cityErr) {
-              logger.warn(`  Discovery failed for ${city}`, { error: cityErr.message });
-            }
-          }
-          
-          discoveryResults = {
-            citiesScanned,
-            totalCities: allCities.length,
-            newAdded: totalNew,
-            alreadyExisted: totalExisted
-          };
-          
-          logger.info(`Discovery complete: ${citiesScanned}/${allCities.length} cities, ${totalNew} NEW complexes!`);
-          tracker.add('discovery', 'גילוי מתחמים חדשים', true,
-            `${citiesScanned}/${allCities.length} ערים, ${totalNew} מתחמים חדשים`);
-        } catch (e) { 
-          logger.warn('Discovery failed', { error: e.message });
-          tracker.add('discovery', 'גילוי מתחמים חדשים', false, 'נכשל', e.message);
-        }
-      } else {
-        logger.info('Step 6/8: Discovery service not available');
-        tracker.add('discovery', 'גילוי מתחמים חדשים', false, 'שירות לא זמין');
-      }
-    } else {
-      logger.info('Step 6/8: Discovery disabled');
-      tracker.add('discovery', 'גילוי מתחמים חדשים', true, 'מושבת');
-    }
-
-    // Step 7: KonesIsrael receivership data scan
+    // Step 6: KonesIsrael receivership data scan
     let konesResults = { totalListings: 0, matchedComplexes: 0, ssiUpdated: 0, errors: null };
     const konesService = getKonesIsraelService();
     if (konesService) {
       try {
-        logger.info('Step 7/8: 🏛️ Scanning KonesIsrael receivership listings...');
+        logger.info('Step 6/7: 🏛️ Scanning KonesIsrael receivership listings...');
         
         const listings = await konesService.fetchWithLogin(true);
         konesResults.totalListings = listings.length;
@@ -610,12 +530,12 @@ async function runWeeklyScan(options = {}) {
         tracker.add('kones_israel', 'כונס נכסים (KonesIsrael)', false, 'נכשל', e.message);
       }
     } else {
-      logger.info('Step 7/8: KonesIsrael service not available');
+      logger.info('Step 6/7: KonesIsrael service not available');
       tracker.add('kones_israel', 'כונס נכסים (KonesIsrael)', false, 'שירות לא זמין');
     }
 
-    // Step 8: Generate alerts
-    logger.info('Step 8/8: Generating alerts...');
+    // Step 7: Generate alerts
+    logger.info('Step 7/7: Generating alerts...');
     let alertCount = 0;
     try {
       alertCount = await generateAlerts(beforeSnapshot);
@@ -630,7 +550,6 @@ async function runWeeklyScan(options = {}) {
       `${directApiResults.totalNewTransactions} tx, ${directApiResults.totalNewListings} listings. ` +
       `Nadlan: ${nadlanResults.totalNew} tx. ` +
       `KonesIsrael: ${konesResults.totalListings} listings, ${konesResults.matchedComplexes} matches. ` +
-      `Discovery: ${discoveryResults.citiesScanned} cities, ${discoveryResults.newAdded} new. ` +
       `${alertCount} alerts. ${duration}s. Steps: ${tracker.successCount()}✅ ${tracker.failedCount()}❌`;
 
     lastRunResult = {
@@ -641,7 +560,7 @@ async function runWeeklyScan(options = {}) {
       benchmarks: { calculated: benchmarkResults.calculated || 0 },
       ssi: ssiResults,
       konesIsrael: konesResults,
-      discovery: discoveryResults,
+      discovery: { newAdded: 0, skipped: !includeDiscovery },
       alertsGenerated: alertCount,
       steps: tracker.getSteps(),
       summary
@@ -656,7 +575,7 @@ async function runWeeklyScan(options = {}) {
       [directApiResults.scanned || directApiResults.total,
         (directApiResults.totalNewTransactions || 0) + (nadlanResults.totalNew || 0),
         (directApiResults.totalNewListings || 0) + (konesResults.totalListings || 0),
-        discoveryResults.newAdded || 0,
+        0, // No discovery
         alertCount, summary, scanId]
     );
 
@@ -712,9 +631,9 @@ function startScheduler() {
     }
     
     logger.info(`Daily scan triggered: ${DAILY_CRON}`);
-    await runWeeklyScan();
+    await runWeeklyScan(); // Discovery disabled by default (includeDiscovery: false)
   }, { timezone: 'Asia/Jerusalem' });
-  logger.info(`Daily scanner scheduled: ${DAILY_CRON} (08:00 Israel time, Sun-Thu, no holidays) [DIRECT API MODE]`);
+  logger.info(`Daily scanner scheduled: ${DAILY_CRON} (08:00 Israel time, Sun-Thu, no holidays) [DIRECT API MODE - Discovery disabled for stability]`);
 }
 
 function stopScheduler() {
@@ -748,7 +667,7 @@ function getSchedulerStatus() {
     claudeConfigured: orchestrator?.isClaudeConfigured() || false,
     notificationsConfigured: notificationService.isConfigured(),
     discoveryEnabled: !!discoveryService,
-    discoverySchedule: 'Daily - ALL cities',
+    discoverySchedule: 'Manual only (disabled in automated scans for stability)',
     targetCities: discoveryService?.ALL_TARGET_CITIES?.length || 0,
     targetRegions: discoveryService?.TARGET_REGIONS ? Object.keys(discoveryService.TARGET_REGIONS) : [],
     minHousingUnits: discoveryService?.MIN_HOUSING_UNITS || 12,
