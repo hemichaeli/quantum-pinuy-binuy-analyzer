@@ -4,22 +4,22 @@ const pool = require('../db/pool');
 const fs = require('fs').promises;
 const path = require('path');
 
-// Helper: Get committees summary
+// Helper: Get committees summary (from complexes.status)
 async function getCommitteesSummary() {
     try {
         const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
-            FROM committees
+                SUM(CASE WHEN status IN ('deposited','pre_deposit','planning','declared') THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'construction' THEN 1 ELSE 0 END) as rejected
+            FROM complexes
         `);
         return rows[0] || { total: 0, approved: 0, pending: 0, rejected: 0 };
     } catch(e) { return { total: 0, approved: 0, pending: 0, rejected: 0 }; }
 }
 
-// Helper: Get enrichment stats - uses correct column names
+// Helper: Get enrichment stats
 async function getEnrichmentStats() {
     try {
         const { rows } = await pool.query(`
@@ -33,29 +33,31 @@ async function getEnrichmentStats() {
     } catch(e) { return { total: 0, enriched: 0, recent: 0 }; }
 }
 
-// Helper: Get yad2 stats
+// Helper: Get yad2 stats (from listings table)
 async function getYad2Stats() {
     try {
         const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total_listings,
-                COUNT(DISTINCT COALESCE(complex_id::text, complex_name)) as complexes_with_listings,
-                SUM(CASE WHEN updated_at > NOW() - INTERVAL '7 days' OR last_updated > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_updates
-            FROM yad2_listings
+                COUNT(DISTINCT complex_id) as complexes_with_listings,
+                SUM(CASE WHEN last_seen > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_updates
+            FROM listings
+            WHERE source = 'yad2'
         `);
         return rows[0] || { total_listings: 0, complexes_with_listings: 0, recent_updates: 0 };
     } catch(e) { return { total_listings: 0, complexes_with_listings: 0, recent_updates: 0 }; }
 }
 
-// Helper: Get kones stats
+// Helper: Get kones stats (from listings table)
 async function getKonesStats() {
     try {
         const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total_listings,
-                COUNT(DISTINCT complex_name) as unique_complexes,
-                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_listings
-            FROM kones_listings
+                COUNT(DISTINCT complex_id) as unique_complexes,
+                SUM(CASE WHEN days_on_market > 0 THEN 1 ELSE 0 END) as active_listings
+            FROM listings
+            WHERE source = 'kones'
         `);
         return rows[0] || { total_listings: 0, unique_complexes: 0, active_listings: 0 };
     } catch(e) { return { total_listings: 0, unique_complexes: 0, active_listings: 0 }; }
@@ -75,7 +77,7 @@ router.get('/', async (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QUANTUM Dashboard v4.45.0</title>
+    <title>QUANTUM Dashboard v4.46.0</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; direction: rtl; }
@@ -106,9 +108,9 @@ router.get('/', async (req, res) => {
         .data-table tr:hover { background: #f8f9ff; }
         .status-badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.85rem; font-weight: 600; }
         .status-approved { background: #d4edda; color: #155724; }
-        .status-pending { background: #fff3cd; color: #856404; }
-        .status-rejected { background: #f8d7da; color: #721c24; }
-        .status-active { background: #d1ecf1; color: #0c5460; }
+        .status-deposited, .status-pre_deposit, .status-planning, .status-declared { background: #fff3cd; color: #856404; }
+        .status-construction { background: #d1ecf1; color: #0c5460; }
+        .status-unknown { background: #e2e3e5; color: #383d41; }
         .loading { text-align: center; padding: 3rem; color: white; font-size: 1.2rem; }
         .form-group { margin-bottom: 1.5rem; }
         .form-group label { display: block; margin-bottom: 0.5rem; color: #333; font-weight: 600; }
@@ -143,13 +145,13 @@ router.get('/', async (req, res) => {
 <body>
     <div class="header">
         <h1>🏢 QUANTUM Dashboard</h1>
-        <div class="version">v4.45.0 - PostgreSQL Edition</div>
+        <div class="version">v4.46.0 - PostgreSQL Edition</div>
     </div>
 
     <div class="container">
         <div class="tabs">
             <button class="tab active" onclick="switchTab('overview')">סקירה כללית</button>
-            <button class="tab" onclick="switchTab('committees')">ועדות</button>
+            <button class="tab" onclick="switchTab('committees')">סטטוס מתחמים</button>
             <button class="tab" onclick="switchTab('enrichment')">העשרת מידע</button>
             <button class="tab" onclick="switchTab('yad2')">יד2</button>
             <button class="tab" onclick="switchTab('kones')">כינוסים</button>
@@ -170,7 +172,7 @@ router.get('/', async (req, res) => {
                     <div class="label">${Math.round((enrichment.enriched / Math.max(enrichment.total,1)) * 100)}% מסך המתחמים</div>
                 </div>
                 <div class="stat-card">
-                    <h3>ועדות מאושרות</h3>
+                    <h3>מתחמים מאושרים</h3>
                     <div class="value">${committees.approved}</div>
                     <div class="label">מתוך ${committees.total} סה"כ</div>
                 </div>
@@ -193,28 +195,28 @@ router.get('/', async (req, res) => {
 
         <div id="committees" class="tab-content">
             <div class="stats-grid">
-                <div class="stat-card"><h3>מאושר</h3><div class="value">${committees.approved}</div><div class="label">ועדות מאושרות</div></div>
-                <div class="stat-card"><h3>ממתין</h3><div class="value">${committees.pending}</div><div class="label">ועדות ממתינות</div></div>
-                <div class="stat-card"><h3>נדחה</h3><div class="value">${committees.rejected}</div><div class="label">ועדות נדחות</div></div>
-                <div class="stat-card"><h3>סה"כ</h3><div class="value">${committees.total}</div><div class="label">כל הועדות</div></div>
+                <div class="stat-card"><h3>מאושר</h3><div class="value">${committees.approved}</div><div class="label">מתחמים מאושרים</div></div>
+                <div class="stat-card"><h3>בתהליך</h3><div class="value">${committees.pending}</div><div class="label">הפקדה / תכנון / טרום</div></div>
+                <div class="stat-card"><h3>בביצוע</h3><div class="value">${committees.rejected}</div><div class="label">בשלב בנייה</div></div>
+                <div class="stat-card"><h3>סה"כ</h3><div class="value">${committees.total}</div><div class="label">כל המתחמים</div></div>
             </div>
             <div class="action-section">
-                <div class="search-box"><input type="text" id="committeeSearch" placeholder="חיפוש ועדות..." onkeyup="loadCommittees()"></div>
+                <div class="search-box"><input type="text" id="committeeSearch" placeholder="חיפוש מתחמים..." onkeyup="loadCommittees()"></div>
                 <div id="committeesTable"></div>
             </div>
         </div>
 
         <div id="enrichment" class="tab-content">
             <div class="stats-grid">
-                <div class="stat-card"><h3>מועשרים</h3><div class="value">${enrichment.enriched}</div><div class="label">מתחמים עם מידע מועשר</div></div>
+                <div class="stat-card"><h3>מועשרים</h3><div class="value">${enrichment.enriched}</div><div class="label">מתחמים עם ניקוד העשרה</div></div>
                 <div class="stat-card"><h3>עם IAI</h3><div class="value">${enrichment.recent}</div><div class="label">מתחמים עם ציון IAI</div></div>
                 <div class="stat-card"><h3>ממתינים</h3><div class="value">${enrichment.total - enrichment.enriched}</div><div class="label">מתחמים שטרם הועשרו</div></div>
                 <div class="stat-card"><h3>שיעור השלמה</h3><div class="value">${Math.round((enrichment.enriched / Math.max(enrichment.total,1)) * 100)}%</div><div class="label">מסך המתחמים</div></div>
             </div>
             <div class="action-section">
-                <h2>העשרת מידע</h2>
+                <h2>פרטי מתחם</h2>
                 <div class="form-group">
-                    <label>בחר מתחם להעשרה:</label>
+                    <label>בחר מתחם:</label>
                     <select id="complexSelect" onchange="loadComplexData()"><option value="">-- בחר מתחם --</option></select>
                 </div>
                 <div id="enrichmentData"></div>
@@ -367,8 +369,8 @@ router.get('/', async (req, res) => {
             return '<div class="ws-subscription-card ' + (sub.active ? '' : 'inactive') + '">' +
                 '<div class="ws-subscription-header"><strong>Lead ID: ' + sub.lead_id + '</strong>' +
                 '<div class="ws-subscription-controls">' +
-                '<div class="ws-toggle ' + (sub.active ? 'active' : '') + '" onclick="toggleWSSubscription(\\'' + sub.id + '\\', ' + (!sub.active) + ')"><div class="ws-toggle-handle"></div></div>' +
-                '<button class="ws-delete-btn" onclick="deleteWSSubscription(\\'' + sub.id + '\\')">מחק</button>' +
+                '<div class="ws-toggle ' + (sub.active ? 'active' : '') + '" onclick="toggleWSSubscription(\'' + sub.id + '\', ' + (!sub.active) + ')"><div class="ws-toggle-handle"></div></div>' +
+                '<button class="ws-delete-btn" onclick="deleteWSSubscription(\'' + sub.id + '\')">מחק</button>' +
                 '</div></div>' +
                 '<div class="ws-criteria-tags">' + tags.map(t => '<span class="ws-criteria-tag">' + t + '</span>').join('') + '</div>' +
                 '<div class="ws-stats"><span>התראות: ' + (sub.alerts_sent || 0) + '</span><span>אחרונה: ' + (sub.last_alert ? new Date(sub.last_alert).toLocaleDateString('he-IL') : 'אין') + '</span></div>' +
@@ -424,7 +426,7 @@ router.get('/', async (req, res) => {
             try {
                 const committees = await (await fetch('/api/dashboard/committees')).json();
                 const filtered = committees.filter(c => !search || c.complex_name?.toLowerCase().includes(search) || c.city?.toLowerCase().includes(search));
-                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>תאריך</th><th>סטטוס</th></tr></thead><tbody>';
+                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>תאריך אישור</th><th>סטטוס</th></tr></thead><tbody>';
                 filtered.forEach(c => { html += '<tr><td>' + (c.complex_name||'N/A') + '</td><td>' + (c.city||'N/A') + '</td><td>' + (c.date?new Date(c.date).toLocaleDateString('he-IL'):'N/A') + '</td><td><span class="status-badge status-' + c.status + '">' + getStatusText(c.status) + '</span></td></tr>'; });
                 html += '</tbody></table>';
                 document.getElementById('committeesTable').innerHTML = html;
@@ -445,7 +447,13 @@ router.get('/', async (req, res) => {
             if (!complexId) { document.getElementById('enrichmentData').innerHTML = ''; return; }
             try {
                 const complex = await (await fetch('/api/dashboard/complexes/' + complexId)).json();
-                document.getElementById('enrichmentData').innerHTML = '<div class="stat-card"><h3>' + complex.name + '</h3><p><strong>עיר:</strong> ' + complex.city + '</p><p><strong>דירות:</strong> ' + (complex.total_apartments||'N/A') + '</p><p><strong>חתימות:</strong> ' + (complex.signature_percent||'N/A') + '%</p><p><strong>IAI:</strong> ' + (complex.iai_score||'N/A') + '</p><p><strong>העשרה:</strong> ' + (complex.enrichment_score||'N/A') + '</p></div>';
+                document.getElementById('enrichmentData').innerHTML = '<div class="stat-card"><h3>' + complex.name + '</h3>' +
+                    '<p><strong>עיר:</strong> ' + complex.city + '</p>' +
+                    '<p><strong>דירות קיימות:</strong> ' + (complex.existing_units||'N/A') + '</p>' +
+                    '<p><strong>חתימות:</strong> ' + (complex.signature_percent||'N/A') + '%</p>' +
+                    '<p><strong>IAI:</strong> ' + (complex.iai_score||'N/A') + '</p>' +
+                    '<p><strong>ניקוד העשרה:</strong> ' + (complex.enrichment_score||'N/A') + '</p>' +
+                    '<p><strong>סטטוס:</strong> ' + getStatusText(complex.status) + '</p></div>';
             } catch (err) { console.error('Complex data error:', err); }
         }
 
@@ -454,8 +462,8 @@ router.get('/', async (req, res) => {
             try {
                 const listings = await (await fetch('/api/dashboard/yad2/listings')).json();
                 const filtered = listings.filter(l => !search || l.complex_name?.toLowerCase().includes(search) || l.city?.toLowerCase().includes(search));
-                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>מחיר</th><th>חדרים</th><th>עדכון</th></tr></thead><tbody>';
-                filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.price?'₪'+l.price.toLocaleString():'N/A') + '</td><td>' + (l.rooms||'N/A') + '</td><td>' + (l.last_updated?new Date(l.last_updated).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
+                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>מחיר</th><th>חדרים</th><th>מ"ר</th><th>נצפה</th></tr></thead><tbody>';
+                filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.asking_price?'₪'+Math.round(l.asking_price).toLocaleString():'N/A') + '</td><td>' + (l.rooms||'N/A') + '</td><td>' + (l.area_sqm||'N/A') + '</td><td>' + (l.last_seen?new Date(l.last_seen).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
                 html += '</tbody></table>';
                 document.getElementById('yad2Table').innerHTML = html;
             } catch (err) { console.error('Yad2 error:', err); }
@@ -468,8 +476,8 @@ router.get('/', async (req, res) => {
             try {
                 const listings = await (await fetch('/api/dashboard/kones/listings')).json();
                 const filtered = listings.filter(l => !search || l.complex_name?.toLowerCase().includes(search) || l.city?.toLowerCase().includes(search));
-                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>כתובת</th><th>סטטוס</th><th>תאריך</th></tr></thead><tbody>';
-                filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.address||'N/A') + '</td><td><span class="status-badge status-' + l.status + '">' + (l.status||'N/A') + '</span></td><td>' + (l.date?new Date(l.date).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
+                let html = '<table class="data-table"><thead><tr><th>מתחם</th><th>עיר</th><th>כתובת</th><th>מחיר</th><th>תאריך</th></tr></thead><tbody>';
+                filtered.slice(0,50).forEach(l => { html += '<tr><td>' + (l.complex_name||'N/A') + '</td><td>' + (l.city||'N/A') + '</td><td>' + (l.address||'N/A') + '</td><td>' + (l.asking_price?'₪'+Math.round(l.asking_price).toLocaleString():'N/A') + '</td><td>' + (l.last_seen?new Date(l.last_seen).toLocaleDateString('he-IL'):'N/A') + '</td></tr>'; });
                 html += '</tbody></table>';
                 document.getElementById('konesTable').innerHTML = html;
             } catch (err) { console.error('Kones error:', err); }
@@ -483,7 +491,8 @@ router.get('/', async (req, res) => {
         async function exportData() { window.location.href = '/api/export/all'; }
 
         function getStatusText(status) {
-            return {'approved':'מאושר','pending':'ממתין','rejected':'נדחה','active':'פעיל'}[status] || status;
+            const map = {'approved':'מאושר','deposited':'הופקדה','pre_deposit':'להפקדה','planning':'בתכנון','construction':'בביצוע','declared':'הוכרז','unknown':'לא ידוע'};
+            return map[status] || status;
         }
 
         async function loadMorning() {
@@ -536,10 +545,15 @@ router.get('/', async (req, res) => {
     }
 });
 
-// API: Get all committees
+// API: Get all complexes by status
 router.get('/committees', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT * FROM committees ORDER BY date DESC');
+        const { rows } = await pool.query(`
+            SELECT id, name as complex_name, city, status, approval_date as date, deposit_date, plan_number
+            FROM complexes
+            ORDER BY approval_date DESC NULLS LAST, updated_at DESC
+            LIMIT 200
+        `);
         res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -560,18 +574,32 @@ router.get('/complexes/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// API: Get yad2 listings
+// API: Get yad2 listings (from listings table)
 router.get('/yad2/listings', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT * FROM yad2_listings ORDER BY id DESC LIMIT 100');
+        const { rows } = await pool.query(`
+            SELECT l.*, c.name as complex_name
+            FROM listings l
+            LEFT JOIN complexes c ON c.id = l.complex_id
+            WHERE l.source = 'yad2'
+            ORDER BY l.last_seen DESC NULLS LAST
+            LIMIT 100
+        `);
         res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// API: Get kones listings
+// API: Get kones listings (from listings table)
 router.get('/kones/listings', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT * FROM kones_listings ORDER BY date DESC LIMIT 100');
+        const { rows } = await pool.query(`
+            SELECT l.*, c.name as complex_name
+            FROM listings l
+            LEFT JOIN complexes c ON c.id = l.complex_id
+            WHERE l.source = 'kones'
+            ORDER BY l.last_seen DESC NULLS LAST
+            LIMIT 100
+        `);
         res.json(rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -609,21 +637,21 @@ router.post('/whatsapp/subscriptions/test', express.json(), async (req, res) => 
     try {
         const { criteria } = req.body;
         if (!criteria || Object.keys(criteria).length === 0) return res.status(400).json({ error: 'Criteria required' });
-        let query = 'SELECT * FROM yad2_listings WHERE 1=1';
+        let query = "SELECT l.*, c.name as complex_name FROM listings l LEFT JOIN complexes c ON c.id = l.complex_id WHERE l.source = 'yad2'";
         const params = [];
         let idx = 1;
-        if (criteria.cities && criteria.cities.length > 0) { query += ` AND city = ANY($${idx++})`; params.push(criteria.cities); }
+        if (criteria.cities && criteria.cities.length > 0) { query += ` AND l.city = ANY($${idx++})`; params.push(criteria.cities); }
         if (criteria.rooms) {
-            if (criteria.rooms.min !== undefined) { query += ` AND rooms >= $${idx++}`; params.push(criteria.rooms.min); }
-            if (criteria.rooms.max !== undefined) { query += ` AND rooms <= $${idx++}`; params.push(criteria.rooms.max); }
+            if (criteria.rooms.min !== undefined) { query += ` AND l.rooms >= $${idx++}`; params.push(criteria.rooms.min); }
+            if (criteria.rooms.max !== undefined) { query += ` AND l.rooms <= $${idx++}`; params.push(criteria.rooms.max); }
         }
         if (criteria.size) {
-            if (criteria.size.min !== undefined) { query += ` AND size >= $${idx++}`; params.push(criteria.size.min); }
-            if (criteria.size.max !== undefined) { query += ` AND size <= $${idx++}`; params.push(criteria.size.max); }
+            if (criteria.size.min !== undefined) { query += ` AND l.area_sqm >= $${idx++}`; params.push(criteria.size.min); }
+            if (criteria.size.max !== undefined) { query += ` AND l.area_sqm <= $${idx++}`; params.push(criteria.size.max); }
         }
         if (criteria.price) {
-            if (criteria.price.min !== undefined) { query += ` AND price >= $${idx++}`; params.push(criteria.price.min); }
-            if (criteria.price.max !== undefined) { query += ` AND price <= $${idx++}`; params.push(criteria.price.max); }
+            if (criteria.price.min !== undefined) { query += ` AND l.asking_price >= $${idx++}`; params.push(criteria.price.min); }
+            if (criteria.price.max !== undefined) { query += ` AND l.asking_price <= $${idx++}`; params.push(criteria.price.max); }
         }
         query += ' LIMIT 10';
         const { rows } = await pool.query(query, params);
