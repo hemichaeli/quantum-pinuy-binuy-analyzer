@@ -228,9 +228,10 @@ router.post('/ai', async (req, res) => {
 
     (async () => {
       try {
+        // Pass scanId for live progress tracking
         const results = await dualScanAll({
           city: city || null, limit: limit ? parseInt(limit) : 20,
-          staleOnly: staleOnly !== false, perplexityModel
+          staleOnly: staleOnly !== false, perplexityModel, scanId
         });
         try { await calculateAllSSI(); } catch (e) { logger.warn('SSI recalc failed', { error: e.message }); }
         try { await calculateAllIAI(); } catch (e) { logger.warn('IAI recalc failed', { error: e.message }); }
