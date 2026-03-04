@@ -14,7 +14,7 @@ const pool = require('./db/pool');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const VERSION = '4.41.0';
-const BUILD = '2026-03-03-v4.41.0-whatsapp-subscriptions-ui';
+const BUILD = '2026-03-04-v4.41.0-stuck-scan-watcher';
 
 async function runAutoMigrations() {
   try {
@@ -116,6 +116,7 @@ async function start() {
   app.use((err, req, res, next) => { logger.error('Unhandled error:', err); res.status(500).json({ error: 'Internal Server Error', message: err.message, version: VERSION }); });
   
   try { const { startScheduler } = require('./jobs/weeklyScanner'); startScheduler(); } catch (e) { logger.warn('Scheduler failed to start:', e.message); }
+  try { const { startWatcher } = require('./jobs/stuckScanWatcher'); startWatcher(); } catch (e) { logger.warn('Stuck scan watcher failed to start:', e.message); }
   
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);
