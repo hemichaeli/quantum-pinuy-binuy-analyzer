@@ -14,14 +14,16 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.54.0';
-const BUILD = '2026-03-05-v4.54.0-fix-webhook-path';
+const VERSION = '4.55.0';
+const BUILD = '2026-03-05-v4.55.0-scheduling-system';
 
 // What's in this version:
-// - FIX: whatsappWebhookRoutes mounted at /api (not /api/whatsapp) so webhook lands at
-//        /api/whatsapp/webhook (not the doubled /api/whatsapp/whatsapp/webhook)
-// - DISABLED: whatsappPollingService (INFORU pull API times out)
-// - WEBHOOK MODE: INFORU pushes to /api/whatsapp/webhook -> Claude bot
+// - NEW: QUANTUM Scheduling System
+//   - WA bot engine (Hebrew/Russian) with state machine
+//   - Signing ceremony builder with multi-building/multi-station support
+//   - Campaign config with configurable timing constants
+//   - Reminder queue job (24h reminder + 48h bot followup + pre-meeting alerts)
+//   - Zoho CRM widget API endpoints
 // - All previous: dashboard redesign, phone column migration, Vapi, PostgreSQL, schedulers
 
 async function runAutoMigrations() {
@@ -40,11 +42,24 @@ async function runAutoMigrations() {
   }
 }
 
+async function runSchedulingMigrations() {
+  try {
+    const schemaFile = path.join(__dirname, 'models', 'schedulingSchema.sql');
+    if (fs.existsSync(schemaFile)) {
+      const sql = fs.readFileSync(schemaFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] Scheduling schema applied');
+    }
+  } catch (err) {
+    logger.error('[MIGRATIONS] Scheduling schema failed:', err.message);
+  }
+}
+
 app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10mb' }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, skip: (req) => req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' || req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook'), message: { error: 'Too many requests, please try again later' } });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, skip: (req) => req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' || req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') || req.path.startsWith('/api/scheduling/'), message: { error: 'Too many requests, please try again later' } });
 app.use('/api/', limiter);
 
 app.use((req, res, next) => {
@@ -81,6 +96,8 @@ function loadAllRoutes() {
     { path: '/api', file: 'routes/whatsappWebhookRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
+    // Scheduling system - WA bot, ceremonies, campaign config, Zoho widget API
+    { path: '/api/scheduling', file: 'routes/schedulingRoutes.js' },
   ];
 
   for (const { path: routePath, file } of routeFiles) {
@@ -114,6 +131,7 @@ app.get('/api/debug', async (req, res) => {
     timestamp: new Date().toISOString(),
     whatsapp_mode: 'webhook_push',
     webhook_url: 'https://pinuy-binuy-analyzer-production.up.railway.app/api/whatsapp/webhook',
+    scheduling_webhook: 'https://pinuy-binuy-analyzer-production.up.railway.app/api/scheduling/webhook',
     routes: {
       loaded: loaded.map(r => r.path + ' (' + r.file + ')'),
       failed: failed.map(r => ({ path: r.path, file: r.file, error: r.error }))
@@ -130,6 +148,7 @@ async function start() {
   logger.info(`Build: ${BUILD}`);
 
   await runAutoMigrations();
+  await runSchedulingMigrations();
   loadAllRoutes();
 
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
@@ -144,9 +163,22 @@ async function start() {
   try { const { startScheduler } = require('./jobs/weeklyScanner'); startScheduler(); } catch (e) { logger.warn('Scheduler failed to start:', e.message); }
   try { const { startWatcher } = require('./jobs/stuckScanWatcher'); startWatcher(); } catch (e) { logger.warn('Stuck scan watcher failed to start:', e.message); }
   try { const { startDiscoveryScheduler } = require('./jobs/discoveryScheduler'); startDiscoveryScheduler(); } catch (e) { logger.warn('Discovery scheduler failed to start:', e.message); }
+
+  // Reminder queue job - runs every minute
+  try {
+    const { processReminderQueue } = require('./jobs/reminderJob');
+    const cron = require('node-cron');
+    cron.schedule('* * * * *', async () => {
+      try { await processReminderQueue(); } catch (e) { logger.warn('[ReminderJob] Error:', e.message); }
+    });
+    logger.info('Reminder queue job: ACTIVE (every minute)');
+  } catch (e) { logger.warn('Reminder job failed to start:', e.message); }
+
   // whatsappPollingService disabled - INFORU pull API times out.
   // WhatsApp messages arrive via INFORU webhook push to /api/whatsapp/webhook
+  // Scheduling bot via /api/scheduling/webhook
   logger.info('WhatsApp: WEBHOOK mode active at /api/whatsapp/webhook');
+  logger.info('Scheduling bot: /api/scheduling/webhook');
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);
