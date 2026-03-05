@@ -8,6 +8,15 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Lazy-load to avoid circular deps
+function getAlertService() {
+  try {
+    return require('./whatsappAlertService');
+  } catch (e) {
+    return null;
+  }
+}
+
 // ==================== NADLAN.GOV.IL ====================
 const NADLAN_API_BASE = 'https://www.nadlan.gov.il/Nadlan.REST/Main';
 
@@ -221,6 +230,7 @@ async function scanComplex(complexId) {
   await sleep(1000);
 
   // 2. Fetch Yad2 listings
+  const alertService = getAlertService();
   try {
     const listings = await fetchYad2Listings(complex.city, primaryAddress);
     for (const listing of listings) {
@@ -235,16 +245,31 @@ async function scanComplex(complexId) {
       if (existing.rows.length === 0) {
         const pricePerSqm = listing.area_sqm > 0 
           ? Math.round(listing.asking_price / listing.area_sqm) : null;
-        await pool.query(
+        const inserted = await pool.query(
           `INSERT INTO listings 
            (complex_id, source, yad2_id, url, asking_price, area_sqm, rooms, 
             price_per_sqm, address, city, first_seen, last_seen, original_price, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_DATE, CURRENT_DATE, $5, true)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_DATE, CURRENT_DATE, $5, true)
+           RETURNING id`,
           [complexId, listing.source, listing.yad2_id, listing.url, 
            listing.asking_price, listing.area_sqm, listing.rooms,
            pricePerSqm, listing.address, complex.city]
         );
         newListings++;
+
+        // Fire WhatsApp alerts to matching subscribers (async, non-blocking)
+        if (alertService && inserted.rows[0]) {
+          const newListingObj = {
+            id: inserted.rows[0].id,
+            complex_id: complexId,
+            city: complex.city,
+            ...listing,
+            price: listing.asking_price
+          };
+          alertService.processNewListing(newListingObj).catch(e =>
+            logger.warn('[WhatsAppAlert] processNewListing failed:', e.message)
+          );
+        }
       } else {
         // Update existing - mark as still active
         await pool.query(
