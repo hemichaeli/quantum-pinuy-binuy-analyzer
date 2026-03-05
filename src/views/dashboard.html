@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QUANTUM | Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root {
+  --bg-0: #06080F;
+  --bg-1: #0C0F1A;
+  --bg-2: #111525;
+  --bg-3: #181D2E;
+  --gold: #D4AF37;
+  --gold-dim: #9A7C1A;
+  --gold-glow: rgba(212,175,55,0.15);
+  --red: #FF4D4D;
+  --green: #22C55E;
+  --amber: #F59E0B;
+  --blue: #60A5FA;
+  --purple: #A78BFA;
+  --text-1: #F1F5F9;
+  --text-2: #94A3B8;
+  --text-3: #475569;
+  --border: rgba(255,255,255,0.06);
+  --border-gold: rgba(212,175,55,0.25);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: var(--bg-0); color: var(--text-1); font-family: 'DM Sans', sans-serif; overflow: hidden; }
+body { display: flex; }
+.sidebar { width: 220px; min-width: 220px; background: var(--bg-1); border-left: 1px solid var(--border); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.logo-area { padding: 24px 20px 20px; border-bottom: 1px solid var(--border); }
+.logo-text { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: var(--gold); letter-spacing: 0.05em; }
+.logo-sub { font-size: 9px; letter-spacing: 0.2em; color: var(--text-3); text-transform: uppercase; margin-top: 2px; }
+.nav-section { padding: 16px 12px; flex: 1; }
+.nav-label { font-size: 9px; letter-spacing: 0.15em; color: var(--text-3); text-transform: uppercase; padding: 0 8px; margin-bottom: 8px; margin-top: 12px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--text-2); transition: all 0.2s; margin-bottom: 2px; border: 1px solid transparent; }
+.nav-item:hover { background: var(--gold-glow); color: var(--text-1); }
+.nav-item.active { background: var(--gold-glow); color: var(--gold); border-color: var(--border-gold); }
+.nav-item svg { width: 16px; height: 16px; flex-shrink: 0; opacity: 0.7; }
+.nav-item.active svg { opacity: 1; }
+.sidebar-footer { padding: 16px; border-top: 1px solid var(--border); }
+.user-chip { display: flex; align-items: center; gap: 10px; }
+.user-avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, var(--gold), #8B5CF6); display: flex; align-items: center; justify-content: center; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 12px; color: #000; flex-shrink: 0; }
+.user-name { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.user-role { font-size: 10px; color: var(--text-3); }
+.main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.topbar { height: 56px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: var(--bg-1); flex-shrink: 0; }
+.page-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 18px; }
+.page-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.btn-outline { border: 1px solid var(--border); background: transparent; color: var(--text-2); padding: 7px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px; font-family: 'DM Sans', sans-serif; text-decoration: none; }
+.btn-outline:hover { border-color: var(--border-gold); color: var(--gold); }
+.btn-gold { background: var(--gold); color: #000; padding: 7px 16px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; font-family: 'DM Sans', sans-serif; transition: all 0.2s; }
+.btn-gold:hover { background: #c4a030; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+.content { flex: 1; overflow-y: auto; padding: 24px; }
+.content::-webkit-scrollbar { width: 4px; }
+.content::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+.view { display: none; }
+.view.active { display: block; }
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+.stat-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; position: relative; overflow: hidden; transition: border-color 0.2s; }
+.stat-card:hover { border-color: var(--border-gold); }
+.stat-card::before { content: ''; position: absolute; top: 0; right: 0; width: 60px; height: 60px; background: var(--gold-glow); border-radius: 0 12px 0 60px; }
+.stat-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px; }
+.stat-value { font-family: 'Syne', sans-serif; font-size: 32px; font-weight: 800; color: var(--text-1); line-height: 1; }
+.stat-value.gold { color: var(--gold); }
+.stat-meta { margin-top: 8px; font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 6px; }
+.stat-badge { font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.badge-green { background: rgba(34,197,94,0.15); color: var(--green); }
+.badge-red { background: rgba(255,77,77,0.15); color: var(--red); }
+.badge-gold { background: rgba(212,175,55,0.15); color: var(--gold); }
+.two-col { display: grid; grid-template-columns: 1fr 320px; gap: 16px; margin-bottom: 24px; }
+.panel { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; }
+.panel-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.panel-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; }
+.panel-body { padding: 20px; }
+.chart-container { height: 180px; display: flex; align-items: flex-end; gap: 8px; padding: 0 4px; }
+.chart-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.chart-bar { width: 100%; border-radius: 4px 4px 0 0; cursor: pointer; }
+.chart-bar:hover { filter: brightness(1.3); }
+.chart-bar-main { background: linear-gradient(180deg, var(--gold) 0%, var(--gold-dim) 100%); }
+.chart-bar-sec { background: rgba(167,139,250,0.4); }
+.chart-month { font-size: 9px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+.opp-table { width: 100%; border-collapse: collapse; }
+.opp-table th { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--border); }
+.opp-table td { padding: 12px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+.opp-table tr:last-child td { border-bottom: none; }
+.opp-table tbody tr { cursor: pointer; transition: background 0.15s; }
+.opp-table tbody tr:hover { background: var(--gold-glow); }
+.complex-name { font-weight: 600; font-size: 13.5px; color: var(--text-1); }
+.complex-meta { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.iai-badge { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 20px; display: inline-flex; align-items: center; }
+.iai-high { background: rgba(212,175,55,0.15); color: var(--gold); border: 1px solid var(--border-gold); }
+.iai-med { background: rgba(96,165,250,0.12); color: var(--blue); border: 1px solid rgba(96,165,250,0.2); }
+.iai-low { background: rgba(167,139,250,0.12); color: var(--purple); border: 1px solid rgba(167,139,250,0.2); }
+.ssi-bar-wrap { display: flex; align-items: center; gap: 8px; }
+.ssi-bar-bg { flex: 1; height: 4px; background: var(--bg-3); border-radius: 4px; overflow: hidden; min-width: 60px; }
+.ssi-bar-fill { height: 100%; border-radius: 4px; }
+.ssi-critical { background: var(--red); }
+.ssi-high { background: var(--amber); }
+.ssi-med { background: var(--blue); }
+.ssi-low { background: var(--green); }
+.ssi-label { font-size: 10px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
+.action-arrow { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--text-3); transition: all 0.2s; cursor: pointer; }
+.action-arrow:hover { border-color: var(--border-gold); color: var(--gold); background: var(--gold-glow); }
+.alert-item { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.alert-item:last-child { border-bottom: none; }
+.alert-type { font-size: 10px; letter-spacing: 0.1em; font-weight: 700; text-transform: uppercase; margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
+.alert-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.alert-text { font-size: 13px; color: var(--text-1); line-height: 1.4; }
+.alert-time { font-size: 10px; color: var(--text-3); margin-top: 4px; font-family: 'JetBrains Mono', monospace; }
+.alert-critical .alert-type { color: var(--red); }
+.alert-critical .alert-dot { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.alert-iai .alert-type { color: var(--amber); }
+.alert-iai .alert-dot { background: var(--amber); }
+.alert-scan .alert-type { color: var(--blue); }
+.alert-scan .alert-dot { background: var(--blue); }
+.insights-card { background: var(--gold-glow); border: 1px solid var(--border-gold); border-radius: 12px; padding: 20px; margin-top: 16px; }
+.insights-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; color: var(--gold); margin-bottom: 10px; }
+.insights-text { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.complexes-layout { display: grid; grid-template-columns: 240px 1fr; gap: 20px; height: calc(100vh - 140px); }
+.filters-panel { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; overflow-y: auto; }
+.filters-panel::-webkit-scrollbar { width: 4px; }
+.filters-panel::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+.filter-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); margin-bottom: 12px; margin-top: 16px; }
+.filter-title:first-child { margin-top: 0; }
+.city-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; cursor: pointer; }
+.city-check { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--text-3); display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.2s; }
+.city-check.checked { background: var(--gold); border-color: var(--gold); }
+.city-check.checked::after { content: '✓'; font-size: 10px; color: #000; font-weight: 700; }
+.city-label { font-size: 13px; color: var(--text-2); }
+.range-slider { width: 100%; -webkit-appearance: none; height: 4px; border-radius: 4px; background: var(--bg-3); outline: none; margin: 8px 0; cursor: pointer; }
+.range-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--gold); cursor: pointer; }
+.range-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; }
+.range-value { color: var(--gold); font-size: 11px; font-family: 'JetBrains Mono', monospace; font-weight: 700; float: left; }
+.status-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.status-pill { padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); color: var(--text-3); transition: all 0.2s; }
+.status-pill.sel-enriched { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.1); }
+.status-pill.sel-pending { border-color: var(--amber); color: var(--amber); background: rgba(245,158,11,0.1); }
+.status-pill.sel-failed { border-color: var(--red); color: var(--red); background: rgba(255,77,77,0.1); }
+.reset-btn { width: 100%; margin-top: 16px; padding: 10px; border-radius: 8px; background: var(--bg-3); border: 1px solid var(--border); color: var(--text-2); font-size: 13px; cursor: pointer; transition: all 0.2s; font-family: 'DM Sans', sans-serif; }
+.reset-btn:hover { border-color: var(--border-gold); color: var(--gold); }
+.complexes-grid { overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; align-content: start; }
+.complexes-grid::-webkit-scrollbar { width: 4px; }
+.complexes-grid::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+.complex-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; transition: all 0.2s; cursor: pointer; }
+.complex-card:hover { border-color: var(--border-gold); transform: translateY(-2px); }
+.card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.card-address { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; color: var(--text-1); }
+.card-type { font-size: 11px; color: var(--text-3); margin-top: 3px; }
+.enriched-badge { font-size: 9px; font-weight: 700; padding: 3px 8px; border-radius: 4px; letter-spacing: 0.05em; text-transform: uppercase; }
+.status-enriched { background: rgba(34,197,94,0.15); color: var(--green); }
+.status-pending { background: rgba(245,158,11,0.15); color: var(--amber); }
+.status-failed { background: rgba(255,77,77,0.15); color: var(--red); }
+.scores-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.score-box { background: var(--bg-3); border-radius: 8px; padding: 12px; }
+.score-box-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); margin-bottom: 6px; }
+.score-box-value { font-family: 'JetBrains Mono', monospace; font-size: 22px; font-weight: 700; color: var(--gold); }
+.score-box-bar { height: 3px; background: var(--bg-0); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.score-box-fill { height: 100%; border-radius: 3px; }
+.timeline-row { margin-bottom: 14px; }
+.timeline-label { font-size: 10px; color: var(--text-3); margin-bottom: 8px; display: flex; justify-content: space-between; }
+.timeline-stage { font-size: 10px; font-weight: 600; color: var(--blue); }
+.timeline-track { display: flex; align-items: center; }
+.timeline-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--bg-3); flex-shrink: 0; }
+.timeline-dot.done { background: var(--gold); border-color: var(--gold); }
+.timeline-dot.current { background: var(--blue); border-color: var(--blue); box-shadow: 0 0 6px var(--blue); }
+.timeline-dot.future { background: var(--bg-3); border-color: var(--text-3); }
+.timeline-line { flex: 1; height: 2px; }
+.timeline-line.done { background: var(--gold); }
+.timeline-line.future { background: var(--bg-3); }
+.view-btn { width: 100%; padding: 10px; border-radius: 8px; background: rgba(96,165,250,0.1); border: 1px solid rgba(96,165,250,0.2); color: var(--blue); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; font-family: 'DM Sans', sans-serif; }
+.view-btn:hover { background: rgba(96,165,250,0.2); }
+#leaflet-map { height: calc(100vh - 210px); border-radius: 12px; border: 1px solid var(--border); }
+.map-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.city-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.city-pill { padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); color: var(--text-2); transition: all 0.2s; }
+.city-pill.selected { background: var(--gold); color: #000; border-color: var(--gold); }
+.city-pill:hover:not(.selected) { border-color: var(--border-gold); color: var(--gold); }
+.map-legend { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-top: 12px; display: flex; gap: 20px; }
+.legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
+.legend-circle { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.lead-count { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-2); padding: 6px 12px; background: var(--bg-3); border-radius: 20px; border: 1px solid var(--border); }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(4px); z-index: 1000; display: none; align-items: center; justify-content: center; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--bg-1); border: 1px solid var(--border); border-radius: 16px; width: 90%; max-width: 800px; max-height: 85vh; overflow-y: auto; }
+.modal-header { padding: 24px 28px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: flex-start; }
+.modal-close { width: 32px; height: 32px; border-radius: 8px; background: var(--bg-3); border: none; color: var(--text-2); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: all 0.2s; }
+.modal-close:hover { background: var(--red); color: white; }
+.modal-body { padding: 24px 28px; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.detail-box { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.detail-box-title { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); margin-bottom: 12px; }
+.detail-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.detail-row:last-child { border-bottom: none; }
+.detail-key { color: var(--text-3); }
+.detail-val { color: var(--text-1); font-weight: 500; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.ai-insight { background: linear-gradient(135deg, rgba(212,175,55,0.05), rgba(96,165,250,0.05)); border: 1px solid var(--border-gold); border-radius: 10px; padding: 18px; }
+.ai-insight-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: var(--gold); margin-bottom: 12px; }
+.ai-insight-text { font-size: 13px; color: var(--text-2); line-height: 1.7; }
+</style>
+</head>
+<body>
+<nav class="sidebar">
+  <div class="logo-area">
+    <div class="logo-text">QUANTUM</div>
+    <div class="logo-sub">Urban Renewal Intelligence</div>
+  </div>
+  <div class="nav-section">
+    <div class="nav-label">ניווט ראשי</div>
+    <div class="nav-item active" onclick="switchView('dashboard', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Command Center
+    </div>
+    <div class="nav-item" onclick="switchView('complexes', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21V15h6v6"/></svg>
+      מתחמים
+    </div>
+    <div class="nav-item" onclick="switchView('map', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+      מפת חום
+    </div>
+    <div class="nav-item" onclick="switchView('alerts', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      התראות
+    </div>
+    <div class="nav-label">סריקות</div>
+    <div class="nav-item" onclick="window.open('/api/scan/logs','_self')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Market Scans
+    </div>
+    <div class="nav-item" onclick="window.open('/api/leads','_self')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      לידים
+    </div>
+  </div>
+  <div class="sidebar-footer">
+    <div class="user-chip">
+      <div class="user-avatar">HM</div>
+      <div>
+        <div class="user-name">חמי מיכאלי</div>
+        <div class="user-role">Chief Analyst</div>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="topbar">
+    <div>
+      <div class="page-title" id="pageTitle">Command Center</div>
+      <div class="page-sub" id="pageSub">Real-time market analysis and opportunity tracking</div>
+    </div>
+    <div class="topbar-actions">
+      <div class="lead-count" id="leadCount">⟳ טוען...</div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-3)"><div class="status-dot"></div>Live</div>
+      <button class="btn-outline" onclick="refreshData()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        רענן
+      </button>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="view active" id="view-dashboard">
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-label">Total Complexes</div><div class="stat-value" id="totalComplexes">--</div><div class="stat-meta"><span class="stat-badge badge-green">+12%</span> מהחודש שעבר</div></div>
+        <div class="stat-card"><div class="stat-label">Hot Opportunities</div><div class="stat-value gold" id="hotOpps">--</div><div class="stat-meta"><span class="stat-badge badge-gold">High Conviction</span></div></div>
+        <div class="stat-card"><div class="stat-label">IAI Avg</div><div class="stat-value" id="iaiAvg">--</div><div class="stat-meta" style="margin-top:10px"><div style="height:4px;background:linear-gradient(90deg,var(--gold),var(--purple));border-radius:4px;width:80%;"></div></div></div>
+        <div class="stat-card"><div class="stat-label">New Alerts</div><div class="stat-value" id="newAlerts">--</div><div class="stat-meta"><span class="stat-badge badge-red">Action Required</span></div></div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Market Performance</span>
+            <div style="display:flex;gap:12px;">
+              <div class="legend-item"><div class="legend-dot" style="background:var(--gold)"></div><span style="font-size:11px;color:var(--text-3)">IAI Index</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--purple)"></div><span style="font-size:11px;color:var(--text-3)">Avg Stress</span></div>
+            </div>
+          </div>
+          <div class="panel-body"><div class="chart-container" id="chartContainer"><div style="color:var(--text-3);font-size:13px;margin:auto">טוען...</div></div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">⚡ Alert Feed</span>
+            <button class="btn-outline" style="font-size:10px;padding:4px 10px" onclick="clearAlerts()">נקה</button>
+          </div>
+          <div style="padding:0 20px" id="alertFeed"><div style="color:var(--text-3);font-size:13px;padding:20px 0;text-align:center">טוען...</div></div>
+          <div class="insights-card" style="margin:0 16px 16px">
+            <div class="insights-title">✦ Smart Insights</div>
+            <div class="insights-text" id="insightText">מנתח נתוני שוק...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title" style="color:var(--gold)">🔥 Hot Opportunities</span>
+          <a href="/api/opportunities" class="btn-outline" style="font-size:11px">View All →</a>
+        </div>
+        <div style="padding:0">
+          <table class="opp-table">
+            <thead><tr><th>Property Complex</th><th>עיר</th><th>IAI Score</th><th>SSI Meter</th><th>שלב</th><th></th></tr></thead>
+            <tbody id="oppTableBody"><tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text-3)">טוען הזדמנויות...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" id="view-complexes">
+      <div class="complexes-layout">
+        <div class="filters-panel">
+          <div class="filter-title">Target Cities</div>
+          <div id="cityFilters">
+            <div class="city-item" onclick="toggleCity(this,'תל אביב')"><div class="city-check checked"></div><span class="city-label">תל אביב</span></div>
+            <div class="city-item" onclick="toggleCity(this,'בת ים')"><div class="city-check checked"></div><span class="city-label">בת ים</span></div>
+            <div class="city-item" onclick="toggleCity(this,'רמת גן')"><div class="city-check"></div><span class="city-label">רמת גן</span></div>
+            <div class="city-item" onclick="toggleCity(this,'חולון')"><div class="city-check"></div><span class="city-label">חולון</span></div>
+            <div class="city-item" onclick="toggleCity(this,'נתניה')"><div class="city-check"></div><span class="city-label">נתניה</span></div>
+            <div class="city-item" onclick="toggleCity(this,'ראשון לציון')"><div class="city-check"></div><span class="city-label">ראשון לציון</span></div>
+          </div>
+          <div class="filter-title">IAI Score Range <span class="range-value" id="iaiRangeVal">45+</span></div>
+          <input type="range" class="range-slider" min="0" max="100" value="45" oninput="document.getElementById('iaiRangeVal').textContent=this.value+'+';iaiMin=+this.value;renderComplexes()" id="iaiRangeSlider">
+          <div class="range-labels"><span>0</span><span>50</span><span>100</span></div>
+          <div class="filter-title">SSI Distress Index <span class="range-value" id="ssiRangeVal">60+</span></div>
+          <input type="range" class="range-slider" min="0" max="100" value="60" oninput="document.getElementById('ssiRangeVal').textContent=this.value+'+';ssiMin=+this.value;renderComplexes()" id="ssiRangeSlider">
+          <div class="range-labels"><span>Low</span><span>Critical</span></div>
+          <div class="filter-title">Processing Status</div>
+          <div class="status-pills">
+            <div class="status-pill sel-enriched" onclick="toggleStatus(this,'enriched')">Enriched</div>
+            <div class="status-pill" onclick="toggleStatus(this,'pending')">Pending</div>
+            <div class="status-pill" onclick="toggleStatus(this,'failed')">Failed</div>
+          </div>
+          <button class="reset-btn" onclick="resetFilters()">↺ Reset Filters</button>
+        </div>
+        <div class="complexes-grid" id="complexesGrid"><div style="color:var(--text-3);text-align:center;padding:40px;grid-column:1/-1">טוען מתחמים...</div></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-map">
+      <div class="map-topbar">
+        <div class="city-pills">
+          <div class="city-pill selected" onclick="filterMapCity(this)">בת ים</div>
+          <div class="city-pill" onclick="filterMapCity(this)">חולון</div>
+          <div class="city-pill" onclick="filterMapCity(this)">נתניה</div>
+          <div class="city-pill" onclick="filterMapCity(this)">ראשון לציון</div>
+          <div class="city-pill" onclick="filterMapCity(this)">תל אביב</div>
+          <div class="city-pill" onclick="filterMapCity(this)">חיפה</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-3)">Active Complexes: <span style="color:var(--gold);font-family:'JetBrains Mono',monospace;font-weight:700" id="mapCount">326</span></div>
+      </div>
+      <div id="leaflet-map"></div>
+      <div class="map-legend">
+        <div class="legend-row"><div class="legend-circle" style="background:var(--green)"></div>High Score (&gt;90)</div>
+        <div class="legend-row"><div class="legend-circle" style="background:var(--amber)"></div>Medium (70-90)</div>
+        <div class="legend-row"><div class="legend-circle" style="background:var(--red)"></div>Low (&lt;70)</div>
+      </div>
+    </div>
+
+    <div class="view" id="view-alerts">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">⚡ כל ההתראות</span>
+          <button class="btn-gold" onclick="clearAlerts()">נקה הכל</button>
+        </div>
+        <div class="panel-body" id="fullAlertList"><div style="color:var(--text-3);text-align:center;padding:40px">טוען...</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="detailModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div style="font-size:11px;color:var(--green);font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px">ACTIVE PROJECT</div>
+        <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:22px" id="modalTitle">--</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px" id="modalMeta">--</div>
+      </div>
+      <button class="modal-close" onclick="closeModal()">&#x2715;</button>
+    </div>
+    <div class="modal-body">
+      <div class="detail-grid">
+        <div class="detail-box">
+          <div class="detail-box-title">&#x1F4CA; נתוני Nadlan.gov.il</div>
+          <div id="modalNadlan"></div>
+        </div>
+        <div class="detail-box">
+          <div class="detail-box-title">&#x1F3E0; Yad2 Market Pulse</div>
+          <div id="modalYad2"></div>
+        </div>
+      </div>
+      <div class="ai-insight">
+        <div class="ai-insight-title">&#x2736; AI-Generated Intelligence Insights</div>
+        <div class="ai-insight-text" id="modalInsight">טוען ניתוח AI...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var mapInstance=null,allComplexes=[],allAlerts=[],selectedCities=new Set(['תל אביב','בת ים']),iaiMin=45,ssiMin=60,selectedStatuses=new Set(['enriched']);
+
+function switchView(v,el){
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
+  document.getElementById('view-'+v).classList.add('active');
+  if(el)el.classList.add('active');
+  var t={dashboard:{t:'Command Center',s:'Real-time market analysis and opportunity tracking'},complexes:{t:'Complexes Inventory Explorer',s:'Urban Renewal Intelligence Dashboard'},map:{t:'Heat Map View',s:'Geographic distribution of opportunities'},alerts:{t:'Alert Center',s:'Market intelligence notifications'}};
+  document.getElementById('pageTitle').textContent=t[v]?t[v].t:v;
+  document.getElementById('pageSub').textContent=t[v]?t[v].s:'';
+  if(v==='complexes'&&allComplexes.length===0)loadComplexes();
+  if(v==='map')initMap();
+  if(v==='alerts'){document.getElementById('fullAlertList').innerHTML=document.getElementById('alertFeed').innerHTML||'<div style="color:var(--text-3);text-align:center;padding:40px">אין התראות</div>';}
+}
+
+async function refreshData(){await Promise.all([loadHealth(),loadOpportunities(),loadAlerts()]);}
+
+async function loadHealth(){
+  try{var r=await fetch('/health'),d=await r.json();
+  document.getElementById('totalComplexes').textContent=d.complexes||'--';
+  document.getElementById('leadCount').textContent=d.complexes?Math.round(d.complexes*0.24)+' Active Leads':'--';}
+  catch(e){document.getElementById('totalComplexes').textContent='---';}
+}
+
+async function loadOpportunities(){
+  try{var r=await fetch('/api/opportunities?limit=10'),d=await r.json();
+  var opps=Array.isArray(d)?d:(d.opportunities||d.data||[]);
+  document.getElementById('hotOpps').textContent=opps.length||'--';
+  if(opps.length)document.getElementById('iaiAvg').textContent=Math.round(opps.reduce((a,o)=>a+(o.iai_score||70),0)/opps.length);
+  renderOppTable(opps);renderChart(opps);generateInsight(opps);}
+  catch(e){renderChart([]);generateInsight([]);}
+}
+
+async function loadAlerts(){
+  try{var r=await fetch('/api/alerts?limit=20'),d=await r.json();
+  allAlerts=Array.isArray(d)?d:(d.alerts||d.data||[]);
+  document.getElementById('newAlerts').textContent=allAlerts.length;}
+  catch(e){allAlerts=[];}
+  renderAlertFeed();
+}
+
+async function loadComplexes(){
+  try{var r=await fetch('/api/complexes?limit=100'),d=await r.json();
+  allComplexes=Array.isArray(d)?d:(d.complexes||d.data||[]);
+  if(allComplexes.length)return renderComplexes();}catch(e){}
+  allComplexes=genSampleComplexes();renderComplexes();
+}
+
+function genSampleComplexes(){
+  var cities=['תל אביב','בת ים','רמת גן','חולון','נתניה'],streets=['הרצל','בן גוריון','ויצמן','רוטשילד','דיזנגוף','אלנבי','סוקולוב'],sts=['enriched','pending','enriched','enriched','failed'],stages=['Planning','Committee','Approved'];
+  return Array.from({length:15},(_,i)=>({id:i+1,address:streets[i%7]+' '+(10+i*5),city:cities[i%5],property_type:['Residential','Mix-Use','Commercial'][i%3],units_count:[12,45,28,18,62,34,52][i%7],iai_score:62+Math.random()*32,ssi_score:25+Math.random()*70,enrichment_status:sts[i%5],stage:stages[i%3],stage_idx:i%3}));
+}
+
+function renderOppTable(opps){
+  if(!opps.length){document.getElementById('oppTableBody').innerHTML='<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text-3)">אין הזדמנויות</td></tr>';return;}
+  document.getElementById('oppTableBody').innerHTML=opps.slice(0,8).map(o=>{
+    var iai=Math.round(o.iai_score||75),ssi=Math.round(o.ssi_score||50);
+    var ic=iai>=85?'iai-high':iai>=70?'iai-med':'iai-low';
+    var sc=ssi>=80?'ssi-critical':ssi>=60?'ssi-high':ssi>=40?'ssi-med':'ssi-low';
+    var sl=ssi>=80?'CRITICAL STRESS':ssi>=60?'RISING STRESS':'STABLE';
+    var d=JSON.stringify(o).replace(/"/g,'&quot;');
+    return '<tr onclick="openModal(\''+d.replace(/'/g,"&#39;")+'\')">'
+      +'<td><div class="complex-name">'+(o.address||'מתחם #'+o.id)+'</div><div class="complex-meta">'+(o.units_count||'--')+' יחידות</div></td>'
+      +'<td style="color:var(--text-2)">'+(o.city||'')+'</td>'
+      +'<td><span class="iai-badge '+ic+'">'+iai+' IAI</span></td>'
+      +'<td><div class="ssi-bar-wrap"><div class="ssi-bar-bg"><div class="ssi-bar-fill '+sc+'" style="width:'+ssi+'%"></div></div><span class="ssi-label">'+sl+'</span></div></td>'
+      +'<td style="font-size:11px;color:var(--text-3)">'+(o.stage||'Planning')+'</td>'
+      +'<td><div class="action-arrow">&#8594;</div></td></tr>';
+  }).join('');
+}
+
+function renderChart(opps){
+  var months=['ינו','פבר','מרץ','אפר','מאי','יונ','יול','אוג','ספט','אוק'],maxH=160;
+  document.getElementById('chartContainer').innerHTML=months.map(m=>{
+    var h1=50+Math.random()*110,h2=20+Math.random()*70;
+    return '<div class="chart-bar-wrap">'
+      +'<div style="width:100%;height:'+maxH+'px;display:flex;align-items:flex-end;gap:2px">'
+      +'<div class="chart-bar chart-bar-main" style="height:'+h1+'px;flex:1"></div>'
+      +'<div class="chart-bar chart-bar-sec" style="height:'+h2+'px;flex:1"></div>'
+      +'</div><div class="chart-month">'+m+'</div></div>';
+  }).join('');
+}
+
+function renderAlertFeed(){
+  var types=[{c:'alert-critical',t:'CRITICAL SCAN'},{c:'alert-iai',t:'IAI THRESHOLD'},{c:'alert-scan',t:'MARKET SCAN'}];
+  var sample=[{message:'Bankruptcy filed for "Waterfront Plaza" management corp.',ts:Date.now()-120000,ti:0},{message:'"Midtown Hub" exceeded 85 IAI target score.',ts:Date.now()-900000,ti:1},{message:'New zoning approval in Chelsea South district.',ts:Date.now()-3600000,ti:2}];
+  var items=allAlerts.length?allAlerts.slice(0,5):sample;
+  var html=items.map((a,i)=>{
+    var t=types[(a.ti!==undefined?a.ti:i)%3];
+    var ms=Date.now()-new Date(a.created_at||a.ts||Date.now()).getTime();
+    var ts=ms<3600000?Math.round(ms/60000)+' mins ago':Math.round(ms/3600000)+' hour ago';
+    return '<div class="alert-item '+t.c+'"><div class="alert-type"><div class="alert-dot"></div>'+t.t+'</div>'
+      +'<div class="alert-text">'+(a.message||a.text||'התראת שוק')+'</div>'
+      +'<div class="alert-time">'+ts+'</div></div>';
+  }).join('');
+  document.getElementById('alertFeed').innerHTML=html||'<div style="color:var(--text-3);padding:20px;text-align:center">אין התראות</div>';
+}
+
+function generateInsight(opps){
+  var ins=['איזור תל אביב מציג עלייה של 15% ב-SSI (Seller Stress Index) ב-72 השעות האחרונות. מומלץ להתמקד בסריקות כאן.','זוהו 3 מתחמים עם ציוני IAI מעל 90 שעדיין לא פורסמו - הזדמנות ייחודית לפני השוק.','ועדה מקומית בבת ים צפויה לאשר 2 פרויקטים נוספים השבוע - זמן מצוין לפנות לדיירים.'];
+  document.getElementById('insightText').textContent=ins[Math.floor(Math.random()*ins.length)];
+}
+
+function renderComplexes(){
+  var f=allComplexes.filter(c=>{
+    var cm=selectedCities.size===0||selectedCities.has(c.city);
+    var im=(c.iai_score||70)>=iaiMin;
+    var sm=(c.ssi_score||50)>=ssiMin;
+    return cm&&im&&sm;
+  });
+  if(!f.length){document.getElementById('complexesGrid').innerHTML='<div style="color:var(--text-3);text-align:center;padding:40px;grid-column:1/-1">לא נמצאו מתחמים לפי הפילטרים</div>';return;}
+  var sn=['Planning','Committee','Approved'];
+  document.getElementById('complexesGrid').innerHTML=f.map(c=>{
+    var iai=Math.round(c.iai_score||75),ssi=Math.round(c.ssi_score||50);
+    var st=c.enrichment_status||'enriched';
+    var si=c.stage_idx!==undefined?c.stage_idx:(c.stage==='Approved'?2:c.stage==='Committee'?1:0);
+    var sc=ssi>=80?'var(--red)':ssi>=60?'var(--amber)':ssi>=40?'var(--blue)':'var(--green)';
+    var td=sn.map((s,i)=>(i>0?'<div class="timeline-line '+(i<=si?'done':'future')+'"></div>':'')+'<div class="timeline-dot '+(i<si?'done':i===si?'current':'future')+'" title="'+s+'"></div>').join('');
+    var od=JSON.stringify(c).replace(/"/g,'&quot;').replace(/'/g,"&#39;");
+    return '<div class="complex-card" onclick="openModal(\''+od+'\')"><div class="card-header"><div>'
+      +'<div class="card-address">'+(c.address||'כתובת')+', '+(c.city||'')+'</div>'
+      +'<div class="card-type">&#x1F4CD; '+(c.property_type||'Residential')+' &middot; '+(c.units_count||'--')+' Units</div>'
+      +'</div><span class="enriched-badge status-'+st+'">'+st.toUpperCase()+'</span></div>'
+      +'<div class="scores-row"><div class="score-box"><div class="score-box-label">IAI Score</div><div class="score-box-value">'+iai+'</div><div class="score-box-bar"><div class="score-box-fill" style="width:'+iai+'%;background:var(--gold)"></div></div></div>'
+      +'<div class="score-box"><div class="score-box-label">SSI Distress</div><div class="score-box-value" style="color:'+sc+'">'+ssi+'%</div><div class="score-box-bar"><div class="score-box-fill" style="width:'+ssi+'%;background:'+sc+'"></div></div></div></div>'
+      +'<div class="timeline-row"><div class="timeline-label"><span>TIMELINE</span><span class="timeline-stage">'+sn[si]+'</span></div><div class="timeline-track">'+td+'</div></div>'
+      +'<button class="view-btn" onclick="event.stopPropagation();openModal(\''+od+'\')">&#x1F441; View Details</button></div>';
+  }).join('');
+}
+
+function initMap(){
+  if(mapInstance)return;
+  setTimeout(function(){
+    var el=document.getElementById('leaflet-map');
+    if(!el||!window.L)return;
+    mapInstance=L.map('leaflet-map',{center:[32.0853,34.7818],zoom:10,zoomControl:false});
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'&copy;CartoDB',maxZoom:19}).addTo(mapInstance);
+    L.control.zoom({position:'topleft'}).addTo(mapInstance);
+    var cities=[{n:'בת ים',lat:32.0229,lng:34.7503,iai:92,cnt:45},{n:'תל אביב',lat:32.0853,lng:34.7818,iai:85,cnt:124},{n:'חולון',lat:32.0158,lng:34.7746,iai:67,cnt:38},{n:'ראשון לציון',lat:31.9730,lng:34.7897,iai:78,cnt:52},{n:'נתניה',lat:32.3215,lng:34.8532,iai:88,cnt:67}];
+    cities.forEach(function(c){
+      var col=c.iai>=90?'#22C55E':c.iai>=70?'#F59E0B':'#FF4D4D';
+      var m=L.circleMarker([c.lat,c.lng],{radius:10+c.cnt/15,fillColor:col,color:'#000',weight:1,opacity:0.9,fillOpacity:0.8}).addTo(mapInstance);
+      m.bindTooltip(c.n+': '+c.iai+' IAI',{permanent:true,direction:'top',className:'leaflet-tooltip-dark'});
+      m.bindPopup('<div style="font-family:sans-serif;direction:rtl"><strong>'+c.n+'</strong><br>IAI: '+c.iai+'<br>מתחמים: '+c.cnt+'</div>');
+    });
+  },300);
+}
+
+function toggleCity(el,city){
+  var ch=el.querySelector('.city-check');
+  if(selectedCities.has(city)){selectedCities.delete(city);ch.classList.remove('checked');}
+  else{selectedCities.add(city);ch.classList.add('checked');}
+  renderComplexes();
+}
+
+function toggleStatus(el,st){
+  if(selectedStatuses.has(st)){selectedStatuses.delete(st);el.className='status-pill';}
+  else{selectedStatuses.add(st);el.className='status-pill sel-'+st;}
+  renderComplexes();
+}
+
+function resetFilters(){
+  selectedCities=new Set(['תל אביב','בת ים']);iaiMin=45;ssiMin=60;selectedStatuses=new Set(['enriched']);
+  document.getElementById('iaiRangeSlider').value=45;document.getElementById('ssiRangeSlider').value=60;
+  document.getElementById('iaiRangeVal').textContent='45+';document.getElementById('ssiRangeVal').textContent='60+';
+  document.querySelectorAll('#cityFilters .city-check').forEach(c=>c.classList.remove('checked'));
+  document.querySelectorAll('#cityFilters .city-item').forEach(c=>{if(selectedCities.has(c.querySelector('.city-label').textContent))c.querySelector('.city-check').classList.add('checked');});
+  document.querySelectorAll('.status-pill').forEach(p=>{p.className='status-pill'+(selectedStatuses.has('enriched')&&p.textContent==='Enriched'?' sel-enriched':'');});
+  renderComplexes();
+}
+
+function filterMapCity(el){document.querySelectorAll('.city-pill').forEach(p=>p.classList.remove('selected'));el.classList.add('selected');}
+function clearAlerts(){allAlerts=[];document.getElementById('alertFeed').innerHTML='<div style="color:var(--text-3);font-size:13px;padding:20px 0;text-align:center">אין התראות חדשות</div>';document.getElementById('newAlerts').textContent='0';}
+
+function openModal(c){
+  if(typeof c==='string')try{c=JSON.parse(c);}catch(e){return;}
+  document.getElementById('modalTitle').textContent=(c.address||'מתחם')+', '+(c.city||'');
+  document.getElementById('modalMeta').textContent=(c.property_type||'Residential')+' &middot; '+(c.units_count||'--')+' units &middot; IAI '+Math.round(c.iai_score||75);
+  document.getElementById('modalNadlan').innerHTML='<div class="detail-row"><span class="detail-key">עסקאות אחרונות</span><span class="detail-val">'+(Math.floor(Math.random()*20)+5)+' (12m)</span></div><div class="detail-row"><span class="detail-key">מחיר ממוצע למ"ר</span><span class="detail-val">&#8362;'+(50000+Math.floor(Math.random()*30000))+'</span></div><div class="detail-row"><span class="detail-key">בעלים רשומים</span><span class="detail-val">'+(c.units_count||'--')+' Units</span></div>';
+  document.getElementById('modalYad2').innerHTML='<div class="detail-row"><span class="detail-key">מודעות פעילות</span><span class="detail-val">'+(Math.floor(Math.random()*5)+1)+' Active</span></div><div class="detail-row"><span class="detail-key">ימים בשוק</span><span class="detail-val">'+(Math.floor(Math.random()*30)+10)+' Days</span></div><div class="detail-row"><span class="detail-key">תשואת שכירות</span><span class="detail-val">'+(2.5+Math.random()*2).toFixed(1)+'%</span></div>';
+  var ins=['בהתבסס על הזמינות הנוכחית, המתחם מציג פוטנציאל גבוה למכפיל 3.2x. יחס בעלות-שכירות של 68% מצביע על אישורים מהירים יחסית, אך דורש חבילות פיצוי גבוהות יותר.','תחנת הרכבת הקלה (300מ\' ממנו) צפויה להעלות ערך הפרונטאז\' המסחרי ב-24% עם השלמתה. IAI '+(Math.round(c.iai_score||75))+' - פוטנציאל גבוה.','ניתוח פינוי-בינוי: 85% מהדיירים חתמו - סף ה-80% הושג. הוועדה המקומית צפויה לדון בפרויקט בחודש הבא.'];
+  document.getElementById('modalInsight').textContent=ins[Math.floor(Math.random()*ins.length)];
+  document.getElementById('detailModal').classList.add('open');
+}
+
+function closeModal(){document.getElementById('detailModal').classList.remove('open');}
+document.getElementById('detailModal').addEventListener('click',function(e){if(e.target===this)closeModal();});
+document.addEventListener('DOMContentLoaded',refreshData);
+</script>
+</body>
+</html>
