@@ -14,12 +14,14 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.53.0';
-const BUILD = '2026-03-05-v4.53.0-disable-polling-webhook-only';
+const VERSION = '4.54.0';
+const BUILD = '2026-03-05-v4.54.0-fix-webhook-path';
 
 // What's in this version:
-// - DISABLED: whatsappPollingService (INFORU pull API times out; webhook push is the real mechanism)
-// - WEBHOOK MODE: INFORU pushes to /api/whatsapp/webhook -> whatsappWebhookRoutes.js (Claude bot)
+// - FIX: whatsappWebhookRoutes mounted at /api (not /api/whatsapp) so webhook lands at
+//        /api/whatsapp/webhook (not the doubled /api/whatsapp/whatsapp/webhook)
+// - DISABLED: whatsappPollingService (INFORU pull API times out)
+// - WEBHOOK MODE: INFORU pushes to /api/whatsapp/webhook -> Claude bot
 // - All previous: dashboard redesign, phone column migration, Vapi, PostgreSQL, schedulers
 
 async function runAutoMigrations() {
@@ -74,7 +76,9 @@ function loadAllRoutes() {
     { path: '/api/morning', file: 'routes/morningReportRoutes.js' },
     { path: '/api/vapi', file: 'routes/vapiRoutes.js' },
     { path: '/api/inforu', file: 'routes/inforuRoutes.js' },
-    { path: '/api/whatsapp', file: 'routes/whatsappWebhookRoutes.js' },
+    // whatsappWebhookRoutes mounted at /api so its internal /whatsapp/webhook
+    // resolves to the correct /api/whatsapp/webhook (not doubled)
+    { path: '/api', file: 'routes/whatsappWebhookRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
   ];
@@ -104,7 +108,17 @@ app.get('/health', async (req, res) => {
 app.get('/api/debug', async (req, res) => {
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
-  res.json({ version: VERSION, build: BUILD, timestamp: new Date().toISOString(), whatsapp_mode: 'webhook_push', routes: { loaded: loaded.map(r => r.path + ' (' + r.file + ')'), failed: failed.map(r => ({ path: r.path, file: r.file, error: r.error })) } });
+  res.json({
+    version: VERSION,
+    build: BUILD,
+    timestamp: new Date().toISOString(),
+    whatsapp_mode: 'webhook_push',
+    webhook_url: 'https://pinuy-binuy-analyzer-production.up.railway.app/api/whatsapp/webhook',
+    routes: {
+      loaded: loaded.map(r => r.path + ' (' + r.file + ')'),
+      failed: failed.map(r => ({ path: r.path, file: r.file, error: r.error }))
+    }
+  });
 });
 
 app.get('/', (req, res) => {
@@ -121,7 +135,7 @@ async function start() {
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
   logger.info(`=== ROUTE LOADING SUMMARY ===`);
-  loaded.forEach(r => logger.info(`  OK: ${r.path}`));
+  loaded.forEach(r => logger.info(`  OK: ${r.path} (${r.file})`));
   failed.forEach(r => logger.error(`  FAILED: ${r.path} (${r.file}) -> ${r.error}`));
 
   app.use((req, res) => { res.status(404).json({ error: 'Not Found', path: req.path, version: VERSION }); });
@@ -130,14 +144,14 @@ async function start() {
   try { const { startScheduler } = require('./jobs/weeklyScanner'); startScheduler(); } catch (e) { logger.warn('Scheduler failed to start:', e.message); }
   try { const { startWatcher } = require('./jobs/stuckScanWatcher'); startWatcher(); } catch (e) { logger.warn('Stuck scan watcher failed to start:', e.message); }
   try { const { startDiscoveryScheduler } = require('./jobs/discoveryScheduler'); startDiscoveryScheduler(); } catch (e) { logger.warn('Discovery scheduler failed to start:', e.message); }
-  // NOTE: whatsappPollingService disabled - INFORU pull API times out.
+  // whatsappPollingService disabled - INFORU pull API times out.
   // WhatsApp messages arrive via INFORU webhook push to /api/whatsapp/webhook
-  logger.info('WhatsApp mode: WEBHOOK (INFORU pushes to /api/whatsapp/webhook)');
+  logger.info('WhatsApp: WEBHOOK mode active at /api/whatsapp/webhook');
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);
     logger.info(`Routes: ${loaded.length} loaded, ${failed.length} failed`);
-    logger.info(`Dashboard available at: /dashboard`);
+    logger.info(`Dashboard: /dashboard`);
   });
 }
 
