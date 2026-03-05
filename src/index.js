@@ -14,20 +14,14 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.49.0';
-const BUILD = '2026-03-05-v4.49.0-vapi-voice-ai';
+const VERSION = '4.50.0';
+const BUILD = '2026-03-05-v4.50.0-inforu-whatsapp-routes';
 
 // What's in this version:
-// - QUANTUM Voice AI: Vapi integration routes (vapiRoutes.js)
-//   GET  /api/vapi/caller-context/:phone
-//   POST /api/vapi/outbound
-//   POST /api/vapi/outbound/batch
-//   POST /api/vapi/webhook
-//   GET  /api/vapi/calls
-//   GET  /api/vapi/stats
-//   GET  /api/vapi/agents
-// - auto_migrations.sql: vapi_calls table
-// - All previous: Bloomberg Terminal dashboard, PostgreSQL, schedulers, morning report
+// - Registered inforuRoutes.js at /api/inforu
+// - Registered whatsappAlertRoutes.js at /api/whatsapp/alerts
+// - Fixed morningReportService syntax bug (WhatsApp StatusId check)
+// - All previous: Vapi Voice AI, Bloomberg Terminal dashboard, PostgreSQL, schedulers
 
 async function runAutoMigrations() {
   try {
@@ -81,6 +75,8 @@ function loadAllRoutes() {
     { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
     { path: '/api/morning', file: 'routes/morningReportRoutes.js' },
     { path: '/api/vapi', file: 'routes/vapiRoutes.js' },
+    { path: '/api/inforu', file: 'routes/inforuRoutes.js' },
+    { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
   ];
 
   for (const { path: routePath, file } of routeFiles) {
