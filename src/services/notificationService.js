@@ -1,50 +1,57 @@
 /**
- * Notification Service v3 - Smart Email Delivery
+ * Notification Service v4 - Dashboard-Centric Alerts (No Email)
  * 
- * Sends alerts and scan status via email to:
- * 1. Personal email (hemi.michaeli@gmail.com) - always works
- * 2. Office email (Office@u-r-quantum.com) 
- * 3. Trello board - DISABLED (system alerts now in QUANTUM dashboard)
+ * ⚠️ EMAIL NOTIFICATIONS DISABLED per user request (March 6, 2026)
  * 
- * Smart provider selection:
- * - Tries Resend first (no SMTP port needed on Railway)
- * - Falls back to SMTP if Resend fails (e.g., sandbox domain restrictions)
- * - Logs all delivery attempts for debugging
+ * All notifications now appear exclusively in QUANTUM Dashboard V3:
+ * - Critical alerts visible in dashboard alerts feed
+ * - Weekly digests available via NEWS tab
+ * - Real-time updates through dashboard auto-refresh
+ * 
+ * Email functionality preserved but disabled for future reactivation if needed.
+ * To re-enable: set ENABLE_EMAIL_NOTIFICATIONS=true in Railway environment.
  */
 
 const pool = require('../db/pool');
 const { logger } = require('./logger');
 
-// Notification targets - personal email first (always works with Resend sandbox)
+// 🚫 EMAIL NOTIFICATIONS DISABLED - All alerts now dashboard-only
+const EMAIL_DISABLED = process.env.ENABLE_EMAIL_NOTIFICATIONS !== 'true';
+
+// Previous email targets (now disabled)
 const PERSONAL_EMAIL = process.env.PERSONAL_EMAIL || 'hemi.michaeli@gmail.com';
 const OFFICE_EMAIL = process.env.OFFICE_EMAIL || 'Office@u-r-quantum.com';
 const TRELLO_EMAIL = process.env.TRELLO_BOARD_EMAIL || 'uth_limited+c9otswetpgdfphdpoehc@boards.trello.com';
 
-// All notification targets
-// Alert notifications - no longer sent to Trello (system alerts now in QUANTUM dashboard)
-const NOTIFICATION_EMAILS = [PERSONAL_EMAIL, OFFICE_EMAIL].filter(Boolean);
+// All notification targets (empty when disabled)
+const NOTIFICATION_EMAILS = EMAIL_DISABLED ? [] : [PERSONAL_EMAIL, OFFICE_EMAIL].filter(Boolean);
 
-// Severity -> emoji mapping for email subjects
+// Severity -> emoji mapping for dashboard alerts
 const SEVERITY_EMOJI = {
-  critical: '\u{1F6A8}',
-  high: '\u{1F534}',
-  medium: '\u{1F7E1}',
-  info: '\u2139\uFE0F'
+  critical: '🚨',
+  high: '🔴', 
+  medium: '🟡',
+  info: 'ℹ️'
 };
 
 const ALERT_TYPE_LABEL = {
-  status_change: '\u05E9\u05D9\u05E0\u05D5\u05D9 \u05E1\u05D8\u05D8\u05D5\u05E1',
-  committee_approval: '\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D5\u05E2\u05D3\u05D4',
-  opportunity: '\u05D4\u05D6\u05D3\u05DE\u05E0\u05D5\u05EA \u05D4\u05E9\u05E7\u05E2\u05D4',
-  stressed_seller: '\u05DE\u05D5\u05DB\u05E8 \u05DC\u05D7\u05D5\u05E5',
-  price_drop: '\u05D9\u05E8\u05D9\u05D3\u05EA \u05DE\u05D7\u05D9\u05E8',
-  new_complex: '\u05DE\u05EA\u05D7\u05DD \u05D7\u05D3\u05E9'
+  status_change: 'שינוי סטטוס',
+  committee_approval: 'אישור ועדה',
+  opportunity: 'הזדמנות השקעה',
+  stressed_seller: 'מוכר לחוץ',
+  price_drop: 'ירידת מחיר',
+  new_complex: 'מתחם חדש'
 };
 
 /**
- * Send email via Resend HTTP API
+ * Send email via Resend HTTP API (DISABLED)
  */
 async function sendViaResend(to, subject, htmlBody, textBody) {
+  if (EMAIL_DISABLED) {
+    logger.info(`📧 Email to ${to} blocked (notifications disabled) - storing in dashboard instead`);
+    return { sent: false, error: 'Email notifications disabled per user request', provider: 'disabled' };
+  }
+
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return { sent: false, error: 'RESEND_API_KEY not set', provider: 'resend' };
 
@@ -69,7 +76,7 @@ async function sendViaResend(to, subject, htmlBody, textBody) {
     const data = await response.json();
 
     if (response.ok) {
-      logger.info(`\u2709\uFE0F Resend: sent to ${to}`, { id: data.id });
+      logger.info(`✉️ Resend: sent to ${to}`, { id: data.id });
       return { sent: true, messageId: data.id, provider: 'resend' };
     } else {
       logger.warn(`Resend failed for ${to}: ${data.message || response.status}`, { status: response.status });
@@ -82,9 +89,14 @@ async function sendViaResend(to, subject, htmlBody, textBody) {
 }
 
 /**
- * Send email via SMTP (nodemailer)
+ * Send email via SMTP (DISABLED)
  */
 async function sendViaSMTP(to, subject, htmlBody, textBody) {
+  if (EMAIL_DISABLED) {
+    logger.info(`📧 SMTP email to ${to} blocked (notifications disabled)`);
+    return { sent: false, error: 'Email notifications disabled per user request', provider: 'disabled' };
+  }
+
   const smtpHost = process.env.SMTP_HOST;
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
@@ -95,7 +107,7 @@ async function sendViaSMTP(to, subject, htmlBody, textBody) {
 
   try {
     const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
+    const transporter = nodemailer.createTransporter({
       host: smtpHost,
       port: parseInt(process.env.SMTP_PORT || '587'),
       secure: process.env.SMTP_SECURE === 'true',
@@ -113,7 +125,7 @@ async function sendViaSMTP(to, subject, htmlBody, textBody) {
       text: textBody || htmlBody.replace(/<[^>]*>/g, '')
     });
 
-    logger.info(`\u2709\uFE0F SMTP: sent to ${to}`, { messageId: info.messageId });
+    logger.info(`✉️ SMTP: sent to ${to}`, { messageId: info.messageId });
     return { sent: true, messageId: info.messageId, provider: 'smtp' };
   } catch (err) {
     logger.error(`SMTP failed for ${to}`, { error: err.message, code: err.code });
@@ -122,9 +134,14 @@ async function sendViaSMTP(to, subject, htmlBody, textBody) {
 }
 
 /**
- * Send a single email - tries Resend first, falls back to SMTP
+ * Send a single email - DISABLED, logs instead
  */
 async function sendEmail(to, subject, htmlBody, textBody) {
+  if (EMAIL_DISABLED) {
+    logger.info(`📧 Email blocked: to=${to}, subject="${subject}" (notifications disabled)`);
+    return { sent: false, error: 'Email notifications disabled per user request', provider: 'disabled' };
+  }
+
   if (process.env.RESEND_API_KEY) {
     const resendResult = await sendViaResend(to, subject, htmlBody, textBody);
     if (resendResult.sent) return resendResult;
@@ -139,109 +156,90 @@ async function sendEmail(to, subject, htmlBody, textBody) {
 }
 
 /**
- * Format a single alert for Trello card
+ * Store alert in dashboard instead of sending email
  */
-function formatAlertForTrello(alert) {
+async function storeAlertInDashboard(alert, subject, body) {
+  try {
+    await pool.query(`
+      INSERT INTO dashboard_notifications (alert_id, subject, body, created_at, severity, type)
+      VALUES ($1, $2, $3, NOW(), $4, 'alert')
+      ON CONFLICT (alert_id) DO UPDATE SET
+        subject = EXCLUDED.subject,
+        body = EXCLUDED.body,
+        updated_at = NOW()
+    `, [alert.id, subject, body, alert.severity]);
+    
+    logger.info(`📱 Alert stored in dashboard: ${alert.title}`);
+    return true;
+  } catch (err) {
+    logger.warn('Failed to store alert in dashboard', { error: err.message });
+    return false;
+  }
+}
+
+/**
+ * Format alert for dashboard display
+ */
+function formatAlertForDashboard(alert) {
   const emoji = SEVERITY_EMOJI[alert.severity] || '';
   const typeLabel = ALERT_TYPE_LABEL[alert.alert_type] || alert.alert_type;
   
-  let body = `## ${alert.title}\n\n`;
-  body += `${alert.message}\n\n`;
-  body += `---\n`;
-  body += `**\u05E1\u05D5\u05D2:** ${typeLabel}\n`;
-  body += `**\u05D7\u05D5\u05DE\u05E8\u05D4:** ${alert.severity}\n`;
-  body += `**\u05EA\u05D0\u05E8\u05D9\u05DA:** ${new Date(alert.created_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })}\n`;
+  const subject = `${emoji} ${typeLabel}: ${alert.title}`;
+  
+  let body = `${alert.message}\n\n`;
+  body += `סוג: ${typeLabel}\n`;
+  body += `חומרה: ${alert.severity}\n`;
+  body += `תאריך: ${new Date(alert.created_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })}\n`;
 
   if (alert.data) {
     const data = typeof alert.data === 'string' ? JSON.parse(alert.data) : alert.data;
     if (data.old_status && data.new_status) {
-      body += `**\u05E1\u05D8\u05D8\u05D5\u05E1 \u05D9\u05E9\u05DF:** ${data.old_status} -> **\u05D7\u05D3\u05E9:** ${data.new_status}\n`;
+      body += `סטטוס ישן: ${data.old_status} -> חדש: ${data.new_status}\n`;
     }
     if (data.committee) {
-      body += `**\u05D5\u05E2\u05D3\u05D4:** ${data.committee === 'local' ? '\u05DE\u05E7\u05D5\u05DE\u05D9\u05EA' : '\u05DE\u05D7\u05D5\u05D6\u05D9\u05EA'}\n`;
+      body += `ועדה: ${data.committee === 'local' ? 'מקומית' : 'מחוזית'}\n`;
     }
     if (data.old_iai !== undefined) {
-      body += `**IAI:** ${data.old_iai} -> ${data.new_iai}\n`;
+      body += `IAI: ${data.old_iai} -> ${data.new_iai}\n`;
     }
     if (data.ssi_score) {
-      body += `**SSI:** ${data.ssi_score}\n`;
+      body += `SSI: ${data.ssi_score}\n`;
     }
     if (data.drop_percent) {
-      body += `**\u05D9\u05E8\u05D9\u05D3\u05D4:** ${data.drop_percent}%\n`;
+      body += `ירידה: ${data.drop_percent}%\n`;
     }
   }
 
-  const subject = `${emoji} [QUANTUM] ${typeLabel}: ${alert.title}`;
   return { subject, body };
 }
 
 /**
- * Format alert as HTML for office email
- */
-function formatAlertHTML(alert) {
-  const emoji = SEVERITY_EMOJI[alert.severity] || '';
-  const typeLabel = ALERT_TYPE_LABEL[alert.alert_type] || alert.alert_type;
-  const severityColor = {
-    critical: '#dc2626', high: '#ef4444', medium: '#f59e0b', info: '#3b82f6'
-  }[alert.severity] || '#6b7280';
-
-  return `
-    <div style="border-left: 4px solid ${severityColor}; padding: 12px 16px; margin: 8px 0; background: #f9fafb;">
-      <h3 style="margin: 0 0 8px; color: ${severityColor};">${emoji} ${alert.title}</h3>
-      <p style="margin: 0 0 8px; color: #374151;">${alert.message}</p>
-      <p style="margin: 0; font-size: 12px; color: #9ca3af;">
-        ${typeLabel} | ${alert.severity} | ${new Date(alert.created_at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })}
-      </p>
-    </div>
-  `;
-}
-
-/**
- * Send real-time notification for a high-severity alert
+ * Send dashboard notification instead of email for alerts
  */
 async function sendAlertNotification(alert) {
   if (!alert || !['critical', 'high'].includes(alert.severity)) return 0;
 
-  const trelloFormat = formatAlertForTrello(alert);
-  const htmlBody = formatAlertHTML(alert);
-  const subject = trelloFormat.subject;
+  // Store in dashboard instead of sending email
+  const dashboardFormat = formatAlertForDashboard(alert);
+  const stored = await storeAlertInDashboard(alert, dashboardFormat.subject, dashboardFormat.body);
 
-  let sentCount = 0;
-
-  for (const email of NOTIFICATION_EMAILS) {
+  if (stored) {
     try {
-      const isPersonalOrOffice = email !== TRELLO_EMAIL;
-      const body = isPersonalOrOffice ? `
-        <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px;">
-          <h2 style="color: #1f2937;">QUANTUM - \u05D4\u05EA\u05E8\u05D0\u05D4 \u05D7\u05D3\u05E9\u05D4</h2>
-          ${htmlBody}
-          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
-          <p style="font-size: 11px; color: #9ca3af;">
-            QUANTUM v4.20 | <a href="https://pinuy-binuy-analyzer-production.up.railway.app/api/dashboard">Dashboard</a>
-          </p>
-        </div>
-      ` : trelloFormat.body;
-
-      const result = await sendEmail(email, subject, body, email === TRELLO_EMAIL ? trelloFormat.body : undefined);
-      if (result.sent) sentCount++;
+      await pool.query('UPDATE alerts SET sent_at = NOW(), notification_method = $1 WHERE id = $2', 
+        ['dashboard', alert.id]);
     } catch (err) {
-      logger.warn(`Failed to send alert to ${email}`, { error: err.message });
+      logger.warn('Failed to mark alert as dashboard-sent', { alertId: alert.id, error: err.message });
     }
+    
+    logger.info(`📱 Alert stored in dashboard instead of email: ${alert.title}`);
+    return 1; // Count as "sent" to dashboard
   }
 
-  if (sentCount > 0) {
-    try {
-      await pool.query('UPDATE alerts SET sent_at = NOW() WHERE id = $1', [alert.id]);
-    } catch (err) {
-      logger.warn('Failed to mark alert as sent', { alertId: alert.id, error: err.message });
-    }
-  }
-
-  return sentCount;
+  return 0;
 }
 
 /**
- * Send all unsent high-severity alerts
+ * Process all unsent high-severity alerts for dashboard
  */
 async function sendPendingAlerts() {
   try {
@@ -255,7 +253,7 @@ async function sendPendingAlerts() {
     `);
 
     if (result.rows.length === 0) {
-      logger.info('No pending alerts to send');
+      logger.info('No pending alerts to process');
       return { totalAlerts: 0, sent: 0 };
     }
 
@@ -263,31 +261,31 @@ async function sendPendingAlerts() {
     for (const alert of result.rows) {
       const count = await sendAlertNotification(alert);
       if (count > 0) sent++;
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 100)); // Small delay
     }
 
-    logger.info(`Sent ${sent}/${result.rows.length} pending alerts`);
+    logger.info(`Stored ${sent}/${result.rows.length} alerts in dashboard`);
     return { totalAlerts: result.rows.length, sent };
   } catch (err) {
-    logger.error('Failed to send pending alerts', { error: err.message });
+    logger.error('Failed to process pending alerts', { error: err.message });
     return { error: err.message };
   }
 }
 
 /**
- * Alias for weekly scanner compatibility
+ * Alias for compatibility
  */
 async function sendPendingNotifications() {
   return sendPendingAlerts();
 }
 
 /**
- * Send weekly digest email
+ * Store weekly digest in dashboard instead of email
  */
 async function sendWeeklyDigest(scanResult) {
-  if (!scanResult) return;
+  if (!scanResult) return { sent: 0, method: 'dashboard' };
 
-  const subject = `\u{1F4CA} [QUANTUM] \u05E1\u05D9\u05DB\u05D5\u05DD \u05E9\u05D1\u05D5\u05E2\u05D9 - Pinuy Binuy Analyzer`;
+  const subject = `📊 QUANTUM - סיכום שבועי`;
 
   const alertsResult = await pool.query(`
     SELECT a.*, c.name as complex_name, c.city
@@ -309,113 +307,77 @@ async function sendWeeklyDigest(scanResult) {
     ORDER BY iai_score DESC LIMIT 10
   `);
 
-  let html = `
-    <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto;">
-      <h1 style="color: #1f2937; border-bottom: 2px solid #3b82f6; padding-bottom: 8px;">
-        \u{1F4CA} QUANTUM - \u05E1\u05D9\u05DB\u05D5\u05DD \u05E9\u05D1\u05D5\u05E2\u05D9
-      </h1>
-      
-      <div style="background: #f0f9ff; padding: 16px; border-radius: 8px; margin: 16px 0;">
-        <h3 style="margin: 0 0 8px; color: #1e40af;">\u05EA\u05D5\u05E6\u05D0\u05D5\u05EA \u05E1\u05E8\u05D9\u05E7\u05D4</h3>
-        <table style="width: 100%; border-collapse: collapse;">
-  `;
-
-  if (scanResult.nadlan) html += `<tr><td style="padding: 4px 8px;">nadlan.gov.il</td><td>${scanResult.nadlan.newTransactions || scanResult.nadlan.newTx || 0} \u05E2\u05E1\u05E7\u05D0\u05D5\u05EA \u05D7\u05D3\u05E9\u05D5\u05EA</td></tr>`;
-  if (scanResult.yad2) html += `<tr><td style="padding: 4px 8px;">yad2</td><td>${scanResult.yad2.new || scanResult.yad2.newListings || 0} \u05DE\u05D5\u05D3\u05E2\u05D5\u05EA \u05D7\u05D3\u05E9\u05D5\u05EA, ${scanResult.yad2.priceChanges || 0} \u05E9\u05D9\u05E0\u05D5\u05D9\u05D9 \u05DE\u05D7\u05D9\u05E8</td></tr>`;
-  if (scanResult.mavat) html += `<tr><td style="padding: 4px 8px;">mavat</td><td>${scanResult.mavat.statusChanges || 0} \u05E9\u05D9\u05E0\u05D5\u05D9\u05D9 \u05E1\u05D8\u05D8\u05D5\u05E1, ${scanResult.mavat.committeeUpdates || 0} \u05D0\u05D9\u05E9\u05D5\u05E8\u05D9 \u05D5\u05E2\u05D3\u05D4</td></tr>`;
-  if (scanResult.benchmarks) html += `<tr><td style="padding: 4px 8px;">Benchmarks</td><td>${scanResult.benchmarks.calculated || 0} \u05D7\u05D5\u05E9\u05D1\u05D5</td></tr>`;
-
-  html += `
-        </table>
-        <p style="margin: 8px 0 0; font-size: 12px; color: #6b7280;">\u05DE\u05E9\u05DA: ${scanResult.duration || 'N/A'} | ${scanResult.alertsGenerated || 0} \u05D4\u05EA\u05E8\u05D0\u05D5\u05EA</p>
-      </div>
-  `;
+  let body = `סיכום שבועי QUANTUM\n\n`;
+  
+  body += `תוצאות סריקה:\n`;
+  if (scanResult.nadlan) body += `nadlan.gov.il: ${scanResult.nadlan.newTransactions || scanResult.nadlan.newTx || 0} עסקאות חדשות\n`;
+  if (scanResult.yad2) body += `yad2: ${scanResult.yad2.new || scanResult.yad2.newListings || 0} מודעות חדשות, ${scanResult.yad2.priceChanges || 0} שינויי מחיר\n`;
+  if (scanResult.mavat) body += `mavat: ${scanResult.mavat.statusChanges || 0} שינויי סטטוס, ${scanResult.mavat.committeeUpdates || 0} אישורי ועדה\n`;
+  if (scanResult.benchmarks) body += `Benchmarks: ${scanResult.benchmarks.calculated || 0} חושבו\n`;
+  body += `משך: ${scanResult.duration || 'N/A'} | ${scanResult.alertsGenerated || 0} התראות\n\n`;
 
   if (alertsResult.rows.length > 0) {
-    html += `<h3 style="color: #1f2937; margin-top: 24px;">\u05D4\u05EA\u05E8\u05D0\u05D5\u05EA \u05D4\u05E9\u05D1\u05D5\u05E2 (${alertsResult.rows.length})</h3>`;
-    for (const alert of alertsResult.rows) {
-      html += formatAlertHTML(alert);
+    body += `התראות השבוע (${alertsResult.rows.length}):\n`;
+    for (const alert of alertsResult.rows.slice(0, 10)) {
+      body += `- ${SEVERITY_EMOJI[alert.severity]} ${alert.title}: ${alert.message}\n`;
     }
+    body += `\n`;
   }
 
   if (topOpps.rows.length > 0) {
-    html += `
-      <h3 style="color: #1f2937; margin-top: 24px;">Top 10 \u05D4\u05D6\u05D3\u05DE\u05E0\u05D5\u05D9\u05D5\u05EA</h3>
-      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-        <thead>
-          <tr style="background: #f3f4f6;">
-            <th style="padding: 8px; text-align: right;">\u05E9\u05DD</th>
-            <th style="padding: 8px; text-align: right;">\u05E2\u05D9\u05E8</th>
-            <th style="padding: 8px; text-align: center;">\u05E1\u05D8\u05D8\u05D5\u05E1</th>
-            <th style="padding: 8px; text-align: center;">IAI</th>
-            <th style="padding: 8px; text-align: center;">\u05E4\u05E8\u05DE\u05D9\u05D4</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
+    body += `Top 10 הזדמנויות:\n`;
     for (const opp of topOpps.rows) {
-      const iaiColor = opp.iai_score >= 70 ? '#16a34a' : opp.iai_score >= 50 ? '#ca8a04' : '#6b7280';
-      html += `
-        <tr style="border-bottom: 1px solid #e5e7eb;">
-          <td style="padding: 6px 8px;">${opp.name}</td>
-          <td style="padding: 6px 8px;">${opp.city}</td>
-          <td style="padding: 6px 8px; text-align: center;">${opp.status}</td>
-          <td style="padding: 6px 8px; text-align: center; color: ${iaiColor}; font-weight: bold;">${opp.iai_score}</td>
-          <td style="padding: 6px 8px; text-align: center;">${opp.actual_premium ? opp.actual_premium + '%' : 'N/A'}</td>
-        </tr>
-      `;
-    }
-    html += `</tbody></table>`;
-  }
-
-  html += `
-      <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0 8px;">
-      <p style="font-size: 11px; color: #9ca3af; text-align: center;">
-        QUANTUM v4.20 - Direct API Mode |
-        <a href="https://pinuy-binuy-analyzer-production.up.railway.app/api/dashboard">Dashboard</a>
-      </p>
-    </div>
-  `;
-
-  const trelloText = `\u05E1\u05D9\u05DB\u05D5\u05DD \u05E9\u05D1\u05D5\u05E2\u05D9 QUANTUM\n\n` +
-    `\u05E1\u05E8\u05D9\u05E7\u05D4: ${scanResult.summary || 'N/A'}\n\n` +
-    `\u05D4\u05EA\u05E8\u05D0\u05D5\u05EA: ${alertsResult.rows.length}\n` +
-    alertsResult.rows.slice(0, 10).map(a => `- ${a.title}: ${a.message}`).join('\n') +
-    `\n\nTop \u05D4\u05D6\u05D3\u05DE\u05E0\u05D5\u05D9\u05D5\u05EA:\n` +
-    topOpps.rows.map(o => `- ${o.name} (${o.city}) IAI=${o.iai_score}`).join('\n');
-
-  let sent = 0;
-  for (const email of [PERSONAL_EMAIL, OFFICE_EMAIL]) {
-    if (email) {
-      const result = await sendEmail(email, subject, html);
-      if (result.sent) sent++;
+      body += `- ${opp.name} (${opp.city}) IAI=${opp.iai_score}\n`;
     }
   }
-  if (TRELLO_EMAIL) {
-    const result = await sendEmail(TRELLO_EMAIL, subject, trelloText, trelloText);
-    if (result.sent) sent++;
-  }
 
-  logger.info(`Weekly digest sent to ${sent}/${NOTIFICATION_EMAILS.length} recipients`);
-  return { sent, recipients: NOTIFICATION_EMAILS };
+  // Store in dashboard notifications
+  try {
+    await pool.query(`
+      INSERT INTO dashboard_notifications (subject, body, created_at, severity, type)
+      VALUES ($1, $2, NOW(), 'info', 'digest')
+    `, [subject, body]);
+    
+    logger.info('📱 Weekly digest stored in dashboard instead of email');
+    return { sent: 1, method: 'dashboard' };
+  } catch (err) {
+    logger.error('Failed to store weekly digest in dashboard', { error: err.message });
+    return { sent: 0, method: 'dashboard', error: err.message };
+  }
 }
 
 /**
- * Check if notifications are configured
+ * Check if notifications are configured (now always dashboard)
  */
 function isConfigured() {
-  if (process.env.RESEND_API_KEY) return true;
-  return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+  return true; // Dashboard is always available
 }
 
 /**
  * Get active provider info
  */
 function getProvider() {
+  if (EMAIL_DISABLED) return 'dashboard-only';
+  
   const providers = [];
   if (process.env.RESEND_API_KEY) providers.push('resend');
   if (process.env.SMTP_HOST) providers.push('smtp');
-  return providers.length ? providers.join('+') : 'none';
+  return providers.length ? providers.join('+dashboard') : 'dashboard-only';
+}
+
+/**
+ * Emergency re-enable function (for critical system issues only)
+ */
+async function emergencyEnableEmail(reason) {
+  logger.warn(`🚨 Emergency email re-enabled: ${reason}`);
+  process.env.ENABLE_EMAIL_NOTIFICATIONS = 'true';
+  EMAIL_DISABLED = false;
+  
+  // Send notification about re-enablement
+  const subject = `🚨 [QUANTUM] Email notifications re-enabled - ${reason}`;
+  const body = `Email notifications have been temporarily re-enabled due to: ${reason}\n\nTime: ${new Date().toISOString()}`;
+  
+  return await sendEmail(PERSONAL_EMAIL, subject, body);
 }
 
 module.exports = {
@@ -426,8 +388,11 @@ module.exports = {
   sendEmail,
   isConfigured,
   getProvider,
+  storeAlertInDashboard,
+  emergencyEnableEmail,
   NOTIFICATION_EMAILS,
   PERSONAL_EMAIL,
   OFFICE_EMAIL,
-  TRELLO_EMAIL
+  TRELLO_EMAIL,
+  EMAIL_DISABLED
 };
