@@ -14,12 +14,13 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.56.0';
-const BUILD = '2026-03-05-v4.56.0-fix-csp-dashboard';
+const VERSION = '4.57.0';
+const BUILD = '2026-03-06-v4.57.0-dashboard-v3-fix-backup-integration';
 
 // What's in this version:
-// - FIX: Helmet CSP now allows inline scripts + unpkg.com/fonts.googleapis.com (dashboard was broken)
-// - FIX: /api/complexes added as alias for /api/dashboard/complexes
+// - FIX: Dashboard V3 syntax error resolved (simplified implementation)
+// - NEW: Backup service integration (hourly backups with 6-month retention)
+// - FIX: Email notifications disabled as requested
 // - All previous: scheduling system, WhatsApp webhook, dashboard redesign, Vapi, PostgreSQL
 
 async function runAutoMigrations() {
@@ -69,7 +70,7 @@ app.use(helmet({
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10mb' }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, skip: (req) => req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' || req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') || req.path.startsWith('/api/scheduling/'), message: { error: 'Too many requests, please try again later' } });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, skip: (req) => req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' || req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') || req.path.startsWith('/api/scheduling/') || req.path.startsWith('/api/backup/'), message: { error: 'Too many requests, please try again later' } });
 app.use('/api/', limiter);
 
 app.use((req, res, next) => {
@@ -120,6 +121,93 @@ function loadAllRoutes() {
   }
 }
 
+// Initialize backup service API routes
+function loadBackupRoutes() {
+  try {
+    const { 
+      createFullBackup, 
+      getBackupStats, 
+      restoreFromBackup 
+    } = require('./services/backupService');
+    
+    // Manual backup endpoint
+    app.post('/api/backup/create', async (req, res) => {
+      try {
+        logger.info('[BACKUP API] Manual backup requested');
+        const result = await createFullBackup();
+        res.json({
+          success: true,
+          message: 'Backup created successfully',
+          backup: result,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        logger.error('[BACKUP API] Manual backup failed:', error);
+        res.status(500).json({
+          success: false,
+          error: 'Backup creation failed',
+          message: error.message
+        });
+      }
+    });
+
+    // List backups endpoint
+    app.get('/api/backup/list', async (req, res) => {
+      try {
+        const stats = await getBackupStats();
+        res.json({
+          success: true,
+          stats: stats,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        logger.error('[BACKUP API] Failed to list backups:', error);
+        res.status(500).json({
+          success: false,
+          error: 'Failed to list backups',
+          message: error.message
+        });
+      }
+    });
+
+    // Restore from backup endpoint (DANGEROUS)
+    app.post('/api/backup/restore/:timestamp', async (req, res) => {
+      try {
+        const { timestamp } = req.params;
+        const { confirmed } = req.body;
+        
+        if (!confirmed) {
+          return res.status(400).json({
+            success: false,
+            error: 'Confirmation required',
+            message: 'Database restore is a dangerous operation that requires explicit confirmation'
+          });
+        }
+        
+        const result = await restoreFromBackup(`quantum_backup_${timestamp}.sql.gz`, { confirmed: true });
+        res.json({
+          success: true,
+          result: result,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        logger.error('[BACKUP API] Restore failed:', error);
+        res.status(500).json({
+          success: false,
+          error: 'Restore operation failed',
+          message: error.message
+        });
+      }
+    });
+    
+    routeLoadResults.push({ path: '/api/backup', status: 'ok', file: 'services/backupService.js' });
+    logger.info('[BACKUP API] Backup API routes loaded successfully');
+  } catch (err) {
+    routeLoadResults.push({ path: '/api/backup', status: 'failed', error: err.message, file: 'services/backupService.js' });
+    logger.error('[BACKUP API] Failed to load backup API routes:', err.message);
+  }
+}
+
 app.get('/health', async (req, res) => {
   try {
     const result = await pool.query('SELECT COUNT(*) FROM complexes');
@@ -147,12 +235,25 @@ app.get('/api/complexes', async (req, res) => {
 app.get('/api/debug', async (req, res) => {
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
+  
+  // Get backup service status
+  let backupStatus = 'unknown';
+  try {
+    const { getBackupStats } = require('./services/backupService');
+    const stats = await getBackupStats();
+    backupStatus = `active (${stats.totalBackups} backups, ${stats.totalSizeMB}MB)`;
+  } catch (error) {
+    backupStatus = 'failed to initialize';
+  }
+  
   res.json({
     version: VERSION,
     build: BUILD,
     timestamp: new Date().toISOString(),
     whatsapp_mode: 'webhook_push',
     webhook_url: 'https://pinuy-binuy-analyzer-production.up.railway.app/api/whatsapp/webhook',
+    backup_service: backupStatus,
+    email_notifications: 'disabled',
     routes: {
       loaded: loaded.map(r => r.path + ' (' + r.file + ')'),
       failed: failed.map(r => ({ path: r.path, file: r.file, error: r.error }))
@@ -171,12 +272,22 @@ async function start() {
   await runAutoMigrations();
   await runSchedulingMigrations();
   loadAllRoutes();
+  loadBackupRoutes();
 
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
   logger.info(`=== ROUTE LOADING SUMMARY ===`);
   loaded.forEach(r => logger.info(`  OK: ${r.path} (${r.file})`));
   failed.forEach(r => logger.error(`  FAILED: ${r.path} (${r.file}) -> ${r.error}`));
+
+  // Initialize backup service
+  try {
+    const { initializeBackupService } = require('./services/backupService');
+    const backupResult = await initializeBackupService();
+    logger.info(`[BACKUP] Service initialized: ${backupResult.stats.totalBackups} backups, ${backupResult.stats.totalSizeMB}MB`);
+  } catch (error) {
+    logger.error('[BACKUP] Failed to initialize backup service:', error.message);
+  }
 
   app.use((req, res) => { res.status(404).json({ error: 'Not Found', path: req.path, version: VERSION }); });
   app.use((err, req, res, next) => { logger.error('Unhandled error:', err); res.status(500).json({ error: 'Internal Server Error', message: err.message, version: VERSION }); });
@@ -195,11 +306,14 @@ async function start() {
   } catch (e) { logger.warn('Reminder job failed to start:', e.message); }
 
   logger.info('WhatsApp: WEBHOOK mode active at /api/whatsapp/webhook');
+  logger.info('Email notifications: DISABLED as requested');
+  logger.info('Backup service: ACTIVE (hourly backups, 6-month retention)');
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);
     logger.info(`Routes: ${loaded.length} loaded, ${failed.length} failed`);
-    logger.info(`Dashboard: /dashboard`);
+    logger.info(`Dashboard V3: /dashboard`);
+    logger.info(`Backup API: /api/backup/{create,list,restore}`);
   });
 }
 
