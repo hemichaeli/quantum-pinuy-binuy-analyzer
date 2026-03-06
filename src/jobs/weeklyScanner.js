@@ -117,10 +117,11 @@ async function sendSkipNotification(skipInfo) {
   `;
 
   try {
-    for (const email of notificationService.NOTIFICATION_EMAILS) {
-      await notificationService.sendEmail(email, subject, html);
-    }
-    logger.info(`Skip notification sent: ${skipInfo.reason}`);
+    // REMOVED: No longer send email notifications for daily scan
+    // for (const email of notificationService.NOTIFICATION_EMAILS) {
+    //   await notificationService.sendEmail(email, subject, html);
+    // }
+    logger.info(`Skip notification logged: ${skipInfo.reason} (email notifications disabled)`);
   } catch (err) {
     logger.warn('Failed to send skip notification', { error: err.message });
   }
@@ -248,89 +249,37 @@ function buildStepRows(steps) {
 
 /**
  * Send scan status notification with per-step breakdown
+ * DISABLED: Email notifications removed per user request
  */
 async function sendScanStatusNotification(result) {
-  if (!notificationService.isConfigured()) return;
-
+  // DISABLED: Email notifications removed per user request (requirement #11)
+  logger.info('Daily scan completed - email notifications disabled per user request');
+  
   const steps = result.steps || [];
   const failedCount = steps.filter(s => !s.success).length;
   const totalSteps = steps.length;
   const hasCriticalFailure = !!result.error;
   
-  // Determine overall status
-  let statusIcon, statusText, statusColor;
+  // Log scan results instead of sending email
   if (hasCriticalFailure) {
-    statusIcon = '❌';
-    statusText = 'סריקה יומית נכשלה';
-    statusColor = '#dc2626';
+    logger.error(`Daily scan failed: ${result.error}`);
   } else if (failedCount > 0) {
-    statusIcon = '⚠️';
-    statusText = `סריקה הושלמה עם ${failedCount} שגיאות`;
-    statusColor = '#d97706';
+    logger.warn(`Daily scan completed with ${failedCount}/${totalSteps} failed steps`);
   } else {
-    statusIcon = '✅';
-    statusText = 'סריקה יומית הושלמה בהצלחה';
-    statusColor = '#16a34a';
+    logger.info(`Daily scan completed successfully (${totalSteps} steps)`);
   }
 
-  const subject = `${statusIcon} [QUANTUM] ${statusText}`;
-
-  const israelTime = new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
-  const durationMin = result.duration ? Math.round(parseInt(result.duration) / 60) : '?';
-
-  const html = `
-    <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto;">
-      <h2 style="color: ${statusColor}; margin-bottom: 4px;">${statusIcon} ${statusText}</h2>
-      <p style="color: #6b7280; margin: 0 0 16px; font-size: 13px;">
-        ${israelTime} &nbsp;|&nbsp; ${durationMin} דקות &nbsp;|&nbsp; סריקה #${result.scanId || '?'}
-      </p>
-      
-      ${hasCriticalFailure ? `
-        <div style="background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 12px; margin: 0 0 16px;">
-          <strong style="color: #dc2626;">שגיאה קריטית:</strong> ${result.error}
-        </div>
-      ` : ''}
-      
-      <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
-        <thead>
-          <tr style="background: #f3f4f6;">
-            <th style="padding: 8px 12px; border: 1px solid #e5e7eb; text-align: center; width: 40px;">סטטוס</th>
-            <th style="padding: 8px 12px; border: 1px solid #e5e7eb; text-align: right;">שלב</th>
-            <th style="padding: 8px 12px; border: 1px solid #e5e7eb; text-align: right;">פירוט</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${buildStepRows(steps)}
-        </tbody>
-      </table>
-      
-      ${!hasCriticalFailure ? `
-        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: 13px;">
-          <strong>סיכום:</strong> 
-          ${result.directApi?.succeeded || 0} מתחמים נסרקו,
-          ${result.directApi?.totalNewTransactions || 0} עסקאות חדשות,
-          ${result.directApi?.totalNewListings || 0} מודעות חדשות,
-          ${result.discovery?.newAdded || 0} מתחמים חדשים,
-          ${result.alertsGenerated || 0} התראות
-        </div>
-      ` : ''}
-      
-      <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;">
-      <p style="font-size: 11px; color: #9ca3af; text-align: center;">
-        QUANTUM v4.8.3 - Direct API Mode (nadlan + yad2 + mavat)<br>
-        סריקה אוטומטית יומית ב-08:00 (ראשון-חמישי, לא בחגים)
-      </p>
-    </div>
-  `;
-
-  try {
-    for (const email of notificationService.NOTIFICATION_EMAILS) {
-      await notificationService.sendEmail(email, subject, html);
-    }
-    logger.info(`Scan notification sent: ${statusIcon} ${failedCount}/${totalSteps} failed`);
-  } catch (err) {
-    logger.warn('Failed to send scan status notification', { error: err.message });
-  }
+  // Log summary for internal tracking
+  const summary = {
+    status: hasCriticalFailure ? 'failed' : (failedCount > 0 ? 'partial' : 'success'),
+    steps: totalSteps,
+    failed: failedCount,
+    duration: result.duration,
+    timestamp: new Date().toISOString()
+  };
+  
+  logger.info('Scan summary', summary);
+  return summary;
 }
 
 /**
@@ -579,10 +528,10 @@ async function runWeeklyScan(options = {}) {
         alertCount, summary, scanId]
     );
 
-    // Send scan status notification
+    // Send scan status notification (now just logs, no email)
     await sendScanStatusNotification(lastRunResult);
 
-    // Send pending alerts
+    // Send pending alerts (internal system alerts, not email notifications)
     if (notificationService.isConfigured() && alertCount > 0) {
       try {
         await notificationService.sendPendingAlerts();
@@ -625,7 +574,7 @@ function startScheduler() {
         reasonHe: skipCheck.reasonHe
       };
       
-      // Send skip notification
+      // Send skip notification (now just logs, no email)
       await sendSkipNotification(skipCheck);
       return;
     }
@@ -655,6 +604,7 @@ function getSchedulerStatus() {
     mode: 'DIRECT_API', // No Perplexity!
     skipWeekends: true,
     skipHolidays: true,
+    emailNotifications: false, // DISABLED per user request
     todayStatus: todaySkipCheck.shouldSkip 
       ? `⏸️ SKIP: ${todaySkipCheck.reasonHe}` 
       : '✅ Active - will run',
