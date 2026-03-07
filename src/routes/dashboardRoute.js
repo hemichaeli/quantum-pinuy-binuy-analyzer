@@ -10,7 +10,7 @@ router.get('/', async (req, res) => {
                 pool.query('SELECT COUNT(*) as total FROM complexes'),
                 pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE'),
                 pool.query('SELECT COUNT(*) as total FROM complexes WHERE iai_score > 75'),
-                pool.query("SELECT COUNT(*) as total FROM listing_messages WHERE direction = 'received'"),
+                pool.query("SELECT COUNT(*) as total FROM whatsapp_conversations WHERE status = 'active'").catch(() => ({ rows: [{ total: 0 }] })),
                 pool.query("SELECT COUNT(*) as total FROM website_leads WHERE status IN ('contacted','qualified')"),
                 pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')"),
                 pool.query("SELECT COUNT(*) as total FROM kones_listings WHERE is_active = TRUE").catch(() => ({ rows: [{ total: 0 }] }))
@@ -39,7 +39,7 @@ router.get('/api/stats', async (req, res) => {
             pool.query('SELECT COUNT(*) as total FROM complexes'),
             pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE'),
             pool.query('SELECT COUNT(*) as total FROM complexes WHERE iai_score > 75'),
-            pool.query("SELECT COUNT(*) as total FROM listing_messages WHERE direction = 'received'"),
+            pool.query("SELECT COUNT(*) as total FROM whatsapp_conversations WHERE status = 'active'").catch(() => ({ rows: [{ total: 0 }] })),
             pool.query("SELECT COUNT(*) as total FROM website_leads WHERE status IN ('contacted','qualified')"),
             pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')")
         ]);
@@ -59,7 +59,6 @@ router.get('/api/stats', async (req, res) => {
 router.get('/api/kones', async (req, res) => {
     try {
         const { city, status, search } = req.query;
-        // Use correct column names matching the actual kones_listings table schema
         let query = `SELECT id, address, city, price, phone,
                             contact_status, contact_attempts, last_contact_at,
                             source, contact_person, email, url, gush_helka,
@@ -160,7 +159,6 @@ router.get('/api/ads', async (req, res) => {
         query += ` ORDER BY ${sortField} ${order} LIMIT $${n} OFFSET $${n + 1}`;
         params.push(parseInt(limit), offset);
         const result = await pool.query(query, params);
-        // Count with same filters applied
         let countQuery = `SELECT COUNT(*) as total FROM listings l WHERE l.is_active = TRUE AND l.asking_price > 0`;
         const countParams = [];
         let cn = 1;
@@ -252,6 +250,16 @@ function generateDashboardHTML(stats) {
         .error { background:#7f1d1d; border:1px solid #dc2626; color:#fecaca; padding:15px; border-radius:8px; margin:10px 0; }
         .filter-active-badge { background:rgba(212,175,55,0.2); border:1px solid #d4af37; color:#d4af37; padding:4px 12px; border-radius:20px; font-size:12px; margin-right:10px; display:inline-block; }
         .actions-bar { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:18px; align-items:center; }
+        .conv-item { padding:14px 16px; border-bottom:1px solid rgba(255,255,255,0.08); cursor:pointer; transition:background 0.15s; }
+        .conv-item:hover { background:rgba(212,175,55,0.1); }
+        .conv-item.active { background:rgba(212,175,55,0.15); border-right:3px solid #d4af37; }
+        .conv-name { font-weight:700; font-size:15px; color:#f0f0f0; margin-bottom:4px; }
+        .conv-preview { font-size:12px; color:#9ca3af; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; max-width:240px; }
+        .conv-meta { font-size:11px; color:#6b7280; margin-top:4px; display:flex; justify-content:space-between; }
+        .bubble { max-width:75%; padding:10px 14px; border-radius:16px; margin-bottom:10px; font-size:14px; line-height:1.5; word-break:break-word; }
+        .bubble-out { background:#1d4ed8; color:#fff; margin-right:auto; border-bottom-right-radius:4px; }
+        .bubble-in { background:#1f2937; color:#e5e7eb; margin-left:auto; border-bottom-left-radius:4px; }
+        .bubble-time { font-size:11px; opacity:0.6; margin-top:4px; }
         @media(max-width:768px){
             .header{padding:12px 10px;} .header h1{font-size:20px;}
             .nav-tabs{padding:8px 5px; top:72px;}
@@ -262,6 +270,9 @@ function generateDashboardHTML(stats) {
             .section{padding:15px 12px;}
             .filters{grid-template-columns:1fr;}
             .data-meta{grid-template-columns:1fr;}
+            #conv-panel{grid-template-columns:1fr!important;}
+            #conv-thread{display:none;}
+            #conv-thread.active{display:block;}
         }
     </style>
 </head>
@@ -297,8 +308,8 @@ function generateDashboardHTML(stats) {
             </div>
             <div class="stat-card" onclick="switchTab('messages')" title="לחץ לפתיחת הודעות">
                 <div class="stat-number">${stats.activeMessages}</div>
-                <div class="stat-label">הודעות נכנסות</div>
-                <div class="stat-hint">→ לחץ לפתיחת הודעות</div>
+                <div class="stat-label">שיחות WhatsApp</div>
+                <div class="stat-hint">→ לחץ לפתיחת מרכז השיחות</div>
                 <div class="stat-change">+23% השנה</div>
             </div>
             <div class="stat-card" onclick="switchTab('leads', 'qualified')" title="לחץ לפתיחת לידים מוכשרים">
@@ -370,14 +381,33 @@ function generateDashboardHTML(stats) {
         </div>
     </div>
 
-    <div id="tab-messages" class="tab-content">
-        <div class="section">
-            <h2>💬 מרכז הודעות</h2>
-            <div class="actions-bar">
-                <button class="btn" onclick="loadMessages()">🔄 טען הודעות</button>
-                <button class="btn btn-secondary" onclick="exportData('messages')">📊 ייצוא</button>
+    <div id="tab-messages" class="tab-content" style="padding:0;">
+        <div class="section" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+                <h2 style="margin:0;">💬 שיחות WhatsApp</h2>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <input type="text" class="filter-input" id="convSearchFilter" placeholder="חיפוש לפי שם/טלפון..." style="width:220px;" onkeyup="if(event.key==='Enter')loadConversations()">
+                    <select class="filter-select" id="convStatusFilter" style="width:140px;" onchange="loadConversations()">
+                        <option value="">כל הסטטוסים</option>
+                        <option value="active">פעילות</option>
+                        <option value="closed">סגורות</option>
+                        <option value="agent_needed">דורש טיפול</option>
+                    </select>
+                    <button class="btn" onclick="loadConversations()">🔄 רענן</button>
+                    <button class="btn btn-secondary" onclick="exportData('messages')">📊 ייצוא</button>
+                </div>
             </div>
-            <div id="messages-list" class="data-list"><div class="loading">טוען הודעות...</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:300px 1fr;height:calc(100vh - 230px);background:#0a0a0a;" id="conv-panel">
+            <div style="border-left:1px solid rgba(255,255,255,0.1);overflow-y:auto;background:#111;" id="conv-list">
+                <div class="loading">טוען שיחות...</div>
+            </div>
+            <div style="display:flex;flex-direction:column;overflow:hidden;" id="conv-thread">
+                <div style="text-align:center;padding:60px 20px;color:#6b7280;margin:auto;">
+                    <div style="font-size:48px;margin-bottom:16px;">💬</div>
+                    <p style="font-size:16px;">בחר שיחה מהרשימה לצפייה בהודעות</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -461,6 +491,7 @@ function generateDashboardHTML(stats) {
 
     <script>
         let currentTab = 'dashboard';
+        let activeConvPhone = null;
 
         document.addEventListener('DOMContentLoaded', function() {
             updateTime();
@@ -484,7 +515,7 @@ function generateDashboardHTML(stats) {
             currentTab = tabName;
             window.scrollTo(0, 0);
             if (tabName === 'ads') loadAds();
-            else if (tabName === 'messages') loadMessages();
+            else if (tabName === 'messages') loadConversations();
             else if (tabName === 'leads') loadLeads(filter || null);
             else if (tabName === 'complexes') loadComplexes(filter === 'hot' ? 'hot' : null);
             else if (tabName === 'kones') loadKones(filter || null);
@@ -523,24 +554,100 @@ function generateDashboardHTML(stats) {
                 '</div></div>';
         }
 
-        async function loadMessages() {
-            const container = document.getElementById('messages-list');
-            container.innerHTML = '<div class="loading">טוען הודעות...</div>';
+        // Issue #6 - Conversations View
+        async function loadConversations() {
+            const container = document.getElementById('conv-list');
+            container.innerHTML = '<div class="loading">טוען שיחות...</div>';
             try {
-                const data = await fetchJSON('/dashboard/api/whatsapp/messages');
+                const params = new URLSearchParams();
+                const search = document.getElementById('convSearchFilter')?.value;
+                const status = document.getElementById('convStatusFilter')?.value;
+                if (search) params.append('search', search);
+                if (status) params.append('status', status);
+                const data = await fetchJSON('/api/whatsapp/conversations?' + params);
                 if (!data.success) throw new Error(data.error);
-                if (!data.data.length) { container.innerHTML = '<div class="loading">📋 אין הודעות נכנסות</div>'; return; }
-                container.innerHTML = data.data.map(msg => renderMessage(msg)).join('');
-            } catch (e) { container.innerHTML = errorHTML(e.message, "loadMessages()"); }
+                if (!data.data.length) {
+                    container.innerHTML = '<div style="text-align:center;padding:30px;color:#6b7280;"><div style="font-size:32px;margin-bottom:10px;">📭</div><p>אין שיחות</p></div>';
+                    return;
+                }
+                container.innerHTML = data.data.map(conv => renderConvItem(conv)).join('');
+                // Re-highlight active
+                if (activeConvPhone) {
+                    const el = container.querySelector('[data-phone="' + activeConvPhone + '"]');
+                    if (el) el.classList.add('active');
+                }
+            } catch (e) { container.innerHTML = '<div style="padding:20px;color:#fca5a5;">שגיאה: ' + e.message + '</div>'; }
         }
 
-        function renderMessage(msg) {
-            return '<div class="data-item"><h3>' + (msg.sender_name || msg.sender_phone || 'שולח לא ידוע') + '</h3>' +
-                '<p style="margin:5px 0;color:#d1d5db;">' + (msg.message_content||'') + '</p>' +
-                '<div class="data-meta">' +
-                (msg.sender_phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + msg.sender_phone + '" style="color:#3b82f6;">' + msg.sender_phone + '</a></span></div>' : '') +
-                '<div class="data-meta-item"><span class="data-meta-label">תאריך:</span><span class="data-meta-value">' + (msg.created_at ? new Date(msg.created_at).toLocaleDateString('he-IL') : '') + '</span></div>' +
-                '</div></div>';
+        function renderConvItem(conv) {
+            const name = conv.display_name || conv.phone;
+            const preview = conv.last_message ? conv.last_message.substring(0, 45) + (conv.last_message.length > 45 ? '...' : '') : 'אין הודעות';
+            const dir = conv.last_direction === 'outgoing' ? '← ' : '→ ';
+            const date = conv.updated_at ? new Date(conv.updated_at).toLocaleDateString('he-IL') : '';
+            const statusColors = { active: '#22c55e', closed: '#6b7280', agent_needed: '#ef4444' };
+            const dot = statusColors[conv.status] || '#6b7280';
+            return '<div class="conv-item" data-phone="' + conv.phone + '" onclick="openConversation(\'' + conv.phone.replace(/'/g, '') + '\')">' +
+                '<div style="display:flex;align-items:center;gap:8px;">' +
+                '<div style="width:8px;height:8px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></div>' +
+                '<div class="conv-name">' + name + '</div>' +
+                '</div>' +
+                '<div class="conv-preview">' + dir + preview + '</div>' +
+                '<div class="conv-meta"><span>' + conv.phone + '</span><span>' + date + '</span></div>' +
+                '</div>';
+        }
+
+        async function openConversation(phone) {
+            activeConvPhone = phone;
+            // Highlight selected
+            document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
+            const item = document.querySelector('[data-phone="' + phone + '"]');
+            if (item) item.classList.add('active');
+
+            const thread = document.getElementById('conv-thread');
+            thread.innerHTML = '<div class="loading">טוען הודעות...</div>';
+            thread.classList.add('active');
+
+            try {
+                const data = await fetchJSON('/api/whatsapp/conversations/' + encodeURIComponent(phone) + '/messages');
+                if (!data.success) throw new Error(data.error);
+                const conv = data.conversation;
+                const name = conv?.display_name || phone;
+                const location = conv?.city || conv?.address || '';
+
+                let html = '<div style="background:#111;padding:16px;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:space-between;">' +
+                    '<div>' +
+                    '<div style="font-weight:700;font-size:16px;color:#f0f0f0;">' + name + '</div>' +
+                    '<div style="font-size:12px;color:#9ca3af;">' + phone + (location ? ' | ' + location : '') + '</div>' +
+                    '</div>' +
+                    '<div style="display:flex;gap:8px;">' +
+                    '<a href="tel:' + phone + '" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">📞 התקשר</a>' +
+                    '<a href="https://wa.me/' + phone.replace(/[^0-9]/g,'') + '" target="_blank" class="btn btn-green" style="padding:6px 12px;font-size:12px;">WhatsApp</a>' +
+                    '</div>' +
+                    '</div>';
+
+                if (!data.data.length) {
+                    html += '<div style="text-align:center;padding:40px;color:#6b7280;">אין הודעות בשיחה זו</div>';
+                } else {
+                    html += '<div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:4px;">';
+                    for (const msg of data.data) {
+                        const isOut = msg.direction === 'outgoing';
+                        const time = msg.created_at ? new Date(msg.created_at).toLocaleString('he-IL', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+                        html += '<div style="display:flex;justify-content:' + (isOut ? 'flex-end' : 'flex-start') + ';">' +
+                            '<div class="bubble ' + (isOut ? 'bubble-out' : 'bubble-in') + '">' +
+                            '<div>' + (msg.message || '').replace(/\n/g, '<br>') + '</div>' +
+                            '<div class="bubble-time" style="text-align:' + (isOut ? 'left' : 'right') + ';">' + time + '</div>' +
+                            '</div>' +
+                            '</div>';
+                    }
+                    html += '</div>';
+                }
+                thread.innerHTML = html;
+                // Scroll to bottom
+                const msgDiv = thread.querySelector('[style*="overflow-y:auto"]');
+                if (msgDiv) msgDiv.scrollTop = msgDiv.scrollHeight;
+            } catch (e) {
+                thread.innerHTML = '<div style="padding:20px;color:#fca5a5;">שגיאה: ' + e.message + '</div>';
+            }
         }
 
         async function loadLeads(filter) {
