@@ -231,6 +231,8 @@ function generateDashboardHTML(stats) {
         .btn-secondary { background:rgba(255,255,255,0.1); color:#fff; border:2px solid rgba(255,255,255,0.3); }
         .btn-secondary:hover { background:rgba(255,255,255,0.2); border-color:#d4af37; }
         .btn-green { background:linear-gradient(135deg,#16a34a,#22c55e); color:#fff; }
+        .btn-intel { background:linear-gradient(135deg,#4f46e5,#6366f1); color:#fff; border:none; }
+        .btn-intel:hover { box-shadow:0 4px 15px rgba(99,102,241,0.4); }
         .data-list { display:grid; gap:14px; }
         .data-item { background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:10px; padding:18px; border-right:4px solid #d4af37; transition:all 0.2s ease; }
         .data-item:hover { background:rgba(255,255,255,0.08); }
@@ -245,6 +247,8 @@ function generateDashboardHTML(stats) {
         .status-qualified { background:#22c55e; color:#000; }
         .status-closed { background:#8b5cf6; color:#fff; }
         .status-pending { background:#f59e0b; color:#000; }
+        .status-landline { background:#6b7280; color:#fff; }
+        .status-nophone { background:#374151; color:#9ca3af; }
         .loading { text-align:center; padding:40px; color:#9ca3af; }
         .loading::before { content:'⏳'; font-size:24px; margin-bottom:10px; display:block; }
         .error { background:#7f1d1d; border:1px solid #dc2626; color:#fecaca; padding:15px; border-radius:8px; margin:10px 0; }
@@ -260,6 +264,11 @@ function generateDashboardHTML(stats) {
         .bubble-out { background:#1d4ed8; color:#fff; margin-right:auto; border-bottom-right-radius:4px; }
         .bubble-in { background:#1f2937; color:#e5e7eb; margin-left:auto; border-bottom-left-radius:4px; }
         .bubble-time { font-size:11px; opacity:0.6; margin-top:4px; }
+        .intel-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+        .intel-item { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:8px; padding:12px 14px; margin-bottom:8px; }
+        .intel-item .name { font-weight:700; color:#f0f0f0; margin-bottom:4px; }
+        .intel-item .meta { font-size:12px; color:#9ca3af; }
+        .intel-score { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; margin-right:6px; }
         @media(max-width:768px){
             .header{padding:12px 10px;} .header h1{font-size:20px;}
             .nav-tabs{padding:8px 5px; top:72px;}
@@ -273,6 +282,7 @@ function generateDashboardHTML(stats) {
             #conv-panel{grid-template-columns:1fr!important;}
             #conv-thread{display:none;}
             #conv-thread.active{display:block;}
+            .intel-grid{grid-template-columns:1fr;}
         }
     </style>
 </head>
@@ -341,12 +351,21 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>⚡ פעולות מהירות</h2>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+                <button class="btn btn-intel" onclick="loadMorningIntelligence()">🧠 ינטליגנציה יומית</button>
                 <button class="btn" onclick="runAction('scan-yad2')">🏠 סרוק יד2</button>
                 <button class="btn" onclick="runAction('scan-facebook')">📱 סרוק פייסבוק</button>
                 <button class="btn" onclick="refreshStats()">🔄 רענן נתונים</button>
                 <button class="btn btn-secondary" onclick="window.open('/api/docs','_blank')">📋 API Docs</button>
                 <button class="btn btn-secondary" onclick="window.open('/sandbox','_blank')">🧪 Sandbox</button>
             </div>
+        </div>
+
+        <div class="section" id="morning-section" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+                <h2 style="margin:0;">🧠 ינטליגנציה יומית</h2>
+                <button class="btn btn-secondary" onclick="document.getElementById('morning-section').style.display='none'" style="padding:6px 12px;font-size:12px;">✕ סגור</button>
+            </div>
+            <div id="morning-content"><div class="loading">טוען...</div></div>
         </div>
 
         <div class="section">
@@ -461,16 +480,20 @@ function generateDashboardHTML(stats) {
                     <option value="">כל הסטטוסים</option>
                     <option value="pending">ממתין לפנייה</option>
                     <option value="contacted">נוצר קשר</option>
+                    <option value="landline">קו ארץ (דרוש שיחה)</option>
+                    <option value="no_phone">אין טלפון</option>
                     <option value="failed">נכשל</option>
                 </select>
             </div>
             <div class="actions-bar">
                 <button class="btn" onclick="loadKones()">🔍 טען כינוסים</button>
+                <button class="btn btn-secondary" onclick="loadKones('landline')">📞 קווי ארץ</button>
                 <button class="btn btn-secondary" onclick="loadKones('pending')">⏳ ממתינים</button>
                 <button class="btn btn-green" onclick="runKonesAutoContact()">📱 הפעל Auto Contact</button>
                 <button class="btn btn-secondary" onclick="exportData('kones')">📊 ייצוא</button>
             </div>
             <div id="kones-filter-badge" style="margin-bottom:10px;"></div>
+            <div id="kones-stats-bar" style="margin-bottom:12px;display:none;"></div>
             <div id="kones-list" class="data-list"><div class="loading">טוען כינוסי נכסים...</div></div>
         </div>
     </div>
@@ -519,6 +542,76 @@ function generateDashboardHTML(stats) {
             else if (tabName === 'leads') loadLeads(filter || null);
             else if (tabName === 'complexes') loadComplexes(filter === 'hot' ? 'hot' : null);
             else if (tabName === 'kones') loadKones(filter || null);
+        }
+
+        async function loadMorningIntelligence() {
+            const section = document.getElementById('morning-section');
+            const content = document.getElementById('morning-content');
+            section.style.display = 'block';
+            content.innerHTML = '<div class="loading">טוען ינטליגנציה יומית...</div>';
+            section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            try {
+                const data = await fetchJSON('/api/morning/preview');
+                const opps = data.opportunities || [];
+                const sellers = data.stressed_sellers || [];
+                const generated = data.generated_at ? new Date(data.generated_at).toLocaleString('he-IL') : '';
+
+                let html = '<p style="color:#6b7280;font-size:13px;margin-bottom:16px;">עודכן: ' + generated + '</p>';
+                html += '<div class="intel-grid">';
+
+                // Opportunities
+                html += '<div>';
+                html += '<h3 style="color:#22c55e;margin-bottom:12px;font-size:16px;">🔥 הזדמנויות חמות (' + opps.length + ')</h3>';
+                if (!opps.length) {
+                    html += '<p style="color:#6b7280;font-size:13px;">אין הזדמנויות כרגע</p>';
+                } else {
+                    for (const op of opps.slice(0, 8)) {
+                        const iai = op.iai_score || 0;
+                        const clr = iai > 85 ? '#22c55e' : iai > 70 ? '#f59e0b' : '#9ca3af';
+                        html += '<div class="intel-item">' +
+                            '<div class="name">' + (op.name || op.city || 'מתחם') + '</div>' +
+                            '<div class="meta">' +
+                            '<span class="intel-score" style="background:' + clr + ';color:#000;">IAI ' + iai + '</span>' +
+                            (op.city ? op.city : '') +
+                            (op.developer ? ' | ' + op.developer : '') +
+                            '</div></div>';
+                    }
+                }
+                html += '</div>';
+
+                // Stressed sellers
+                html += '<div>';
+                html += '<h3 style="color:#f59e0b;margin-bottom:12px;font-size:16px;">📉 מוכרים במצוקה (' + sellers.length + ')</h3>';
+                if (!sellers.length) {
+                    html += '<p style="color:#6b7280;font-size:13px;">אין מוכרים במצוקה כרגע</p>';
+                } else {
+                    for (const s of sellers.slice(0, 8)) {
+                        const ssi = s.ssi_score || 0;
+                        html += '<div class="intel-item" style="border-right-color:#f59e0b;">' +
+                            '<div class="name">' + (s.address || s.city || 'מוכר') + '</div>' +
+                            '<div class="meta">' +
+                            '<span class="intel-score" style="background:#f59e0b;color:#000;">SSI ' + ssi + '</span>' +
+                            (s.city ? s.city : '') +
+                            (s.asking_price ? ' | ₪' + parseInt(s.asking_price).toLocaleString() : '') +
+                            '</div></div>';
+                    }
+                }
+                html += '</div>';
+
+                html += '</div>';
+
+                if (data.price_drops_24h && data.price_drops_24h.length) {
+                    html += '<div style="margin-top:16px;"><h3 style="color:#ef4444;margin-bottom:12px;font-size:16px;">💸 הורדות מחיר 24 שעות (' + data.price_drops_24h.length + ')</h3>';
+                    for (const d of data.price_drops_24h.slice(0, 3)) {
+                        html += '<div class="intel-item" style="border-right-color:#ef4444;"><div class="name">' + (d.address || d.city || 'נכס') + '</div></div>';
+                    }
+                    html += '</div>';
+                }
+
+                content.innerHTML = html;
+            } catch (e) {
+                content.innerHTML = '<div class="error">שגיאה: ' + e.message + '</div>';
+            }
         }
 
         async function loadAds() {
@@ -571,7 +664,6 @@ function generateDashboardHTML(stats) {
                     return;
                 }
                 container.innerHTML = data.data.map(conv => renderConvItem(conv)).join('');
-                // Re-highlight active
                 if (activeConvPhone) {
                     const el = container.querySelector('[data-phone="' + activeConvPhone + '"]');
                     if (el) el.classList.add('active');
@@ -598,7 +690,6 @@ function generateDashboardHTML(stats) {
 
         async function openConversation(phone) {
             activeConvPhone = phone;
-            // Highlight selected
             document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
             const item = document.querySelector('[data-phone="' + phone + '"]');
             if (item) item.classList.add('active');
@@ -642,7 +733,6 @@ function generateDashboardHTML(stats) {
                     html += '</div>';
                 }
                 thread.innerHTML = html;
-                // Scroll to bottom
                 const msgDiv = thread.querySelector('[style*="overflow-y:auto"]');
                 if (msgDiv) msgDiv.scrollTop = msgDiv.scrollHeight;
             } catch (e) {
@@ -714,8 +804,16 @@ function generateDashboardHTML(stats) {
         async function loadKones(filter) {
             const container = document.getElementById('kones-list');
             const badge = document.getElementById('kones-filter-badge');
+            const statsBar = document.getElementById('kones-stats-bar');
             container.innerHTML = '<div class="loading">טוען כינוסי נכסים...</div>';
-            if (badge) badge.innerHTML = filter === 'pending' ? '<span class="filter-active-badge">⏳ מסנן: ממתינים לפנייה</span>' : '';
+            const filterLabels = {
+                pending: '⏳ מסנן: ממתינים לפנייה',
+                contacted: '✅ מסנן: נוצר קשר',
+                landline: '📞 מסנן: קווי ארץ (דרוש שיחה טלפונית)',
+                no_phone: '🚫 מסנן: אין טלפון',
+                failed: '❌ מסנן: נכשל'
+            };
+            if (badge) badge.innerHTML = filter && filterLabels[filter] ? '<span class="filter-active-badge">' + filterLabels[filter] + '</span>' : '';
             try {
                 const params = new URLSearchParams();
                 const city = document.getElementById('konesCityFilter')?.value;
@@ -726,23 +824,73 @@ function generateDashboardHTML(stats) {
                 if (status) params.append('status', status);
                 const data = await fetchJSON('/dashboard/api/kones?' + params);
                 if (!data.success) throw new Error(data.error);
-                if (!data.data.length) { container.innerHTML = '<div class="loading">🏗️ אין כינוסי נכסים</div>'; return; }
+
+                // Load stats bar (when showing all)
+                if (!status && statsBar) {
+                    try {
+                        const stats = await fetchJSON('/api/auto-contact/kones-stats');
+                        if (stats.success) {
+                            const s = stats.kones;
+                            statsBar.style.display = 'flex';
+                            statsBar.style.flexWrap = 'wrap';
+                            statsBar.style.gap = '8px';
+                            statsBar.innerHTML =
+                                '<span class="filter-active-badge" style="cursor:pointer;" onclick="loadKones(\'contacted\')">✅ נוצר קשר: ' + s.contacted + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(107,114,128,0.2);border-color:#6b7280;color:#9ca3af;cursor:pointer;" onclick="loadKones(\'landline\')">📞 קו ארץ: ' + s.landline + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(55,65,81,0.3);border-color:#374151;color:#6b7280;cursor:pointer;" onclick="loadKones(\'no_phone\')">🚫 אין טלפון: ' + s.no_phone + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(239,68,68,0.2);border-color:#ef4444;color:#fca5a5;cursor:pointer;" onclick="loadKones(\'failed\')">❌ נכשל: ' + s.failed + '</span>';
+                        }
+                    } catch(e) { /* ignore */ }
+                } else if (statsBar) {
+                    statsBar.style.display = 'none';
+                }
+
+                if (!data.data.length) { container.innerHTML = '<div class="loading">🏗️ אין כינוסי נכסים בסינון זה</div>'; return; }
                 container.innerHTML = data.data.map((k, i) => renderKones(k, i)).join('');
             } catch (e) { container.innerHTML = errorHTML(e.message, 'loadKones()'); }
         }
 
         function renderKones(k, i) {
-            const statusClass = { pending: 'status-pending', contacted: 'status-contacted', failed: 'status-new' };
-            const statusLabel = { pending: 'ממתין', contacted: 'נוצר קשר', failed: 'נכשל' };
+            const statusClass = {
+                pending: 'status-pending',
+                contacted: 'status-contacted',
+                failed: 'status-new',
+                landline: 'status-landline',
+                no_phone: 'status-nophone'
+            };
+            const statusLabel = {
+                pending: 'ממתין',
+                contacted: 'נוצר קשר',
+                failed: 'נכשל',
+                landline: 'קו ארץ',
+                no_phone: 'אין טלפון'
+            };
             const st = k.contact_status || 'pending';
-            return '<div class="data-item"><h3>🏗️ ' + (k.address || 'כינוס #' + (i+1)) + '</h3><div class="data-meta">' +
+            const isLandline = st === 'landline';
+            const noPhone = st === 'no_phone';
+            const borderColor = isLandline ? '#6b7280' : noPhone ? '#374151' : '#d4af37';
+
+            // Phone display: landline gets phone-only, mobile gets WhatsApp too
+            let phoneHtml = '';
+            if (k.phone && !noPhone) {
+                phoneHtml = '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value">' +
+                    '<a href="tel:' + k.phone + '" style="color:#3b82f6;">' + k.phone + '</a>';
+                if (isLandline) {
+                    phoneHtml += ' <span style="background:#f59e0b;color:#000;padding:2px 8px;border-radius:4px;font-size:12px;">📞 שיחה טלפונית</span>';
+                } else {
+                    phoneHtml += ' <a href="https://wa.me/' + k.phone.replace(/[^0-9]/g,'') + '" style="background:#22c55e;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:12px;">WhatsApp</a>';
+                }
+                phoneHtml += '</span></div>';
+            }
+
+            return '<div class="data-item" style="border-right-color:' + borderColor + '"><h3>🏗️ ' + (k.address || 'כינוס #' + (i+1)) + '</h3><div class="data-meta">' +
                 '<div class="data-meta-item"><span class="data-meta-label">עיר:</span><span class="data-meta-value">' + (k.city||'לא ידוע') + '</span></div>' +
                 (k.gush_helka ? '<div class="data-meta-item"><span class="data-meta-label">גוש/חלקה:</span><span class="data-meta-value">' + k.gush_helka + '</span></div>' : '') +
                 (k.price ? '<div class="data-meta-item"><span class="data-meta-label">מחיר:</span><span class="data-meta-value">₪' + parseInt(k.price).toLocaleString() + '</span></div>' : '') +
                 '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge ' + (statusClass[st]||'status-pending') + '">' + (statusLabel[st]||st) + '</span></span></div>' +
                 (k.contact_person ? '<div class="data-meta-item"><span class="data-meta-label">כונס:</span><span class="data-meta-value">' + k.contact_person + '</span></div>' : '') +
                 (k.contact_attempts ? '<div class="data-meta-item"><span class="data-meta-label">ניסיונות פנייה:</span><span class="data-meta-value">' + k.contact_attempts + '</span></div>' : '') +
-                (k.phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + k.phone + '" style="color:#3b82f6;">' + k.phone + '</a> <a href="https://wa.me/' + k.phone.replace(/[^0-9]/g,'') + '" style="background:#22c55e;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:12px;">WhatsApp</a></span></div>' : '') +
+                phoneHtml +
                 (k.url ? '<div class="data-meta-item"><span class="data-meta-label">קישור:</span><span class="data-meta-value"><a href="' + k.url + '" target="_blank" style="color:#3b82f6;">פתח כינוס</a></span></div>' : '') +
                 '</div></div>';
         }
@@ -751,8 +899,12 @@ function generateDashboardHTML(stats) {
             if (!confirm('להפעיל Auto Contact לכינוסי נכסים?')) return;
             try {
                 const res = await fetch('/api/auto-contact/run-kones', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-                if (res.ok) { alert('✅ Auto Contact לכינוסים הופעל!'); loadKones(); }
-                else throw new Error('HTTP ' + res.status);
+                if (res.ok) {
+                    const d = await res.json();
+                    const r = d.result || {};
+                    alert('✅ Auto Contact הופעל!\n\nנוצר קשר: ' + (r.contacted||0) + '\nקווי ארץ (נדרשת שיחה): ' + (r.skipped_landline||0) + '\nאין טלפון: ' + (r.skipped_no_phone||0) + '\nנכשל: ' + (r.failed||0));
+                    loadKones();
+                } else throw new Error('HTTP ' + res.status);
             } catch (e) { alert('❌ נכשל: ' + e.message); }
         }
 
