@@ -1,29 +1,26 @@
 /**
- * QUANTUM Bot Engine v2
- * Fixes:
- *  1. NULL campaignId SQL bug (IS NOT DISTINCT FROM)
- *  2. Combined date+time slot selection (1 step instead of 2)
- *  3. Google Calendar link in confirmation
- *  4. Graceful handling of confirmed/closed states
+ * QUANTUM Bot Engine v3
+ * Visual booking calendar: sends a personalized link instead of text slot list.
+ * Sequential fill, show_rep_name toggle, Google Calendar link in confirmation.
  */
 
 const pool = require('../db/pool');
 const inforuService = require('./inforuService');
 const zoho = require('./zohoSchedulingService');
 const { logger } = require('./logger');
+const crypto = require('crypto');
 
-// ── Google Calendar link builder ──────────────────────────────
+const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : 'https://pinuy-binuy-analyzer-production.up.railway.app';
+
 function buildGCalLink(title, datetimeStr, durationMins = 45, location = '') {
   try {
     const start = new Date(datetimeStr);
     const end = new Date(start.getTime() + durationMins * 60000);
     const fmt = (d) => d.toISOString().replace(/[-:.]/g, '').substring(0, 15) + 'Z';
-    const base = 'https://calendar.google.com/calendar/render?action=TEMPLATE';
-    const params = `&text=${encodeURIComponent(title)}&dates=${fmt(start)}/${fmt(end)}&location=${encodeURIComponent(location)}&sf=true`;
-    return base + params;
-  } catch (e) {
-    return null;
-  }
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${fmt(start)}/${fmt(end)}&location=${encodeURIComponent(location)}&sf=true`;
+  } catch (e) { return null; }
 }
 
 const STRINGS = {
@@ -45,20 +42,9 @@ const STRINGS = {
     },
     ceremonyDeclined: `תודה שעדכנת אותנו. נציג שלנו ייצור איתך קשר בהקדם.`,
     ceremonyMaybe: `מובן. נחזור אליך קרוב לתאריך הכנס לאישור סופי.`,
-    meetingIntro: (name, type) => `שלום ${name} 👋\nQUANTUM כאן.\n\nנשמח לתאם *${type}* עבור דירתך.\n\nבחר/י מועד נוח:`,
-    selectSlot: (slots) => {
-      let msg = `\n\n`;
-      slots.forEach((s, i) => {
-        const dayName = (s.day_name || '').trim();
-        msg += `${i + 1}️⃣ ${dayName} ${s.date_str} ⏰ ${s.time} — ${s.rep_name || ''}\n`;
-      });
-      return msg;
-    },
-    meetingConfirm: (type, date, time, rep, gcalLink) => {
-      let msg = `✅ *${type} נקבעה!*\n\n📅 ${date}\n⏰ ${String(time).substring(0,5)}\n👤 ${rep}\n\nתקבל/י תזכורת יום לפני. להתראות! 👋`;
-      if (gcalLink) msg += `\n\n📆 הוסף ליומן: ${gcalLink}`;
-      return msg;
-    },
+    // Visual booking link message
+    bookingLink: (name, type, url) =>
+      `שלום ${name} 👋\nQUANTUM כאן.\n\nנשמח לתאם *${type}* עבור דירתך.\n\n📅 לבחירת מועד נוח - לחץ/י על הקישור:\n${url}\n\nהקישור תקף ל-48 שעות.`,
     alreadyConfirmed: (date, time) => `✅ הפגישה שלך כבר נקבעה ל-${date} ⏰ ${time}.\n\nלשינויים - פנה/י ישירות לנציג QUANTUM.`,
     noSlots: `כרגע אין חלונות זמן פנויים. נציג שלנו ייצור איתך קשר בהקדם.`,
     invalidChoice: `לא הבנתי את הבחירה. אנא הקלד/י את המספר המתאים.`,
@@ -82,20 +68,8 @@ const STRINGS = {
     },
     ceremonyDeclined: `Спасибо за уведомление. Наш представитель свяжется с вами в ближайшее время.`,
     ceremonyMaybe: `Понятно. Мы свяжемся с вами ближе к дате церемонии.`,
-    meetingIntro: (name, type) => `Здравствуйте, ${name} 👋\nQUANTUM на связи.\n\nГотовы записать вас на *${type}*.\n\nВыберите удобное время:`,
-    selectSlot: (slots) => {
-      let msg = `\n\n`;
-      slots.forEach((s, i) => {
-        const dayName = (s.day_name || '').trim();
-        msg += `${i + 1}️⃣ ${dayName} ${s.date_str} ⏰ ${s.time} — ${s.rep_name || ''}\n`;
-      });
-      return msg;
-    },
-    meetingConfirm: (type, date, time, rep, gcalLink) => {
-      let msg = `✅ *${type} назначена!*\n\n📅 ${date}\n⏰ ${String(time).substring(0,5)}\n👤 ${rep}\n\nНапомним за сутки. До встречи! 👋`;
-      if (gcalLink) msg += `\n\n📆 Добавить в календарь: ${gcalLink}`;
-      return msg;
-    },
+    bookingLink: (name, type, url) =>
+      `Здравствуйте, ${name} 👋\nQUANTUM на связи.\n\nГотовы назначить *${type}* для вашей квартиры.\n\n📅 Выберите удобное время по ссылке:\n${url}\n\nСсылка действует 48 часов.`,
     alreadyConfirmed: (date, time) => `✅ Встреча уже назначена на ${date} ⏰ ${time}.\n\nДля изменений — обратитесь к представителю QUANTUM.`,
     noSlots: `Свободных слотов нет. Наш представитель свяжется с вами в ближайшее время.`,
     invalidChoice: `Не понял выбор. Пожалуйста, введите номер из предложенных.`,
@@ -107,9 +81,6 @@ const MEETING_TYPE_LABELS = {
   he: { consultation:'פגישת ייעוץ', physical:'פגישה פיזית במשרד', appraiser:'ביקור שמאי', surveyor:'ביקור מודד', signing_ceremony:'כנס חתימות' },
   ru: { consultation:'Консультация', physical:'Встреча в офисе', appraiser:'Визит оценщика', surveyor:'Визит геодезиста', signing_ceremony:'Церемония подписания' }
 };
-
-const DAY_NAMES_HE = { Sunday:'ראשון', Monday:'שני', Tuesday:'שלישי', Wednesday:'רביעי', Thursday:'חמישי', Friday:'שישי', Saturday:'שבת' };
-const DAY_NAMES_RU = { Sunday:'Воскресенье', Monday:'Понедельник', Tuesday:'Вторник', Wednesday:'Среда', Thursday:'Четверг', Friday:'Пятница', Saturday:'Суббота' };
 
 class BotEngine {
 
@@ -129,7 +100,6 @@ class BotEngine {
   }
 
   // ── SESSION ───────────────────────────────────────────────────
-  // FIX: Use IS NOT DISTINCT FROM to handle NULL campaignId correctly
   async getOrCreateSession(phone, campaignId) {
     const res = await pool.query(
       `SELECT * FROM bot_sessions WHERE phone=$1 AND zoho_campaign_id IS NOT DISTINCT FROM $2`,
@@ -162,11 +132,23 @@ class BotEngine {
     s.context = { contactName };
     this._zohoStatus(s, 'bot_sent').catch(() => {});
 
-    // Send identity confirmation immediately
+    // Send identity confirmation immediately on new session
     const confirmMsg = STRINGS[lang].confirmIdentity(contactName || 'שלום');
     await inforuService.sendWhatsApp(phone, confirmMsg);
 
     return s;
+  }
+
+  // ── Generate / retrieve booking token ────────────────────────
+  async getBookingToken(session) {
+    if (session.booking_token) return session.booking_token;
+    const token = crypto.randomBytes(16).toString('hex');
+    await pool.query(
+      `UPDATE bot_sessions SET booking_token=$1 WHERE phone=$2 AND zoho_campaign_id IS NOT DISTINCT FROM $3`,
+      [token, session.phone, session.zoho_campaign_id]
+    );
+    session.booking_token = token;
+    return token;
   }
 
   // ── STATE MACHINE ─────────────────────────────────────────────
@@ -176,18 +158,18 @@ class BotEngine {
     const ctx = session.context;
     const state = session.state;
 
-    // ── ALREADY CONFIRMED / CLOSED ───────────────────────────────
+    // ── ALREADY CONFIRMED ─────────────────────────────────────
     if (state === 'confirmed') {
       const slot = ctx.confirmedSlot || {};
       const dateStr = slot.dateStr || slot.date_str || '';
-      const time = String(slot.time || '').substring(0, 5);
+      const time = String(slot.time || slot.timeStr || '').substring(0, 5);
       return S.alreadyConfirmed(dateStr, time);
     }
     if (state === 'closed' || state === 'ceremony_declined' || state === 'ceremony_maybe') {
-      return null; // Silent - no reply needed
+      return null;
     }
 
-    // ── CONFIRM IDENTITY ────────────────────────────────────────
+    // ── CONFIRM IDENTITY ──────────────────────────────────────
     if (state === 'confirm_identity') {
       if (msg === '1') {
         this._zohoStatus(session, 'answered').catch(() => {});
@@ -201,24 +183,38 @@ class BotEngine {
           session.state = 'ceremony_confirm_attendance';
           return S.ceremonyIntro(ctx.contactName || '', ceremony);
         } else {
-          // FIX: Combine date+time into one selection step
-          const slots = await this.getAllAvailableSlots(session.zoho_campaign_id);
-          if (!slots.length) return S.noSlots;
-          ctx.availableSlots = slots;
-          session.state = 'meeting_select_slot';
+          // ── VISUAL BOOKING: generate token, send link ──────
+          const hasSlots = await this.hasAvailableSlots(session.zoho_campaign_id);
+          if (!hasSlots) return S.noSlots;
+
+          const token = await this.getBookingToken(session);
+          const bookingUrl = `${BASE_URL}/booking/${token}`;
+          session.state = 'booking_link_sent';
+
           const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)[config.meeting_type] || config.meeting_type;
-          return S.meetingIntro(ctx.contactName || '', typeLabel) + S.selectSlot(slots);
+          return S.bookingLink(ctx.contactName || '', typeLabel, bookingUrl);
         }
       } else if (msg === '2') {
         session.state = 'closed';
         this._zohoStatus(session, 'answered', 'לא זוהה כבעל הדירה').catch(() => {});
         return S.wrongPerson;
       }
-      // Resend identity question on invalid input
+      // Resend on invalid input
       return S.confirmIdentity(ctx.contactName || 'שלום');
     }
 
-    // ── CEREMONY: CONFIRM ATTENDANCE ────────────────────────────
+    // ── BOOKING LINK SENT - user writes back ──────────────────
+    // Could be they already booked via the link (state updated by bookingRoute)
+    // or they're asking something - just remind them of the link
+    if (state === 'booking_link_sent') {
+      const token = await this.getBookingToken(session);
+      const bookingUrl = `${BASE_URL}/booking/${token}`;
+      const config = ctx.config || await this.getCampaignConfig(session.zoho_campaign_id);
+      const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)[config.meeting_type] || '';
+      return S.bookingLink(ctx.contactName || '', typeLabel, bookingUrl);
+    }
+
+    // ── CEREMONY: CONFIRM ATTENDANCE ──────────────────────────
     if (state === 'ceremony_confirm_attendance') {
       if (msg === '1') {
         this._zohoStatus(session, 'answered', 'אישר הגעה לכנס - בוחר שעה').catch(() => {});
@@ -239,7 +235,7 @@ class BotEngine {
       return S.invalidChoice;
     }
 
-    // ── CEREMONY: SELECT SLOT ────────────────────────────────────
+    // ── CEREMONY: SELECT SLOT ─────────────────────────────────
     if (state === 'ceremony_select_slot') {
       const idx = parseInt(msg) - 1;
       const slots = ctx.availableSlots || [];
@@ -258,50 +254,13 @@ class BotEngine {
 
       const meetingDt = `${chosen.slot_date} ${chosen.time}`;
       const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)['signing_ceremony'];
-      const gcalLink = buildGCalLink(
-        `QUANTUM - ${typeLabel}`,
-        meetingDt, 30,
-        ctx.ceremony.location || ''
-      );
+      const gcalLink = buildGCalLink(`QUANTUM - ${typeLabel}`, meetingDt, 30, ctx.ceremony.location || '');
 
-      this._zohoStatus(session, 'confirmed',
-        `אישר כנס חתימות: ${chosen.dateStr} ${String(chosen.time).substring(0,5)}`).catch(() => {});
+      this._zohoStatus(session, 'confirmed', `אישר כנס חתימות: ${chosen.dateStr} ${String(chosen.time).substring(0,5)}`).catch(() => {});
       this._zohoActivity(session, 'signing_ceremony', meetingDt, chosen).catch(() => {});
       await this.scheduleReminders(session, meetingDt);
 
       return S.ceremonyConfirm(chosen.dateStr, chosen.time, ctx.ceremony.location, chosen.repName || '', gcalLink);
-    }
-
-    // ── MEETING: SELECT COMBINED SLOT (date+time in one step) ───
-    if (state === 'meeting_select_slot') {
-      const idx = parseInt(msg) - 1;
-      const slots = ctx.availableSlots || [];
-      if (isNaN(idx) || idx < 0 || idx >= slots.length) {
-        return S.invalidChoice + '\n' + S.selectSlot(slots);
-      }
-
-      const chosen = slots[idx];
-      const locked = await this.lockMeetingSlot(chosen.id, session);
-      if (!locked) {
-        const fresh = await this.getAllAvailableSlots(session.zoho_campaign_id);
-        if (!fresh.length) return S.noSlots;
-        ctx.availableSlots = fresh;
-        return S.ceremonySlotTaken + S.selectSlot(fresh);
-      }
-
-      session.state = 'confirmed';
-      ctx.confirmedSlot = chosen;
-
-      const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)[ctx.config?.meeting_type] || '';
-      const gcalTitle = `QUANTUM - ${typeLabel}`;
-      const gcalLink = buildGCalLink(gcalTitle, chosen.slot_datetime, 45, '');
-
-      this._zohoStatus(session, 'confirmed',
-        `אישר ${typeLabel}: ${chosen.date_str} ${chosen.time}`).catch(() => {});
-      this._zohoActivity(session, ctx.config?.meeting_type, chosen.slot_datetime, chosen).catch(() => {});
-      await this.scheduleReminders(session, chosen.slot_datetime);
-
-      return S.meetingConfirm(typeLabel, `${chosen.day_name_he || ''} ${chosen.date_str}`, chosen.time, chosen.rep_name || '', gcalLink);
     }
 
     return S.error;
@@ -342,40 +301,17 @@ class BotEngine {
   }
 
   // ── DB HELPERS ────────────────────────────────────────────────
-  // FIX: New combined slots query (date+time+rep in one step)
-  async getAllAvailableSlots(campaignId) {
+  async hasAvailableSlots(campaignId) {
     const res = await pool.query(
-      `SELECT id, slot_datetime,
-              TO_CHAR(slot_datetime AT TIME ZONE 'Asia/Jerusalem', 'Day') AS day_name,
-              TO_CHAR(slot_datetime AT TIME ZONE 'Asia/Jerusalem', 'DD/MM') AS date_str,
-              TO_CHAR(slot_datetime AT TIME ZONE 'Asia/Jerusalem', 'HH24:MI') AS time,
-              representative_name AS rep_name
-       FROM meeting_slots
-       WHERE campaign_id=$1 AND status='open' AND slot_datetime > NOW()
-       ORDER BY slot_datetime LIMIT 8`,
+      `SELECT 1 FROM meeting_slots WHERE campaign_id=$1 AND status='open' AND slot_datetime > NOW() LIMIT 1`,
       [campaignId]
     );
-    // Add Hebrew day names
-    return res.rows.map(r => ({
-      ...r,
-      day_name: (r.day_name || '').trim(),
-      day_name_he: DAY_NAMES_HE[(r.day_name || '').trim()] || (r.day_name || '').trim()
-    }));
+    return res.rows.length > 0;
   }
 
   async lockSlot(slotId, session) {
     const res = await pool.query(
       `UPDATE ceremony_slots SET status='confirmed', reserved_at=NOW(),
-       contact_phone=$1, zoho_contact_id=$2
-       WHERE id=$3 AND status='open' RETURNING id`,
-      [session.phone, session.zoho_contact_id, slotId]
-    );
-    return res.rows.length > 0;
-  }
-
-  async lockMeetingSlot(slotId, session) {
-    const res = await pool.query(
-      `UPDATE meeting_slots SET status='confirmed', reserved_at=NOW(),
        contact_phone=$1, zoho_contact_id=$2
        WHERE id=$3 AND status='open' RETURNING id`,
       [session.phone, session.zoho_contact_id, slotId]
@@ -423,7 +359,6 @@ class BotEngine {
     const pre2h = config.morning_reminder_hours || 2;
     const meetingDate = new Date(meetingDatetime);
     const now = new Date();
-
     for (const r of [
       { type: 'pre_meeting_24h', at: new Date(meetingDate.getTime() - pre24h * 3600000) },
       { type: 'pre_meeting_2h',  at: new Date(meetingDate.getTime() - pre2h * 3600000) }
@@ -433,8 +368,7 @@ class BotEngine {
           `INSERT INTO reminder_queue (phone, zoho_contact_id, zoho_campaign_id, reminder_type, scheduled_at, payload)
            VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
           [session.phone, session.zoho_contact_id, session.zoho_campaign_id, r.type, r.at,
-           JSON.stringify({ meetingDatetime, language: session.language,
-             contactName: session.context?.contactName || '' })]
+           JSON.stringify({ meetingDatetime, language: session.language, contactName: session.context?.contactName || '' })]
         );
       }
     }
