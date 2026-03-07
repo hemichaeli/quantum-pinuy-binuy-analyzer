@@ -3,9 +3,10 @@ const { logger } = require('./logger');
 
 /**
  * AUTO FIRST CONTACT SERVICE - P0
- * Sends automatic WhatsApp first contact to new sellers from Yad2 + Facebook.
+ * Sends automatic WhatsApp first contact to new sellers from Yad2 + Facebook + Kones.
  * Runs every 30 minutes via cron.
  * Issue #3: https://github.com/hemichaeli/pinuy-binuy-analyzer/issues/3
+ * Issue #5: https://github.com/hemichaeli/pinuy-binuy-analyzer/issues/5 (kones)
  */
 
 const MAX_PER_RUN = 20;        // max messages per cron run
@@ -22,13 +23,19 @@ async function runMigrations() {
     `ALTER TABLE listings ADD COLUMN IF NOT EXISTS last_contact_at TIMESTAMP`,
     `CREATE INDEX IF NOT EXISTS idx_listings_contact_status ON listings(contact_status) WHERE is_active = TRUE`,
     `CREATE INDEX IF NOT EXISTS idx_listings_phone ON listings(phone) WHERE phone IS NOT NULL`,
+    // Kones contact columns
+    `ALTER TABLE kones_listings ADD COLUMN IF NOT EXISTS phone VARCHAR(30)`,
+    `ALTER TABLE kones_listings ADD COLUMN IF NOT EXISTS contact_status VARCHAR(30) DEFAULT NULL`,
+    `ALTER TABLE kones_listings ADD COLUMN IF NOT EXISTS contact_attempts INTEGER DEFAULT 0`,
+    `ALTER TABLE kones_listings ADD COLUMN IF NOT EXISTS last_contact_at TIMESTAMP`,
+    `CREATE INDEX IF NOT EXISTS idx_kones_contact_status ON kones_listings(contact_status) WHERE is_active = TRUE`,
+    `CREATE INDEX IF NOT EXISTS idx_kones_phone ON kones_listings(phone) WHERE phone IS NOT NULL`,
   ];
 
   for (const sql of migrations) {
     try {
       await pool.query(sql);
     } catch (err) {
-      // Ignore "already exists" errors silently
       if (!err.message.includes('already exists')) {
         logger.warn('[AutoContact] Migration warning:', err.message);
       }
@@ -51,6 +58,13 @@ function buildMessage(listing) {
   return `שלום,\nראיתי שיש לך נכס למכירה ב${address}.\nאנחנו מ-QUANTUM, משרד תיווך המתמחה בפינוי-בינוי.\nיש לנו קונים רציניים מאוד לאזור שלך.\nנשמח לשוחח - QUANTUM Real Estate 🏠`;
 }
 
+// Build message for kones (receivership) listings
+function buildKonesMessage(listing) {
+  const city = listing.city || 'האזור';
+  const address = listing.address || city;
+  return `שלום,\nראינו שיש נכס בכינוס נכסים ב${address}${city !== address ? ', ' + city : ''}.\nאנחנו מ-QUANTUM, משרד תיווך בוטיק המתמחה בפינוי-בינוי.\nיש לנו קונים מעוניינים.\nהאם תרצה לשוחח? - QUANTUM Real Estate 🏗`;
+}
+
 // Normalize phone to Israeli format
 function normalizePhone(phone) {
   if (!phone) return null;
@@ -65,7 +79,6 @@ function normalizePhone(phone) {
 // Save outgoing message to whatsapp_conversations + whatsapp_messages tables
 async function saveToWhatsAppTables(phone, message, listingId, source) {
   try {
-    // Upsert conversation
     const convResult = await pool.query(
       `INSERT INTO whatsapp_conversations (phone, status, source, created_at, updated_at)
        VALUES ($1, 'active', $2, NOW(), NOW())
@@ -77,14 +90,12 @@ async function saveToWhatsAppTables(phone, message, listingId, source) {
     const conversationId = convResult.rows[0]?.id;
     if (!conversationId) return;
 
-    // Insert outgoing message
     await pool.query(
       `INSERT INTO whatsapp_messages (conversation_id, phone, direction, message, status, listing_id, created_at)
        VALUES ($1, $2, 'outgoing', $3, 'sent', $4, NOW())`,
       [conversationId, phone, message, listingId]
     );
   } catch (err) {
-    // whatsapp_conversations might not have all columns - log and continue
     logger.warn(`[AutoContact] Could not save to WA tables: ${err.message}`);
   }
 }
@@ -135,7 +146,6 @@ async function runAutoFirstContact() {
   logger.info('[AutoContact] Starting run...');
 
   try {
-    // Fetch new listings needing first contact
     const { rows: listings } = await pool.query(
       `SELECT id, source, address, city, phone, contact_name, asking_price, source_listing_id
        FROM listings
@@ -174,7 +184,6 @@ async function runAutoFirstContact() {
         const result = await sendWhatsAppMessage(phone, message);
 
         if (result.success) {
-          // Update listing contact status
           await pool.query(
             `UPDATE listings
              SET contact_status = 'contacted',
@@ -183,14 +192,10 @@ async function runAutoFirstContact() {
              WHERE id = $1`,
             [listing.id]
           );
-
-          // Save to WhatsApp tables
           await saveToWhatsAppTables(phone, message, listing.id, listing.source);
-
           contacted++;
           logger.info(`[AutoContact] Sent to ${phone} (listing ${listing.id}, ${listing.city})`);
         } else {
-          // Soft failure - mark as failed but allow retry
           await pool.query(
             `UPDATE listings
              SET contact_status = 'send_failed',
@@ -205,7 +210,6 @@ async function runAutoFirstContact() {
       } catch (err) {
         errors++;
         logger.error(`[AutoContact] Error for listing ${listing.id}: ${err.message}`);
-
         try {
           await pool.query(
             `UPDATE listings SET contact_status = 'error', last_contact_at = NOW() WHERE id = $1`,
@@ -214,7 +218,6 @@ async function runAutoFirstContact() {
         } catch (e) { /* ignore */ }
       }
 
-      // Rate limit delay between sends
       if (contacted + errors + skipped < listings.length) {
         await new Promise(r => setTimeout(r, DELAY_BETWEEN_MS));
       }
@@ -226,6 +229,98 @@ async function runAutoFirstContact() {
 
   } catch (err) {
     logger.error('[AutoContact] Run failed:', err.message);
+    return { contacted: 0, skipped: 0, errors: 1, fatal: err.message };
+  }
+}
+
+// Issue #5: Auto first contact for KONES listings
+async function runKonesAutoContact() {
+  logger.info('[KonesContact] Starting run...');
+
+  try {
+    const { rows: listings } = await pool.query(
+      `SELECT id, address, city, phone, contact_name, price, source_site
+       FROM kones_listings
+       WHERE contact_status IS NULL
+         AND phone IS NOT NULL
+         AND phone != ''
+         AND is_active = TRUE
+         AND created_at > NOW() - INTERVAL '72 hours'
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [10]  // smaller batch for kones - more sensitive
+    );
+
+    if (listings.length === 0) {
+      logger.info('[KonesContact] No new kones listings to contact');
+      return { contacted: 0, skipped: 0, errors: 0 };
+    }
+
+    logger.info(`[KonesContact] Found ${listings.length} kones listings to contact`);
+
+    let contacted = 0, skipped = 0, errors = 0;
+
+    for (const listing of listings) {
+      const phone = normalizePhone(listing.phone);
+      if (!phone) {
+        skipped++;
+        await pool.query(
+          `UPDATE kones_listings SET contact_status = 'invalid_phone' WHERE id = $1`,
+          [listing.id]
+        );
+        continue;
+      }
+
+      try {
+        const message = buildKonesMessage(listing);
+        const result = await sendWhatsAppMessage(phone, message);
+
+        if (result.success) {
+          await pool.query(
+            `UPDATE kones_listings
+             SET contact_status = 'contacted',
+                 contact_attempts = 1,
+                 last_contact_at = NOW()
+             WHERE id = $1`,
+            [listing.id]
+          );
+          await saveToWhatsAppTables(phone, message, null, 'kones');
+          contacted++;
+          logger.info(`[KonesContact] Sent to ${phone} (kones ${listing.id}, ${listing.city})`);
+        } else {
+          await pool.query(
+            `UPDATE kones_listings
+             SET contact_status = 'send_failed',
+                 contact_attempts = COALESCE(contact_attempts, 0) + 1,
+                 last_contact_at = NOW()
+             WHERE id = $1`,
+            [listing.id]
+          );
+          errors++;
+          logger.warn(`[KonesContact] Send failed for ${phone}: ${result.description}`);
+        }
+      } catch (err) {
+        errors++;
+        logger.error(`[KonesContact] Error for kones ${listing.id}: ${err.message}`);
+        try {
+          await pool.query(
+            `UPDATE kones_listings SET contact_status = 'error', last_contact_at = NOW() WHERE id = $1`,
+            [listing.id]
+          );
+        } catch (e) { /* ignore */ }
+      }
+
+      if (contacted + errors + skipped < listings.length) {
+        await new Promise(r => setTimeout(r, DELAY_BETWEEN_MS));
+      }
+    }
+
+    const summary = { contacted, skipped, errors, total: listings.length };
+    logger.info('[KonesContact] Run complete:', summary);
+    return summary;
+
+  } catch (err) {
+    logger.error('[KonesContact] Run failed:', err.message);
     return { contacted: 0, skipped: 0, errors: 1, fatal: err.message };
   }
 }
@@ -253,9 +348,22 @@ async function getContactStats() {
         AND created_at > NOW() - INTERVAL '48 hours'
     `);
 
+    let konesStats = [];
+    try {
+      const { rows: kr } = await pool.query(`
+        SELECT contact_status, COUNT(*) as count
+        FROM kones_listings
+        WHERE contact_status IS NOT NULL
+        GROUP BY contact_status
+        ORDER BY count DESC
+      `);
+      konesStats = kr;
+    } catch (e) { /* kones columns might not exist yet */ }
+
     return {
       statuses: rows,
       pending_count: parseInt(pending[0]?.count || 0),
+      kones_statuses: konesStats,
       timestamp: new Date().toISOString()
     };
   } catch (err) {
@@ -272,6 +380,7 @@ async function initialize() {
 module.exports = {
   initialize,
   runAutoFirstContact,
+  runKonesAutoContact,
   getContactStats,
   runMigrations
 };
