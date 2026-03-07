@@ -1,7 +1,8 @@
 /**
- * QUANTUM Export Routes - v4.69.0
+ * QUANTUM Export Routes - v4.70.0
  * CSV + Excel export for Leads, Complexes, Ads, Messages
  * Uses ExcelJS for Excel and built-in stream for CSV
+ * Fix: leads are stored in "website_leads" table, not "leads"
  */
 
 const express = require('express');
@@ -88,7 +89,7 @@ router.get('/leads', async (req, res) => {
     const { format = 'xlsx', status, source, limit = 5000 } = req.query;
     let query = `SELECT id, name, email, phone, status, source,
                         user_type, notes, is_urgent, created_at, updated_at
-                 FROM leads`;
+                 FROM website_leads`;
     const params = [];
     const conditions = [];
     if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
@@ -330,7 +331,7 @@ router.get('/full-report', async (req, res) => {
       });
     }
 
-    // Sheet 2: Leads
+    // Sheet 2: Leads (from website_leads table)
     {
       const ws = wb.addWorksheet('👥 לידים');
       const cols = [
@@ -345,7 +346,7 @@ router.get('/full-report', async (req, res) => {
       applyHeader(ws, cols);
       const { rows } = await pool.query(
         `SELECT name, email, phone, status, source, notes, is_urgent, created_at
-         FROM leads ORDER BY created_at DESC LIMIT 500`
+         FROM website_leads ORDER BY created_at DESC LIMIT 500`
       );
       rows.forEach((r, i) => {
         const row = ws.addRow({ ...r, created_at: r.created_at ? new Date(r.created_at).toLocaleDateString('he-IL') : '' });
@@ -373,8 +374,8 @@ router.get('/full-report', async (req, res) => {
         SELECT
           (SELECT COUNT(*) FROM complexes) as total_complexes,
           (SELECT COUNT(*) FROM complexes WHERE iai_score >= 70) as hot_complexes,
-          (SELECT COUNT(*) FROM leads) as total_leads,
-          (SELECT COUNT(*) FROM leads WHERE status = 'qualified') as qualified_leads,
+          (SELECT COUNT(*) FROM website_leads) as total_leads,
+          (SELECT COUNT(*) FROM website_leads WHERE status = 'qualified') as qualified_leads,
           (SELECT COUNT(*) FROM whatsapp_messages WHERE created_at > NOW() - INTERVAL '30 days') as messages_30d
       `);
       const s = stats.rows[0];
