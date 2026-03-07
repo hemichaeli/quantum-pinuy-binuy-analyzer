@@ -5,7 +5,7 @@ const pool = require('../db/pool');
 // POST /api/search/global - cross-entity search
 router.post('/global', async (req, res) => {
   try {
-    const { query = '', filters = {}, sort = 'relevance', limit = 20 } = req.body;
+    const { query = '', filters = {}, limit = 20 } = req.body;
     const q = `%${query}%`;
     const results = { leads: [], complexes: [], ads: [], total: 0 };
 
@@ -15,23 +15,22 @@ router.post('/global', async (req, res) => {
 
     // Search leads
     try {
-      let leadQuery = `SELECT id, name, phone, email, status, source, budget, city, created_at, 'lead' as entity_type FROM leads WHERE 1=1`;
+      let leadQuery = `SELECT id, name, phone, email, status, source, created_at, 'lead' as entity_type FROM leads WHERE 1=1`;
       const params = [];
       let pi = 1;
-      if (query) { leadQuery += ` AND (name ILIKE $${pi} OR phone ILIKE $${pi+1} OR email ILIKE $${pi+2} OR city ILIKE $${pi+3})`; params.push(q,q,q,q); pi+=4; }
+      if (query) { leadQuery += ` AND (name ILIKE $${pi} OR phone ILIKE $${pi+1} OR email ILIKE $${pi+2})`; params.push(q,q,q); pi+=3; }
       if (filters.status) { leadQuery += ` AND status = $${pi}`; params.push(filters.status); pi++; }
-      if (filters.city) { leadQuery += ` AND city ILIKE $${pi}`; params.push(`%${filters.city}%`); pi++; }
       leadQuery += ` ORDER BY created_at DESC LIMIT $${pi}`; params.push(Math.min(limit, 50));
       const { rows } = await pool.query(leadQuery, params);
       results.leads = rows;
-    } catch (e) { /* table may not exist */ }
+    } catch (e) { /* ignore */ }
 
-    // Search complexes
+    // Search complexes - using actual column names
     try {
-      let cxQuery = `SELECT id, name, address, city, iai_score, ssi_score, status, units_count, developer, 'complex' as entity_type FROM complexes WHERE 1=1`;
+      let cxQuery = `SELECT id, name, address, city, iai_score, avg_ssi, status, planned_units, existing_units, developer, 'complex' as entity_type FROM complexes WHERE 1=1`;
       const params = [];
       let pi = 1;
-      if (query) { cxQuery += ` AND (name ILIKE $${pi} OR address ILIKE $${pi+1} OR city ILIKE $${pi+2} OR developer ILIKE $${pi+3})`; params.push(q,q,q,q); pi+=4; }
+      if (query) { cxQuery += ` AND (name ILIKE $${pi} OR city ILIKE $${pi+1} OR developer ILIKE $${pi+2})`; params.push(q,q,q); pi+=3; }
       if (filters.city) { cxQuery += ` AND city ILIKE $${pi}`; params.push(`%${filters.city}%`); pi++; }
       if (filters.min_iai) { cxQuery += ` AND iai_score >= $${pi}`; params.push(filters.min_iai); pi++; }
       if (filters.status) { cxQuery += ` AND status = $${pi}`; params.push(filters.status); pi++; }
@@ -79,17 +78,17 @@ router.get('/suggestions', async (req, res) => {
     const suggestions = new Set();
 
     try {
-      const cities = await pool.query(`SELECT DISTINCT city FROM complexes WHERE city ILIKE $1 LIMIT 5`, [like]);
+      const cities = await pool.query(`SELECT DISTINCT city FROM complexes WHERE city ILIKE $1 AND city IS NOT NULL LIMIT 5`, [like]);
       cities.rows.forEach(r => r.city && suggestions.add(r.city));
     } catch (e) {}
 
     try {
-      const names = await pool.query(`SELECT DISTINCT name FROM complexes WHERE name ILIKE $1 LIMIT 5`, [like]);
+      const names = await pool.query(`SELECT name FROM complexes WHERE name ILIKE $1 AND name IS NOT NULL LIMIT 5`, [like]);
       names.rows.forEach(r => r.name && suggestions.add(r.name));
     } catch (e) {}
 
     try {
-      const leads = await pool.query(`SELECT DISTINCT name FROM leads WHERE name ILIKE $1 LIMIT 3`, [like]);
+      const leads = await pool.query(`SELECT DISTINCT name FROM leads WHERE name ILIKE $1 AND name IS NOT NULL LIMIT 3`, [like]);
       leads.rows.forEach(r => r.name && suggestions.add(r.name));
     } catch (e) {}
 
@@ -111,7 +110,7 @@ router.get('/history', async (req, res) => {
   }
 });
 
-// POST /api/search/saved - save a search
+// POST /api/search/saved
 router.post('/saved', async (req, res) => {
   try {
     const { name, query, filters } = req.body;
