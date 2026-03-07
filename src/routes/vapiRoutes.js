@@ -542,7 +542,7 @@ router.get('/stats', async (req, res) => {
 const QUANTUM_CALENDAR_ID = process.env.QUANTUM_CALENDAR_ID ||
   'cf4cd8ef53ef4cbdca7f172bdef3f6862509b4026a5e04b648ce09144ab5aa21@group.calendar.google.com';
 
-async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime, phoneNumber }) {
+async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime, phoneNumber, leadSource }) {
   const accessToken = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN;
   if (!accessToken) {
     logger.warn('[VAPI] GOOGLE_CALENDAR_ACCESS_TOKEN not set - skipping calendar creation');
@@ -553,9 +553,10 @@ async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime,
   const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // 30 min call
 
   const event = {
-    summary: `\u{1F3E0} \u05e9\u05d9\u05d7\u05d4 \u05e2\u05dd ${leadName} - QUANTUM \u05e0\u05d3\u05dc"\u05df`,
+    summary: `\u{1F3E0} [${leadSource || 'לא ידוע'}] \u05e9\u05d9\u05d7\u05d4 \u05e2\u05dd ${leadName} - QUANTUM \u05e0\u05d3\u05dc"\u05df`,
     description: [
       `\u05dc\u05d9\u05d3: ${leadName}`,
+      leadSource ? `\u05de\u05e7\u05d5\u05e8: ${leadSource}` : '',
       `\u05db\u05ea\u05d5\u05d1\u05ea \u05d4\u05d3\u05d9\u05e8\u05d4: ${leadAddress}`,
       phoneNumber ? `\u05d8\u05dc\u05e4\u05d5\u05df: ${phoneNumber}` : '',
       '',
@@ -600,7 +601,7 @@ router.post('/schedule-lead', async (req, res) => {
     logger.info('[VAPI] schedule-lead called:', JSON.stringify(body).substring(0, 300));
 
     // Extract parameters - Vapi tool calls come in different formats
-    let leadName, leadAddress, scheduledTime, phoneNumber;
+    let leadName, leadAddress, scheduledTime, phoneNumber, leadSource;
 
     // Format 1: Direct Vapi function call
     if (body.message?.toolCalls) {
@@ -613,6 +614,7 @@ router.post('/schedule-lead', async (req, res) => {
         leadAddress = args.lead_address;
         scheduledTime = args.scheduled_time;
         phoneNumber = args.phone_number || body.message?.call?.customer?.number;
+        leadSource = args.lead_source;
       }
     }
     // Format 2: Direct parameters
@@ -621,6 +623,7 @@ router.post('/schedule-lead', async (req, res) => {
       leadAddress = body.lead_address || body.leadAddress;
       scheduledTime = body.scheduled_time || body.scheduledTime;
       phoneNumber = body.phone_number || body.phoneNumber;
+      leadSource = body.lead_source || body.leadSource;
     }
     // Format 3: Vapi server-side tool call format
     else if (body.toolCallId) {
@@ -628,6 +631,7 @@ router.post('/schedule-lead', async (req, res) => {
       leadAddress = body.parameters?.lead_address;
       scheduledTime = body.parameters?.scheduled_time;
       phoneNumber = body.parameters?.phone_number;
+      leadSource = body.parameters?.lead_source;
     }
 
     if (!leadName || !leadAddress || !scheduledTime) {
@@ -646,15 +650,16 @@ router.post('/schedule-lead', async (req, res) => {
       leadAddress,
       scheduledTime,
       phoneNumber,
+      leadSource,
     });
 
     // Log to DB if possible
     try {
       await pool.query(
         `INSERT INTO vapi_leads (name, address, phone, scheduled_time, calendar_event_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
          ON CONFLICT DO NOTHING`,
-        [leadName, leadAddress, phoneNumber || null, scheduledTime, calendarEvent?.id || null]
+        [leadName, leadAddress, phoneNumber || null, scheduledTime, calendarEvent?.id || null, leadSource || null]
       );
     } catch (dbErr) {
       // Table might not exist yet - that's OK
@@ -672,6 +677,7 @@ router.post('/schedule-lead', async (req, res) => {
       result: successMsg,
       success: true,
       calendarEventId: calendarEvent?.id || null,
+      leadSource,
       leadName,
       leadAddress,
       scheduledTime,
