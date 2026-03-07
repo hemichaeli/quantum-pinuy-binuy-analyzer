@@ -1,7 +1,7 @@
 /**
- * QUANTUM Bot Engine v3
- * Visual booking calendar: sends a personalized link instead of text slot list.
- * Sequential fill, show_rep_name toggle, Google Calendar link in confirmation.
+ * QUANTUM Bot Engine v4
+ * - ALL meeting types (including signing ceremonies) use visual booking link
+ * - Ceremony: stores ceremony context so bookingRoute knows to query ceremony_slots
  */
 
 const pool = require('../db/pool');
@@ -27,52 +27,35 @@ const STRINGS = {
   he: {
     confirmIdentity: (name) => `שלום ${name} 👋\nאני הבוט של QUANTUM.\n\nרק לאימות - האם אתה/את ${name}?\n1️⃣ כן\n2️⃣ לא, מדובר בטעות`,
     wrongPerson: `מצטערים על הבלבול. נשמח אם תעביר/י את ההודעה לבעל הדירה הרשום. תודה 🙏`,
+
+    // Ceremony: ask if they'll attend, then send link
     ceremonyIntro: (name, ceremony) =>
       `${name}, כנס החתימות לפרויקט *${ceremony.projectName}* יתקיים ב:\n📅 ${ceremony.dateStr}\n📍 ${ceremony.location}\n\nנשמח לראותך! האם תוכל/י להגיע?\n1️⃣ כן, אגיע\n2️⃣ לא אוכל להגיע\n3️⃣ עדיין לא יודע/ת`,
-    ceremonySelectSlot: (slots) => {
-      let msg = `מעולה! בחר/י שעה נוחה:\n\n`;
-      slots.forEach((s, i) => { msg += `${i + 1}️⃣ ${String(s.time).substring(0,5)}\n`; });
-      return msg;
-    },
-    ceremonySlotTaken: `השעה שבחרת כבר תפוסה 😔 אנא בחר/י שעה אחרת:`,
-    ceremonyConfirm: (date, time, location, rep, gcalLink) => {
-      let msg = `✅ *ביקור שמאי נקבע!*\n\n📅 ${date}\n⏰ ${String(time).substring(0,5)}\n📍 ${location}\n👤 נציג: ${rep}\n\nתקבל/י תזכורת יום לפני. להתראות! 👋`;
-      if (gcalLink) msg += `\n\n📆 הוסף ליומן: ${gcalLink}`;
-      return msg;
-    },
     ceremonyDeclined: `תודה שעדכנת אותנו. נציג שלנו ייצור איתך קשר בהקדם.`,
     ceremonyMaybe: `מובן. נחזור אליך קרוב לתאריך הכנס לאישור סופי.`,
-    // Visual booking link message
+
+    // Booking link (used for both meetings and ceremonies)
     bookingLink: (name, type, url) =>
       `שלום ${name} 👋\nQUANTUM כאן.\n\nנשמח לתאם *${type}* עבור דירתך.\n\n📅 לבחירת מועד נוח - לחץ/י על הקישור:\n${url}\n\nהקישור תקף ל-48 שעות.`,
+
     alreadyConfirmed: (date, time) => `✅ הפגישה שלך כבר נקבעה ל-${date} ⏰ ${time}.\n\nלשינויים - פנה/י ישירות לנציג QUANTUM.`,
     noSlots: `כרגע אין חלונות זמן פנויים. נציג שלנו ייצור איתך קשר בהקדם.`,
-    invalidChoice: `לא הבנתי את הבחירה. אנא הקלד/י את המספר המתאים.`,
     error: `אירעה שגיאה טכנית. אנא נסה/י שוב מאוחר יותר.`
   },
   ru: {
     confirmIdentity: (name) => `Здравствуйте, ${name} 👋\nЯ бот QUANTUM.\n\nДля подтверждения - вы ${name}?\n1️⃣ Да\n2️⃣ Нет, это ошибка`,
     wrongPerson: `Извините за беспокойство. Пожалуйста, передайте сообщение зарегистрированному владельцу квартиры. Спасибо 🙏`,
+
     ceremonyIntro: (name, ceremony) =>
       `${name}, церемония подписания проекта *${ceremony.projectName}*:\n📅 ${ceremony.dateStr}\n📍 ${ceremony.location}\n\nСможете прийти?\n1️⃣ Да, приду\n2️⃣ Не смогу\n3️⃣ Ещё не знаю`,
-    ceremonySelectSlot: (slots) => {
-      let msg = `Отлично! Выберите удобное время:\n\n`;
-      slots.forEach((s, i) => { msg += `${i + 1}️⃣ ${String(s.time).substring(0,5)}\n`; });
-      return msg;
-    },
-    ceremonySlotTaken: `Это время уже занято 😔 Пожалуйста, выберите другое:`,
-    ceremonyConfirm: (date, time, location, rep, gcalLink) => {
-      let msg = `✅ *Встреча назначена!*\n\n📅 ${date}\n⏰ ${String(time).substring(0,5)}\n📍 ${location}\n👤 Представитель: ${rep}\n\nНапомним за сутки. До встречи! 👋`;
-      if (gcalLink) msg += `\n\n📆 Добавить в календарь: ${gcalLink}`;
-      return msg;
-    },
     ceremonyDeclined: `Спасибо за уведомление. Наш представитель свяжется с вами в ближайшее время.`,
     ceremonyMaybe: `Понятно. Мы свяжемся с вами ближе к дате церемонии.`,
+
     bookingLink: (name, type, url) =>
       `Здравствуйте, ${name} 👋\nQUANTUM на связи.\n\nГотовы назначить *${type}* для вашей квартиры.\n\n📅 Выберите удобное время по ссылке:\n${url}\n\nСсылка действует 48 часов.`,
+
     alreadyConfirmed: (date, time) => `✅ Встреча уже назначена на ${date} ⏰ ${time}.\n\nДля изменений — обратитесь к представителю QUANTUM.`,
     noSlots: `Свободных слотов нет. Наш представитель свяжется с вами в ближайшее время.`,
-    invalidChoice: `Не понял выбор. Пожалуйста, введите номер из предложенных.`,
     error: `Произошла техническая ошибка. Попробуйте позже.`
   }
 };
@@ -84,7 +67,6 @@ const MEETING_TYPE_LABELS = {
 
 class BotEngine {
 
-  // ── ENTRY POINT ──────────────────────────────────────────────
   async handleIncoming(phone, messageText, campaignId) {
     try {
       const session = await this.getOrCreateSession(phone, campaignId);
@@ -132,14 +114,13 @@ class BotEngine {
     s.context = { contactName };
     this._zohoStatus(s, 'bot_sent').catch(() => {});
 
-    // Send identity confirmation immediately on new session
     const confirmMsg = STRINGS[lang].confirmIdentity(contactName || 'שלום');
     await inforuService.sendWhatsApp(phone, confirmMsg);
 
     return s;
   }
 
-  // ── Generate / retrieve booking token ────────────────────────
+  // ── Booking token ────────────────────────────────────────────
   async getBookingToken(session) {
     if (session.booking_token) return session.booking_token;
     const token = crypto.randomBytes(16).toString('hex');
@@ -161,11 +142,9 @@ class BotEngine {
     // ── ALREADY CONFIRMED ─────────────────────────────────────
     if (state === 'confirmed') {
       const slot = ctx.confirmedSlot || {};
-      const dateStr = slot.dateStr || slot.date_str || '';
-      const time = String(slot.time || slot.timeStr || '').substring(0, 5);
-      return S.alreadyConfirmed(dateStr, time);
+      return S.alreadyConfirmed(slot.dateStr || slot.date_str || '', String(slot.time || slot.timeStr || '').substring(0, 5));
     }
-    if (state === 'closed' || state === 'ceremony_declined' || state === 'ceremony_maybe') {
+    if (state === 'closed' || state === 'ceremony_declined' || state === 'ceremony_maybe' || state === 'booking_link_sent') {
       return null;
     }
 
@@ -177,52 +156,33 @@ class BotEngine {
         ctx.config = config;
 
         if (config.meeting_type === 'signing_ceremony') {
+          // Ceremony: first ask if they'll attend
           const ceremony = await this.getActiveCeremony(session.zoho_campaign_id);
           if (!ceremony) return S.noSlots;
           ctx.ceremony = ceremony;
           session.state = 'ceremony_confirm_attendance';
           return S.ceremonyIntro(ctx.contactName || '', ceremony);
         } else {
-          // ── VISUAL BOOKING: generate token, send link ──────
-          const hasSlots = await this.hasAvailableSlots(session.zoho_campaign_id);
-          if (!hasSlots) return S.noSlots;
-
-          const token = await this.getBookingToken(session);
-          const bookingUrl = `${BASE_URL}/booking/${token}`;
-          session.state = 'booking_link_sent';
-
-          const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)[config.meeting_type] || config.meeting_type;
-          return S.bookingLink(ctx.contactName || '', typeLabel, bookingUrl);
+          // Regular meeting: send visual booking link immediately
+          return await this._sendBookingLink(session, config, lang, S);
         }
+
       } else if (msg === '2') {
         session.state = 'closed';
         this._zohoStatus(session, 'answered', 'לא זוהה כבעל הדירה').catch(() => {});
         return S.wrongPerson;
       }
-      // Resend on invalid input
       return S.confirmIdentity(ctx.contactName || 'שלום');
-    }
-
-    // ── BOOKING LINK SENT - user writes back ──────────────────
-    // Could be they already booked via the link (state updated by bookingRoute)
-    // or they're asking something - just remind them of the link
-    if (state === 'booking_link_sent') {
-      const token = await this.getBookingToken(session);
-      const bookingUrl = `${BASE_URL}/booking/${token}`;
-      const config = ctx.config || await this.getCampaignConfig(session.zoho_campaign_id);
-      const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)[config.meeting_type] || '';
-      return S.bookingLink(ctx.contactName || '', typeLabel, bookingUrl);
     }
 
     // ── CEREMONY: CONFIRM ATTENDANCE ──────────────────────────
     if (state === 'ceremony_confirm_attendance') {
       if (msg === '1') {
         this._zohoStatus(session, 'answered', 'אישר הגעה לכנס - בוחר שעה').catch(() => {});
-        const slots = await this.getCeremonySlots(ctx.ceremony.id);
-        if (!slots.length) return S.noSlots;
-        ctx.availableSlots = slots;
-        session.state = 'ceremony_select_slot';
-        return S.ceremonySelectSlot(slots);
+        // Send visual booking link for ceremony slots
+        const config = await this.getCampaignConfig(session.zoho_campaign_id);
+        return await this._sendBookingLink(session, config, lang, S);
+
       } else if (msg === '2') {
         session.state = 'ceremony_declined';
         this._zohoStatus(session, 'declined', 'סירב להגיע לכנס חתימות').catch(() => {});
@@ -232,38 +192,30 @@ class BotEngine {
         this._zohoStatus(session, 'maybe', 'לא בטוח אם יגיע').catch(() => {});
         return S.ceremonyMaybe;
       }
-      return S.invalidChoice;
-    }
-
-    // ── CEREMONY: SELECT SLOT ─────────────────────────────────
-    if (state === 'ceremony_select_slot') {
-      const idx = parseInt(msg) - 1;
-      const slots = ctx.availableSlots || [];
-      if (isNaN(idx) || idx < 0 || idx >= slots.length) return S.invalidChoice;
-
-      const chosen = slots[idx];
-      const locked = await this.lockSlot(chosen.slot_id, session);
-      if (!locked) {
-        const fresh = await this.getCeremonySlots(ctx.ceremony.id);
-        ctx.availableSlots = fresh;
-        return S.ceremonySlotTaken + '\n' + S.ceremonySelectSlot(fresh);
-      }
-
-      ctx.confirmedSlot = chosen;
-      session.state = 'confirmed';
-
-      const meetingDt = `${chosen.slot_date} ${chosen.time}`;
-      const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)['signing_ceremony'];
-      const gcalLink = buildGCalLink(`QUANTUM - ${typeLabel}`, meetingDt, 30, ctx.ceremony.location || '');
-
-      this._zohoStatus(session, 'confirmed', `אישר כנס חתימות: ${chosen.dateStr} ${String(chosen.time).substring(0,5)}`).catch(() => {});
-      this._zohoActivity(session, 'signing_ceremony', meetingDt, chosen).catch(() => {});
-      await this.scheduleReminders(session, meetingDt);
-
-      return S.ceremonyConfirm(chosen.dateStr, chosen.time, ctx.ceremony.location, chosen.repName || '', gcalLink);
+      return S.ceremonyIntro(ctx.contactName || '', ctx.ceremony || {});
     }
 
     return S.error;
+  }
+
+  // ── Send visual booking link ───────────────────────────────
+  async _sendBookingLink(session, config, lang, S) {
+    const ctx = session.context;
+    const isCeremony = config.meeting_type === 'signing_ceremony';
+
+    // Check slots exist
+    const hasSlots = isCeremony
+      ? await this.hasCeremonySlots(ctx.ceremony?.id)
+      : await this.hasAvailableSlots(session.zoho_campaign_id);
+
+    if (!hasSlots) return S.noSlots;
+
+    const token = await this.getBookingToken(session);
+    const bookingUrl = `${BASE_URL}/booking/${token}`;
+    session.state = 'booking_link_sent';
+
+    const typeLabel = (MEETING_TYPE_LABELS[lang] || MEETING_TYPE_LABELS.he)[config.meeting_type] || config.meeting_type;
+    return S.bookingLink(ctx.contactName || '', typeLabel, bookingUrl);
   }
 
   // ── ZOHO HELPERS ──────────────────────────────────────────────
@@ -294,7 +246,7 @@ class BotEngine {
         campaignId: session.zoho_campaign_id,
         meetingType,
         meetingDatetime,
-        representativeName: slotData?.rep_name || slotData?.repName || '',
+        representativeName: slotData?.rep_name || slotData?.representative_name || '',
         location: session.context?.ceremony?.location || ''
       });
     } catch (e) { logger.warn('[BotEngine] Zoho activity creation failed:', e.message); }
@@ -309,28 +261,13 @@ class BotEngine {
     return res.rows.length > 0;
   }
 
-  async lockSlot(slotId, session) {
+  async hasCeremonySlots(ceremonyId) {
+    if (!ceremonyId) return false;
     const res = await pool.query(
-      `UPDATE ceremony_slots SET status='confirmed', reserved_at=NOW(),
-       contact_phone=$1, zoho_contact_id=$2
-       WHERE id=$3 AND status='open' RETURNING id`,
-      [session.phone, session.zoho_contact_id, slotId]
-    );
-    return res.rows.length > 0;
-  }
-
-  async getCeremonySlots(ceremonyId) {
-    const res = await pool.query(
-      `SELECT cs.id AS slot_id, cs.slot_time AS time, cs.slot_date,
-              TO_CHAR(cs.slot_date,'DD/MM/YYYY') AS "dateStr",
-              cst.representative_name AS "repName"
-       FROM ceremony_slots cs
-       JOIN ceremony_stations cst ON cs.station_id = cst.id
-       WHERE cs.ceremony_id=$1 AND cs.status='open'
-       ORDER BY cs.slot_time LIMIT 20`,
+      `SELECT 1 FROM ceremony_slots WHERE ceremony_id=$1 AND status='open' LIMIT 1`,
       [ceremonyId]
     );
-    return res.rows;
+    return res.rows.length > 0;
   }
 
   async getActiveCeremony(campaignId) {
@@ -356,12 +293,12 @@ class BotEngine {
   async scheduleReminders(session, meetingDatetime) {
     const config = await this.getCampaignConfig(session.zoho_campaign_id);
     const pre24h = config.pre_meeting_reminder_hours || 24;
-    const pre2h = config.morning_reminder_hours || 2;
+    const pre2h  = config.morning_reminder_hours || 2;
     const meetingDate = new Date(meetingDatetime);
     const now = new Date();
     for (const r of [
       { type: 'pre_meeting_24h', at: new Date(meetingDate.getTime() - pre24h * 3600000) },
-      { type: 'pre_meeting_2h',  at: new Date(meetingDate.getTime() - pre2h * 3600000) }
+      { type: 'pre_meeting_2h',  at: new Date(meetingDate.getTime() - pre2h  * 3600000) }
     ]) {
       if (r.at > now) {
         await pool.query(
@@ -372,19 +309,6 @@ class BotEngine {
         );
       }
     }
-  }
-
-  async scheduleFollowupSequence(phone, campaignId, contactId, config) {
-    const delay1 = config.reminder_delay_hours || 24;
-    const delay2 = config.bot_followup_delay_hours || 48;
-    const now = new Date();
-    await pool.query(
-      `INSERT INTO reminder_queue (phone, zoho_contact_id, zoho_campaign_id, reminder_type, scheduled_at)
-       VALUES ($1,$2,$3,'reminder_24h',$4), ($1,$2,$3,'bot_followup_48h',$5) ON CONFLICT DO NOTHING`,
-      [phone, contactId, campaignId,
-       new Date(now.getTime() + delay1 * 3600000),
-       new Date(now.getTime() + delay2 * 3600000)]
-    );
   }
 
   async saveSession(session) {
