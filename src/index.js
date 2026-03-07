@@ -14,14 +14,14 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.68.0';
-const BUILD = '2026-03-07-v4.68.0-kones-auto-contact-dashboard-tab';
+const VERSION = '4.69.0';
+const BUILD = '2026-03-07-v4.69.0-whatsapp-conversations-fix-issue6';
 
 // What's in this version:
-// - NEW: kones auto-contact cron (Issue #5) - daily at 07:45
-// - NEW: kones DB migration (phone, contact_status, contact_attempts)
-// - NEW: kones2_listings + konesonline_listings tables
-// - All previous: konesRoutes at /api/kones, Visual booking, Sequential fill, Search, CRM, Analytics, Export, Dashboard V5
+// - FIX: WhatsApp conversations endpoint now returns 'conversations' key (Issue #6)
+// - FIX: /conversations/:phone/messages now queries by phone fallback (catches outgoing msgs from autoFirstContact)
+// - NEW: POST /api/whatsapp/conversations/:phone/reply — send reply directly from dashboard
+// - Previous: kones auto-contact, auto first contact, export, search, CRM, analytics
 
 async function runAutoMigrations() {
   try {
@@ -287,6 +287,7 @@ app.get('/api/debug', async (req, res) => {
     analytics_api: 'active - overview/leads/market/performance/revenue',
     users_api: 'active - users/login/logout/roles/activity',
     api_docs: 'active at /api/docs (Swagger UI)',
+    whatsapp_conversations: 'fixed - Issue #6 (conversations key + phone fallback for messages)',
     routes: {
       loaded: loaded.map(r => r.path + ' (' + r.file + ')'),
       failed: failed.map(r => ({ path: r.path, file: r.file, error: r.error }))
@@ -364,6 +365,7 @@ async function start() {
   logger.info('Auto First Contact: ACTIVE (P0) - cron every 30min');
   logger.info('Kones Auto Contact: ACTIVE (Issue #5) - cron daily 07:45');
   logger.info('Kones API: ACTIVE at /api/kones');
+  logger.info('WhatsApp Conversations: FIXED (Issue #6)');
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);
