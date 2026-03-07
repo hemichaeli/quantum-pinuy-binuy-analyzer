@@ -4,23 +4,23 @@ const pool = require('../db/pool');
 
 router.get('/', async (req, res) => {
     try {
-        let stats = { totalComplexes: 698, newListings: 481, hotOpportunities: 53, activeMessages: 12, qualifiedLeads: 28, closedDeals: 7 };
+        let stats = { totalComplexes: 698, newListings: 931, hotOpportunities: 34, activeMessages: 0, qualifiedLeads: 7, closedDeals: 0 };
         try {
             const [complexes, listings, opportunities, messages, leads, deals] = await Promise.all([
                 pool.query('SELECT COUNT(*) as total FROM complexes'),
                 pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE'),
                 pool.query('SELECT COUNT(*) as total FROM complexes WHERE iai_score > 75'),
                 pool.query("SELECT COUNT(*) as total FROM listing_messages WHERE direction = 'received'"),
-                pool.query("SELECT COUNT(*) as total FROM leads WHERE status IN ('contacted','qualified')"),
+                pool.query("SELECT COUNT(*) as total FROM website_leads WHERE status IN ('contacted','qualified')"),
                 pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')")
             ]);
             stats = {
                 totalComplexes: parseInt(complexes.rows[0]?.total) || 698,
-                newListings: parseInt(listings.rows[0]?.total) || 481,
-                hotOpportunities: parseInt(opportunities.rows[0]?.total) || 53,
-                activeMessages: parseInt(messages.rows[0]?.total) || 12,
-                qualifiedLeads: parseInt(leads.rows[0]?.total) || 28,
-                closedDeals: parseInt(deals.rows[0]?.total) || 7
+                newListings: parseInt(listings.rows[0]?.total) || 931,
+                hotOpportunities: parseInt(opportunities.rows[0]?.total) || 34,
+                activeMessages: parseInt(messages.rows[0]?.total) || 0,
+                qualifiedLeads: parseInt(leads.rows[0]?.total) || 7,
+                closedDeals: parseInt(deals.rows[0]?.total) || 0
             };
         } catch (dbError) {
             console.warn('DB error, using defaults:', dbError.message);
@@ -38,7 +38,7 @@ router.get('/api/stats', async (req, res) => {
             pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE'),
             pool.query('SELECT COUNT(*) as total FROM complexes WHERE iai_score > 75'),
             pool.query("SELECT COUNT(*) as total FROM listing_messages WHERE direction = 'received'"),
-            pool.query("SELECT COUNT(*) as total FROM leads WHERE status IN ('contacted','qualified')"),
+            pool.query("SELECT COUNT(*) as total FROM website_leads WHERE status IN ('contacted','qualified')"),
             pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')")
         ]);
         res.json({ success: true, data: {
@@ -56,15 +56,14 @@ router.get('/api/stats', async (req, res) => {
 
 router.get('/api/whatsapp/messages', async (req, res) => {
     try {
-        const { unread } = req.query;
-        let query = `
+        const query = `
             SELECT lm.id, lm.listing_id, l.phone as sender_phone, l.contact_name as sender_name,
                    lm.message_text as message_content, lm.status, lm.direction,
-                   lm.created_at, NULL as lead_id, l.source as source_platform, 'normal' as priority
+                   lm.created_at, NULL::integer as lead_id, l.source as source_platform
             FROM listing_messages lm
             LEFT JOIN listings l ON lm.listing_id = l.id
-            WHERE lm.direction = 'received'`;
-        query += ` ORDER BY lm.created_at DESC LIMIT 100`;
+            WHERE lm.direction = 'received'
+            ORDER BY lm.created_at DESC LIMIT 100`;
         const result = await pool.query(query);
         res.json({ success: true, data: result.rows });
     } catch (error) {
@@ -75,7 +74,7 @@ router.get('/api/whatsapp/messages', async (req, res) => {
 router.get('/api/leads', async (req, res) => {
     try {
         const { status } = req.query;
-        let query = `SELECT id, name, phone, email, status, source, notes, is_urgent, created_at, updated_at FROM leads WHERE 1=1`;
+        let query = `SELECT id, name, phone, email, user_type, status, source, notes, is_urgent, created_at FROM website_leads WHERE 1=1`;
         const params = [];
         if (status) { query += ` AND status = $1`; params.push(status); }
         query += ` ORDER BY created_at DESC LIMIT 100`;
@@ -88,23 +87,20 @@ router.get('/api/leads', async (req, res) => {
 
 router.get('/api/complexes', async (req, res) => {
     try {
-        const { city, minIAI, maxIAI, minSSI, status, sortBy, sortOrder } = req.query;
-        let query = `SELECT id, name, city, address, existing_units as units_count, planned_units, iai_score, avg_ssi as ssi_score, status, developer FROM complexes WHERE 1=1`;
+        const { city, minIAI, maxIAI, status, sortBy, sortOrder } = req.query;
+        let query = `SELECT id, name, city, address, existing_units as units_count, planned_units, iai_score, status, developer FROM complexes WHERE 1=1`;
         const params = [];
         let n = 1;
         if (city?.trim()) { query += ` AND city ILIKE $${n}`; params.push('%' + city.trim() + '%'); n++; }
         if (minIAI && !isNaN(minIAI)) { query += ` AND iai_score >= $${n}`; params.push(parseFloat(minIAI)); n++; }
         if (maxIAI && !isNaN(maxIAI)) { query += ` AND iai_score <= $${n}`; params.push(parseFloat(maxIAI)); n++; }
-        if (minSSI && !isNaN(minSSI)) { query += ` AND avg_ssi >= $${n}`; params.push(parseFloat(minSSI)); n++; }
         if (status) { query += ` AND status = $${n}`; params.push(status); n++; }
-        const validSort = ['name', 'city', 'iai_score', 'avg_ssi', 'existing_units'];
+        const validSort = ['name', 'city', 'iai_score', 'existing_units'];
         const sortField = validSort.includes(sortBy) ? sortBy : 'iai_score';
         const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
         query += ` ORDER BY ${sortField} ${order} NULLS LAST LIMIT 100`;
         const result = await pool.query(query, params);
-        // Remap avg_ssi → ssi_score for frontend
-        const data = result.rows.map(r => ({ ...r, ssi_score: r.ssi_score || r.avg_ssi }));
-        res.json({ success: true, data });
+        res.json({ success: true, data: result.rows });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -116,17 +112,11 @@ router.get('/api/ads', async (req, res) => {
         let query = `
             SELECT l.id,
                    COALESCE(l.address, 'מודעה') as title,
-                   l.city,
-                   l.address,
+                   l.city, l.address,
                    l.asking_price as price_current,
-                   ROUND(((c.theoretical_premium_min + c.theoretical_premium_max) / 2.0), 1) as premium_percent,
-                   l.phone,
-                   l.message_status as contact_status,
-                   l.deal_status,
-                   l.created_at,
-                   l.url,
-                   l.source,
-                   l.ssi_score
+                   ROUND(((COALESCE(c.theoretical_premium_min,0) + COALESCE(c.theoretical_premium_max,0)) / 2.0), 1) as premium_percent,
+                   l.phone, l.message_status as contact_status, l.deal_status,
+                   l.created_at, l.url, l.source, l.ssi_score
             FROM listings l
             LEFT JOIN complexes c ON l.complex_id = c.id
             WHERE l.is_active = TRUE AND l.asking_price > 0`;
@@ -139,8 +129,8 @@ router.get('/api/ads', async (req, res) => {
         if (phoneFilter === 'yes') query += ` AND l.phone IS NOT NULL AND l.phone != ''`;
         else if (phoneFilter === 'no') query += ` AND (l.phone IS NULL OR l.phone = '')`;
         if (contactStatus) { query += ` AND l.message_status = $${n}`; params.push(contactStatus); n++; }
-        const validSort = ['address', 'city', 'asking_price', 'premium_percent', 'created_at', 'ssi_score'];
-        const sortField = validSort.includes(sortBy) ? (sortBy === 'premium_percent' ? 'premium_percent' : `l.${sortBy}`) : 'l.created_at';
+        const validSort = ['address', 'city', 'asking_price', 'created_at', 'ssi_score'];
+        const sortField = validSort.includes(sortBy) ? `l.${sortBy}` : 'l.created_at';
         const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
         const offset = (parseInt(page) - 1) * parseInt(limit);
         query += ` ORDER BY ${sortField} ${order} LIMIT $${n} OFFSET $${n + 1}`;
@@ -155,11 +145,11 @@ router.get('/api/ads', async (req, res) => {
 
 router.post('/api/whatsapp/convert-to-lead', async (req, res) => {
     try {
-        const { messageId, name, phone, budget, property_type, location_preference } = req.body;
+        const { name, phone, budget, property_type, location_preference } = req.body;
         const notes = [property_type && `סוג נכס: ${property_type}`, location_preference && `אזור: ${location_preference}`, budget && `תקציב: ₪${parseInt(budget).toLocaleString()}`].filter(Boolean).join(' | ');
         const leadResult = await pool.query(
-            `INSERT INTO leads (name, phone, status, source, notes) VALUES ($1, $2, 'new', 'whatsapp', $3) RETURNING id`,
-            [name, phone, notes || null]
+            `INSERT INTO website_leads (name, phone, email, user_type, status, source, notes) VALUES ($1, $2, '', 'owner', 'new', 'dashboard', $3) RETURNING id`,
+            [name || 'לא ידוע', phone || '', notes || null]
         );
         const leadId = leadResult.rows[0].id;
         res.json({ success: true, leadId, message: 'Converted to lead' });
@@ -195,7 +185,7 @@ function generateDashboardHTML(stats) {
         .tab-content { display:none; padding:20px 15px; min-height:calc(100vh - 170px); }
         .tab-content.active { display:block; }
         .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; margin-bottom:25px; }
-        .stat-card { background:linear-gradient(135deg,#1a1b1e,#2d2e32); border:3px solid rgba(255,255,255,0.1); border-radius:15px; padding:22px; text-align:center; cursor:pointer; transition:all 0.2s ease; position:relative; overflow:hidden; user-select:none; -webkit-tap-highlight-color:transparent; }
+        .stat-card { background:linear-gradient(135deg,#1a1b1e,#2d2e32); border:3px solid rgba(255,255,255,0.1); border-radius:15px; padding:22px; text-align:center; cursor:pointer; transition:all 0.2s ease; user-select:none; -webkit-tap-highlight-color:transparent; }
         .stat-card:hover, .stat-card:active { border-color:#d4af37; box-shadow:0 0 25px rgba(212,175,55,0.3); transform:translateY(-3px); }
         .stat-number { font-size:2.4rem; font-weight:900; color:#d4af37; margin-bottom:8px; line-height:1; }
         .stat-label { font-size:14px; color:#9ca3af; font-weight:600; margin-bottom:8px; }
@@ -258,7 +248,6 @@ function generateDashboardHTML(stats) {
         <div class="nav-tab" onclick="switchTab('news')">📰 חדשות</div>
     </div>
 
-    <!-- Dashboard Tab -->
     <div id="tab-dashboard" class="tab-content active">
         <div class="stats-grid">
             <div class="stat-card" onclick="switchTab('complexes')" title="לחץ לפתיחת רשימת המתחמים">
@@ -281,7 +270,7 @@ function generateDashboardHTML(stats) {
             </div>
             <div class="stat-card" onclick="switchTab('leads', 'qualified')" title="לחץ לפתיחת לידים מוכשרים">
                 <div class="stat-number">${stats.qualifiedLeads}</div>
-                <div class="stat-label">לידים מוכשרים</div>
+                <div class="stat-label">לידים מהאתר</div>
                 <div class="stat-hint">→ לחץ לפתיחת הלידים</div>
                 <div class="stat-change">+15% השנה</div>
             </div>
@@ -291,10 +280,10 @@ function generateDashboardHTML(stats) {
                 <div class="stat-hint">→ IAI > 75 | לחץ לפתיחת רשימה</div>
                 <div class="stat-change">+31% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('leads', 'closed')" title="לחץ לפתיחת עסקאות">
+            <div class="stat-card" onclick="switchTab('ads')" title="לחץ לפתיחת עסקאות">
                 <div class="stat-number">${stats.closedDeals}</div>
                 <div class="stat-label">עסקאות תיווך</div>
-                <div class="stat-hint">→ לחץ לפתיחת עסקאות</div>
+                <div class="stat-hint">→ לחץ לפתיחת נתונים</div>
                 <div class="stat-change">+67% השנה</div>
             </div>
         </div>
@@ -321,7 +310,6 @@ function generateDashboardHTML(stats) {
         </div>
     </div>
 
-    <!-- Ads Tab -->
     <div id="tab-ads" class="tab-content">
         <div class="section">
             <h2>🏘 רשימת מודעות</h2>
@@ -343,7 +331,6 @@ function generateDashboardHTML(stats) {
         </div>
     </div>
 
-    <!-- Messages Tab -->
     <div id="tab-messages" class="tab-content">
         <div class="section">
             <h2>💬 מרכז הודעות</h2>
@@ -351,20 +338,18 @@ function generateDashboardHTML(stats) {
                 <button class="btn" onclick="loadMessages()">🔄 טען הודעות</button>
                 <button class="btn btn-secondary" onclick="exportData('messages')">📊 ייצוא</button>
             </div>
-            <div id="messages-filter-badge" style="margin-bottom:10px;"></div>
             <div id="messages-list" class="data-list"><div class="loading">טוען הודעות...</div></div>
         </div>
     </div>
 
-    <!-- Leads Tab -->
     <div id="tab-leads" class="tab-content">
         <div class="section">
-            <h2>👤 רשימת לידים ומכירות</h2>
+            <h2>👤 רשימת לידים</h2>
             <div class="actions-bar">
                 <button class="btn" onclick="loadLeads()">👤 כל הלידים</button>
                 <button class="btn btn-secondary" onclick="loadLeads('qualified')">✰ מוכשרים</button>
                 <button class="btn btn-secondary" onclick="loadLeads('contacted')">📞 בתהליך</button>
-                <button class="btn btn-secondary" onclick="loadLeads('closed')">✅ עסקאות</button>
+                <button class="btn btn-secondary" onclick="loadLeads('new')">🆕 חדשים</button>
                 <button class="btn btn-green" onclick="exportData('leads')">📊 ייצוא לאקסל</button>
             </div>
             <div id="leads-filter-badge" style="margin-bottom:10px;"></div>
@@ -372,7 +357,6 @@ function generateDashboardHTML(stats) {
         </div>
     </div>
 
-    <!-- Complexes Tab -->
     <div id="tab-complexes" class="tab-content">
         <div class="section">
             <h2>🏢 מתחמי פינוי-בינוי</h2>
@@ -398,7 +382,6 @@ function generateDashboardHTML(stats) {
         </div>
     </div>
 
-    <!-- News Tab -->
     <div id="tab-news" class="tab-content">
         <div class="section">
             <h2>📰 חדשות שוק הנדלן</h2>
@@ -437,9 +420,8 @@ function generateDashboardHTML(stats) {
             if (navTabs[idx]) navTabs[idx].classList.add('active');
             currentTab = tabName;
             window.scrollTo(0, 0);
-
             if (tabName === 'ads') loadAds();
-            else if (tabName === 'messages') loadMessages(filter === 'unread' ? 'unread' : null);
+            else if (tabName === 'messages') loadMessages();
             else if (tabName === 'leads') loadLeads(filter || null);
             else if (tabName === 'complexes') loadComplexes(filter === 'hot' ? 'hot' : null);
         }
@@ -466,7 +448,7 @@ function generateDashboardHTML(stats) {
 
         function renderAd(ad, i) {
             const price = ad.price_current ? '₪' + parseInt(ad.price_current).toLocaleString() : 'מחיר לא ידוע';
-            const premium = ad.premium_percent ? ad.premium_percent + '%' : null;
+            const premium = ad.premium_percent && parseFloat(ad.premium_percent) > 0 ? parseFloat(ad.premium_percent).toFixed(1) + '%' : null;
             return '<div class="data-item"><h3>' + (ad.address || 'מודעה #' + (i+1)) + '</h3><div class="data-meta">' +
                 '<div class="data-meta-item"><span class="data-meta-label">עיר:</span><span class="data-meta-value">' + (ad.city||'לא ידוע') + '</span></div>' +
                 '<div class="data-meta-item"><span class="data-meta-label">מחיר:</span><span class="data-meta-value">' + price + '</span></div>' +
@@ -477,15 +459,13 @@ function generateDashboardHTML(stats) {
                 '</div></div>';
         }
 
-        async function loadMessages(filter) {
+        async function loadMessages() {
             const container = document.getElementById('messages-list');
-            const badge = document.getElementById('messages-filter-badge');
             container.innerHTML = '<div class="loading">טוען הודעות...</div>';
-            if (badge) badge.innerHTML = '';
             try {
                 const data = await fetchJSON('/dashboard/api/whatsapp/messages');
                 if (!data.success) throw new Error(data.error);
-                if (!data.data.length) { container.innerHTML = '<div class="loading">📋 אין הודעות</div>'; return; }
+                if (!data.data.length) { container.innerHTML = '<div class="loading">📋 אין הודעות נכנסות</div>'; return; }
                 container.innerHTML = data.data.map(msg => renderMessage(msg)).join('');
             } catch (e) { container.innerHTML = errorHTML(e.message, "loadMessages()"); }
         }
@@ -496,15 +476,14 @@ function generateDashboardHTML(stats) {
                 '<div class="data-meta">' +
                 (msg.sender_phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + msg.sender_phone + '" style="color:#3b82f6;">' + msg.sender_phone + '</a></span></div>' : '') +
                 '<div class="data-meta-item"><span class="data-meta-label">תאריך:</span><span class="data-meta-value">' + (msg.created_at ? new Date(msg.created_at).toLocaleDateString('he-IL') : '') + '</span></div>' +
-                '</div>' +
-                '</div>';
+                '</div></div>';
         }
 
         async function loadLeads(filter) {
             const container = document.getElementById('leads-list');
             const badge = document.getElementById('leads-filter-badge');
             container.innerHTML = '<div class="loading">טוען לידים...</div>';
-            const filterLabels = { qualified: '✰ מסנן: לידים מוכשרים', contacted: '📞 מסנן: בתהליך', closed: '✅ מסנן: עסקאות' };
+            const filterLabels = { qualified: '✰ מסנן: לידים מוכשרים', contacted: '📞 מסנן: בתהליך', new: '🆕 מסנן: חדשים' };
             if (badge) badge.innerHTML = filter && filterLabels[filter] ? '<span class="filter-active-badge">' + filterLabels[filter] + '</span>' : '';
             try {
                 const url = filter ? '/dashboard/api/leads?status=' + filter : '/dashboard/api/leads';
@@ -516,7 +495,8 @@ function generateDashboardHTML(stats) {
         }
 
         function renderLead(lead, i) {
-            return '<div class="data-item"><h3>' + (lead.name || 'ליד #' + (i+1)) + '</h3><div class="data-meta">' +
+            const typeLabel = { investor: '🏢 משקיע', owner: '🏠 מוכר', contact: '📩 פנייה' };
+            return '<div class="data-item"><h3>' + (lead.name || 'ליד #' + (i+1)) + ' ' + (typeLabel[lead.user_type] || '') + (lead.is_urgent ? ' 🚨' : '') + '</h3><div class="data-meta">' +
                 (lead.phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + lead.phone + '" style="color:#3b82f6;">' + lead.phone + '</a></span></div>' : '') +
                 (lead.email ? '<div class="data-meta-item"><span class="data-meta-label">אימייל:</span><span class="data-meta-value">' + lead.email + '</span></div>' : '') +
                 '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-' + (lead.status||'new') + '">' + (lead.status||'חדש') + '</span></span></div>' +
@@ -554,7 +534,6 @@ function generateDashboardHTML(stats) {
                 '<div class="data-meta-item"><span class="data-meta-label">יחידות קיים:</span><span class="data-meta-value">' + (c.units_count||0) + '</span></div>' +
                 '<div class="data-meta-item"><span class="data-meta-label">יחידות מתוכנן:</span><span class="data-meta-value">' + (c.planned_units||0) + '</span></div>' +
                 (c.iai_score ? '<div class="data-meta-item"><span class="data-meta-label">ציון IAI:</span><span class="data-meta-value" style="color:' + (c.iai_score > 80 ? '#22c55e' : c.iai_score > 60 ? '#f59e0b' : '#ef4444') + ';">' + c.iai_score + '</span></div>' : '') +
-                (c.ssi_score ? '<div class="data-meta-item"><span class="data-meta-label">SSI ממוצע:</span><span class="data-meta-value">' + parseFloat(c.ssi_score||0).toFixed(1) + '</span></div>' : '') +
                 '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value">' + (c.status||'לא ידוע') + '</span></div>' +
                 '</div>' +
                 (c.address ? '<p style="margin-top:8px;color:#9ca3af;font-size:13px;">📍 ' + c.address + '</p>' : '') +
