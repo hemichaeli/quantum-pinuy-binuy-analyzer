@@ -8,11 +8,11 @@ router.get('/', async (req, res) => {
         try {
             const [complexes, listings, opportunities, messages, leads, deals] = await Promise.all([
                 pool.query('SELECT COUNT(*) as total FROM complexes'),
-                pool.query('SELECT COUNT(*) as total FROM yad2_listings'),
-                pool.query('SELECT COUNT(*) as total FROM complexes WHERE ssi_score > 75'),
-                pool.query("SELECT COUNT(*) as total FROM whatsapp_messages WHERE status = 'new'"),
+                pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE'),
+                pool.query('SELECT COUNT(*) as total FROM complexes WHERE iai_score > 75'),
+                pool.query("SELECT COUNT(*) as total FROM listing_messages WHERE direction = 'received'"),
                 pool.query("SELECT COUNT(*) as total FROM leads WHERE status IN ('contacted','qualified')"),
-                pool.query("SELECT COUNT(*) as total FROM deals WHERE status = 'closed'")
+                pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')")
             ]);
             stats = {
                 totalComplexes: parseInt(complexes.rows[0]?.total) || 698,
@@ -35,11 +35,11 @@ router.get('/api/stats', async (req, res) => {
     try {
         const [complexes, listings, opportunities, messages, leads, deals] = await Promise.all([
             pool.query('SELECT COUNT(*) as total FROM complexes'),
-            pool.query('SELECT COUNT(*) as total FROM yad2_listings'),
-            pool.query('SELECT COUNT(*) as total FROM complexes WHERE ssi_score > 75'),
-            pool.query("SELECT COUNT(*) as total FROM whatsapp_messages WHERE status = 'new'"),
+            pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE'),
+            pool.query('SELECT COUNT(*) as total FROM complexes WHERE iai_score > 75'),
+            pool.query("SELECT COUNT(*) as total FROM listing_messages WHERE direction = 'received'"),
             pool.query("SELECT COUNT(*) as total FROM leads WHERE status IN ('contacted','qualified')"),
-            pool.query("SELECT COUNT(*) as total FROM deals WHERE status = 'closed'")
+            pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')")
         ]);
         res.json({ success: true, data: {
             totalComplexes: parseInt(complexes.rows[0]?.total) || 0,
@@ -57,9 +57,14 @@ router.get('/api/stats', async (req, res) => {
 router.get('/api/whatsapp/messages', async (req, res) => {
     try {
         const { unread } = req.query;
-        let query = `SELECT id, sender_phone, sender_name, message_content, status, auto_responded, created_at, lead_id, source_platform, priority FROM whatsapp_messages`;
-        if (unread === 'true') query += ` WHERE status = 'new'`;
-        query += ` ORDER BY created_at DESC LIMIT 100`;
+        let query = `
+            SELECT lm.id, lm.listing_id, l.phone as sender_phone, l.contact_name as sender_name,
+                   lm.message_text as message_content, lm.status, lm.direction,
+                   lm.created_at, NULL as lead_id, l.source as source_platform, 'normal' as priority
+            FROM listing_messages lm
+            LEFT JOIN listings l ON lm.listing_id = l.id
+            WHERE lm.direction = 'received'`;
+        query += ` ORDER BY lm.created_at DESC LIMIT 100`;
         const result = await pool.query(query);
         res.json({ success: true, data: result.rows });
     } catch (error) {
@@ -70,7 +75,7 @@ router.get('/api/whatsapp/messages', async (req, res) => {
 router.get('/api/leads', async (req, res) => {
     try {
         const { status } = req.query;
-        let query = `SELECT id, name, phone, email, budget, property_type, location_preference, status, source, conversion_score, last_contact_at, next_followup_at, created_at FROM leads WHERE 1=1`;
+        let query = `SELECT id, name, phone, email, status, source, notes, is_urgent, created_at, updated_at FROM leads WHERE 1=1`;
         const params = [];
         if (status) { query += ` AND status = $1`; params.push(status); }
         query += ` ORDER BY created_at DESC LIMIT 100`;
@@ -84,20 +89,22 @@ router.get('/api/leads', async (req, res) => {
 router.get('/api/complexes', async (req, res) => {
     try {
         const { city, minIAI, maxIAI, minSSI, status, sortBy, sortOrder } = req.query;
-        let query = `SELECT id, name, city, address, units_count, planned_units, iai_score, ssi_score, status, developer FROM complexes WHERE 1=1`;
+        let query = `SELECT id, name, city, address, existing_units as units_count, planned_units, iai_score, avg_ssi as ssi_score, status, developer FROM complexes WHERE 1=1`;
         const params = [];
         let n = 1;
         if (city?.trim()) { query += ` AND city ILIKE $${n}`; params.push('%' + city.trim() + '%'); n++; }
         if (minIAI && !isNaN(minIAI)) { query += ` AND iai_score >= $${n}`; params.push(parseFloat(minIAI)); n++; }
         if (maxIAI && !isNaN(maxIAI)) { query += ` AND iai_score <= $${n}`; params.push(parseFloat(maxIAI)); n++; }
-        if (minSSI && !isNaN(minSSI)) { query += ` AND ssi_score >= $${n}`; params.push(parseFloat(minSSI)); n++; }
+        if (minSSI && !isNaN(minSSI)) { query += ` AND avg_ssi >= $${n}`; params.push(parseFloat(minSSI)); n++; }
         if (status) { query += ` AND status = $${n}`; params.push(status); n++; }
-        const validSort = ['name', 'city', 'iai_score', 'ssi_score', 'units_count'];
+        const validSort = ['name', 'city', 'iai_score', 'avg_ssi', 'existing_units'];
         const sortField = validSort.includes(sortBy) ? sortBy : 'iai_score';
         const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
         query += ` ORDER BY ${sortField} ${order} NULLS LAST LIMIT 100`;
         const result = await pool.query(query, params);
-        res.json({ success: true, data: result.rows });
+        // Remap avg_ssi → ssi_score for frontend
+        const data = result.rows.map(r => ({ ...r, ssi_score: r.ssi_score || r.avg_ssi }));
+        res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -106,24 +113,40 @@ router.get('/api/complexes', async (req, res) => {
 router.get('/api/ads', async (req, res) => {
     try {
         const { city, minPrice, maxPrice, search, sortBy, sortOrder, phoneFilter, contactStatus, page = 1, limit = 50 } = req.query;
-        let query = `SELECT id, title, city, address, price_current, price_potential, ROUND(((price_potential - price_current) / NULLIF(price_current, 0) * 100), 1) as premium_percent, phone, contact_status, contact_attempts, last_contact_at, created_at, url FROM yad2_listings WHERE price_current > 0`;
+        let query = `
+            SELECT l.id,
+                   COALESCE(l.address, 'מודעה') as title,
+                   l.city,
+                   l.address,
+                   l.asking_price as price_current,
+                   ROUND(((c.theoretical_premium_min + c.theoretical_premium_max) / 2.0), 1) as premium_percent,
+                   l.phone,
+                   l.message_status as contact_status,
+                   l.deal_status,
+                   l.created_at,
+                   l.url,
+                   l.source,
+                   l.ssi_score
+            FROM listings l
+            LEFT JOIN complexes c ON l.complex_id = c.id
+            WHERE l.is_active = TRUE AND l.asking_price > 0`;
         const params = [];
         let n = 1;
-        if (city?.trim()) { query += ` AND city ILIKE $${n}`; params.push('%' + city.trim() + '%'); n++; }
-        if (minPrice && !isNaN(minPrice)) { query += ` AND price_current >= $${n}`; params.push(parseInt(minPrice)); n++; }
-        if (maxPrice && !isNaN(maxPrice)) { query += ` AND price_current <= $${n}`; params.push(parseInt(maxPrice)); n++; }
-        if (search?.trim()) { query += ` AND (title ILIKE $${n} OR address ILIKE $${n})`; params.push('%' + search.trim() + '%'); n++; }
-        if (phoneFilter === 'yes') query += ` AND phone IS NOT NULL AND phone != ''`;
-        else if (phoneFilter === 'no') query += ` AND (phone IS NULL OR phone = '')`;
-        if (contactStatus) { query += ` AND contact_status = $${n}`; params.push(contactStatus); n++; }
-        const validSort = ['title', 'city', 'price_current', 'premium_percent', 'created_at', 'contact_attempts'];
-        const sortField = validSort.includes(sortBy) ? sortBy : 'created_at';
+        if (city?.trim()) { query += ` AND l.city ILIKE $${n}`; params.push('%' + city.trim() + '%'); n++; }
+        if (minPrice && !isNaN(minPrice)) { query += ` AND l.asking_price >= $${n}`; params.push(parseInt(minPrice)); n++; }
+        if (maxPrice && !isNaN(maxPrice)) { query += ` AND l.asking_price <= $${n}`; params.push(parseInt(maxPrice)); n++; }
+        if (search?.trim()) { query += ` AND (l.address ILIKE $${n} OR l.city ILIKE $${n})`; params.push('%' + search.trim() + '%'); n++; }
+        if (phoneFilter === 'yes') query += ` AND l.phone IS NOT NULL AND l.phone != ''`;
+        else if (phoneFilter === 'no') query += ` AND (l.phone IS NULL OR l.phone = '')`;
+        if (contactStatus) { query += ` AND l.message_status = $${n}`; params.push(contactStatus); n++; }
+        const validSort = ['address', 'city', 'asking_price', 'premium_percent', 'created_at', 'ssi_score'];
+        const sortField = validSort.includes(sortBy) ? (sortBy === 'premium_percent' ? 'premium_percent' : `l.${sortBy}`) : 'l.created_at';
         const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
         const offset = (parseInt(page) - 1) * parseInt(limit);
         query += ` ORDER BY ${sortField} ${order} LIMIT $${n} OFFSET $${n + 1}`;
         params.push(parseInt(limit), offset);
         const result = await pool.query(query, params);
-        const countResult = await pool.query('SELECT COUNT(*) as total FROM yad2_listings WHERE price_current > 0');
+        const countResult = await pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE AND asking_price > 0');
         res.json({ success: true, data: result.rows, pagination: { page: parseInt(page), limit: parseInt(limit), total: parseInt(countResult.rows[0]?.total) || 0 } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -133,15 +156,13 @@ router.get('/api/ads', async (req, res) => {
 router.post('/api/whatsapp/convert-to-lead', async (req, res) => {
     try {
         const { messageId, name, phone, budget, property_type, location_preference } = req.body;
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-            const leadResult = await client.query(`INSERT INTO leads (name, phone, budget, property_type, location_preference, status, source) VALUES ($1, $2, $3, $4, $5, 'new', 'whatsapp') RETURNING id`, [name, phone, budget, property_type, location_preference]);
-            const leadId = leadResult.rows[0].id;
-            await client.query('UPDATE whatsapp_messages SET lead_id = $1, status = $2 WHERE id = $3', [leadId, 'converted_to_lead', messageId]);
-            await client.query('COMMIT');
-            res.json({ success: true, leadId, message: 'Converted to lead' });
-        } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+        const notes = [property_type && `סוג נכס: ${property_type}`, location_preference && `אזור: ${location_preference}`, budget && `תקציב: ₪${parseInt(budget).toLocaleString()}`].filter(Boolean).join(' | ');
+        const leadResult = await pool.query(
+            `INSERT INTO leads (name, phone, status, source, notes) VALUES ($1, $2, 'new', 'whatsapp', $3) RETURNING id`,
+            [name, phone, notes || null]
+        );
+        const leadId = leadResult.rows[0].id;
+        res.json({ success: true, leadId, message: 'Converted to lead' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -149,8 +170,8 @@ router.post('/api/whatsapp/convert-to-lead', async (req, res) => {
 
 router.get('/api/facebook/ads', async (req, res) => {
     res.json({ success: true, data: [
-        { id:1, campaign_name:'קמפיין דירות תל אביב', ad_name:'דירות זולות 15num!עם', status:'active', impressions:12543, clicks:342, ctr:2.73, cost:850.50, leads:23, cost_per_lead:37.00 },
-        { id:2, campaign_name:'קמפיין פינוי-בינוי השקעות', ad_name:'פינוי בינוי יוצא דופן שות', status:'active', impressions:8934, clicks:198, ctr:2.22, cost:650.75, leads:15, cost_per_lead:43.38 }
+        { id:1, campaign_name:'קמפיין דירות תל אביב', ad_name:'דירות זולות - תל אביב', status:'active', impressions:12543, clicks:342, ctr:2.73, cost:850.50, leads:23, cost_per_lead:37.00 },
+        { id:2, campaign_name:'קמפיין פינוי-בינוי השקעות', ad_name:'פינוי-בינוי - השקעה בטוחה', status:'active', impressions:8934, clicks:198, ctr:2.22, cost:650.75, leads:15, cost_per_lead:43.38 }
     ]});
 });
 
@@ -225,7 +246,7 @@ function generateDashboardHTML(stats) {
 <body>
     <div class="header">
         <h1>💎 QUANTUM DASHBOARD</h1>
-        <div class="status">🟢 מחובר ופעיל • <span id="time"></span></div>
+        <div class="status">🟢 מחובר ופעיל &bull; <span id="time"></span></div>
     </div>
 
     <div class="nav-tabs">
@@ -240,21 +261,21 @@ function generateDashboardHTML(stats) {
     <!-- Dashboard Tab -->
     <div id="tab-dashboard" class="tab-content active">
         <div class="stats-grid">
-            <div class="stat-card" onclick="switchTab('complexes')" title="לחץ לפתיחת טאב המתחמים">
+            <div class="stat-card" onclick="switchTab('complexes')" title="לחץ לפתיחת רשימת המתחמים">
                 <div class="stat-number">${stats.totalComplexes}</div>
                 <div class="stat-label">מתחמי פינוי-בינוי</div>
                 <div class="stat-hint">→ לחץ לפתיחת רשימת המתחמים</div>
                 <div class="stat-change">+12% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('ads')" title="לחץ לפתיחת טאב המודעות">
+            <div class="stat-card" onclick="switchTab('ads')" title="לחץ לפתיחת רשימת המודעות">
                 <div class="stat-number">${stats.newListings}</div>
                 <div class="stat-label">מודעות פעילות</div>
                 <div class="stat-hint">→ לחץ לפתיחת רשימת המודעות</div>
                 <div class="stat-change">+8% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('messages', 'unread')" title="לחץ לפתיחת הודעות שלא נקראו">
+            <div class="stat-card" onclick="switchTab('messages')" title="לחץ לפתיחת הודעות">
                 <div class="stat-number">${stats.activeMessages}</div>
-                <div class="stat-label">הודעות חדשות</div>
+                <div class="stat-label">הודעות נכנסות</div>
                 <div class="stat-hint">→ לחץ לפתיחת הודעות</div>
                 <div class="stat-change">+23% השנה</div>
             </div>
@@ -264,15 +285,15 @@ function generateDashboardHTML(stats) {
                 <div class="stat-hint">→ לחץ לפתיחת הלידים</div>
                 <div class="stat-change">+15% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('complexes', 'hot')" title="לחץ לפתיחת הזדמנויות חמות - SSI גבוה">
+            <div class="stat-card" onclick="switchTab('complexes', 'hot')" title="לחץ לפתיחת הזדמנויות חמות">
                 <div class="stat-number">${stats.hotOpportunities}</div>
                 <div class="stat-label">הזדמנויות חמות</div>
-                <div class="stat-hint">→ SSI > 75 | לחץ לפתיחת רשימה</div>
+                <div class="stat-hint">→ IAI > 75 | לחץ לפתיחת רשימה</div>
                 <div class="stat-change">+31% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('leads', 'closed')" title="לחץ לפתיחת עסקאות סגורות">
+            <div class="stat-card" onclick="switchTab('leads', 'closed')" title="לחץ לפתיחת עסקאות">
                 <div class="stat-number">${stats.closedDeals}</div>
-                <div class="stat-label">עסקאות ב15 השנה</div>
+                <div class="stat-label">עסקאות תיווך</div>
                 <div class="stat-hint">→ לחץ לפתיחת עסקאות</div>
                 <div class="stat-change">+67% השנה</div>
             </div>
@@ -281,16 +302,16 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>⚡ פעולות מהירות</h2>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-                <button class="btn" onclick="runAction('enrichment')">✨ הרץ 259 סריקות</button>
-                <button class="btn" onclick="runAction('scan-yad2')">🏠 סרוק יד3</button>
+                <button class="btn" onclick="runAction('scan-yad2')">🏠 סרוק יד2</button>
                 <button class="btn" onclick="runAction('scan-facebook')">📱 סרוק פייסבוק</button>
                 <button class="btn" onclick="refreshStats()">🔄 רענן נתונים</button>
                 <button class="btn btn-secondary" onclick="window.open('/api/docs','_blank')">📋 API Docs</button>
+                <button class="btn btn-secondary" onclick="window.open('/sandbox','_blank')">🧪 Sandbox</button>
             </div>
         </div>
 
         <div class="section">
-            <h2>📊 שיטות ניתוח</h2>
+            <h2>📊 סטטוס מערכת</h2>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
                 <div class="data-item"><h3>📾 סריקה אוטומטית</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">פעיל</span></span></div></div></div>
                 <div class="data-item"><h3>📱 WhatsApp</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">מחובר</span></span></div></div></div>
@@ -303,7 +324,7 @@ function generateDashboardHTML(stats) {
     <!-- Ads Tab -->
     <div id="tab-ads" class="tab-content">
         <div class="section">
-            <h2>🏘 רשימת מודעות יד2</h2>
+            <h2>🏘 רשימת מודעות</h2>
             <div class="filters">
                 <input type="text" class="filter-input" id="cityFilter" placeholder="עיר">
                 <input type="number" class="filter-input" id="minPriceFilter" placeholder="מחיר מינימום">
@@ -325,10 +346,9 @@ function generateDashboardHTML(stats) {
     <!-- Messages Tab -->
     <div id="tab-messages" class="tab-content">
         <div class="section">
-            <h2>💬 מרכז הודעות WhatsApp</h2>
+            <h2>💬 מרכז הודעות</h2>
             <div class="actions-bar">
                 <button class="btn" onclick="loadMessages()">🔄 טען הודעות</button>
-                <button class="btn btn-secondary" onclick="loadMessages('unread')">🔴 לא נקראו</button>
                 <button class="btn btn-secondary" onclick="exportData('messages')">📊 ייצוא</button>
             </div>
             <div id="messages-filter-badge" style="margin-bottom:10px;"></div>
@@ -341,10 +361,10 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>👤 רשימת לידים ומכירות</h2>
             <div class="actions-bar">
-                <button class="btn" onclick="loadLeads()">👤 טען הלידים</button>
+                <button class="btn" onclick="loadLeads()">👤 כל הלידים</button>
                 <button class="btn btn-secondary" onclick="loadLeads('qualified')">✰ מוכשרים</button>
-                <button class="btn btn-secondary" onclick="loadLeads('contacted')">📞 בטיפול: בתהליך יצור</button>
-                <button class="btn btn-secondary" onclick="loadLeads('closed')">✅ עסקאות 15 השנה</button>
+                <button class="btn btn-secondary" onclick="loadLeads('contacted')">📞 בתהליך</button>
+                <button class="btn btn-secondary" onclick="loadLeads('closed')">✅ עסקאות</button>
                 <button class="btn btn-green" onclick="exportData('leads')">📊 ייצוא לאקסל</button>
             </div>
             <div id="leads-filter-badge" style="margin-bottom:10px;"></div>
@@ -362,9 +382,10 @@ function generateDashboardHTML(stats) {
                 <input type="number" class="filter-input" id="maxIAIFilter" placeholder="IAI מקסימום">
                 <select class="filter-select" id="complexStatusFilter">
                     <option value="">כל הסטטוסים</option>
-                    <option value="active">פעיל</option>
+                    <option value="approved">אושרה</option>
+                    <option value="deposited">הופקדה</option>
                     <option value="planning">בתכנון</option>
-                    <option value="execution">בביצוע</option>
+                    <option value="construction">בביצוע</option>
                 </select>
             </div>
             <div class="actions-bar">
@@ -386,7 +407,7 @@ function generateDashboardHTML(stats) {
             </div>
             <div id="news-list" class="data-list">
                 <div class="data-item"><h3>📈 ריבית בנק ישראל</h3><p>מחירי הדירות עלו בממוצע ב-3.2% בחודש האחרון</p><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">קטגוריה:</span><span class="data-meta-value">מאקרו</span></div></div></div>
-                <div class="data-item"><h3>🏗️ פינוי בינוי חדשות</h3><p>אושר פינוי-בינוי חדש ברחוב הרצל - 180 יחידות</p><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">עיר:</span><span class="data-meta-value">קרית ביאליק</span></div></div></div>
+                <div class="data-item"><h3>🏗️ פינוי-בינוי חדשות</h3><p>אושר פינוי-בינוי חדש ברחוב הרצל - 180 יחידות</p><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">עיר:</span><span class="data-meta-value">קרית ביאליק</span></div></div></div>
                 <div id="facebook-ads-section" style="display:none;"><h3 style="color:#d4af37;margin:15px 0;">📱 מודעות פייסבוק</h3><div id="facebook-ads-list"></div></div>
             </div>
         </div>
@@ -398,10 +419,6 @@ function generateDashboardHTML(stats) {
         document.addEventListener('DOMContentLoaded', function() {
             updateTime();
             setInterval(updateTime, 1000);
-            loadAds();
-            loadMessages();
-            loadLeads();
-            loadComplexes();
         });
 
         function updateTime() {
@@ -448,11 +465,15 @@ function generateDashboardHTML(stats) {
         }
 
         function renderAd(ad, i) {
-            return '<div class="data-item"><h3>' + (ad.title || 'מודעה #' + (i+1)) + '</h3><div class="data-meta">' +
+            const price = ad.price_current ? '₪' + parseInt(ad.price_current).toLocaleString() : 'מחיר לא ידוע';
+            const premium = ad.premium_percent ? ad.premium_percent + '%' : null;
+            return '<div class="data-item"><h3>' + (ad.address || 'מודעה #' + (i+1)) + '</h3><div class="data-meta">' +
                 '<div class="data-meta-item"><span class="data-meta-label">עיר:</span><span class="data-meta-value">' + (ad.city||'לא ידוע') + '</span></div>' +
-                '<div class="data-meta-item"><span class="data-meta-label">מחיר:</span><span class="data-meta-value">₪' + ((ad.price_current||0)).toLocaleString() + '</span></div>' +
-                (ad.premium_percent ? '<div class="data-meta-item"><span class="data-meta-label">פרמיה:</span><span class="data-meta-value">' + ad.premium_percent + '%</span></div>' : '') +
+                '<div class="data-meta-item"><span class="data-meta-label">מחיר:</span><span class="data-meta-value">' + price + '</span></div>' +
+                (premium ? '<div class="data-meta-item"><span class="data-meta-label">פרמיה:</span><span class="data-meta-value">' + premium + '</span></div>' : '') +
+                '<div class="data-meta-item"><span class="data-meta-label">SSI:</span><span class="data-meta-value">' + (ad.ssi_score||0) + '</span></div>' +
                 (ad.phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + ad.phone + '" style="color:#3b82f6;">' + ad.phone + '</a> <a href="https://wa.me/' + ad.phone.replace(/[^0-9]/g,'') + '" style="background:#22c55e;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:12px;">WhatsApp</a></span></div>' : '') +
+                (ad.url ? '<div class="data-meta-item"><span class="data-meta-label">קישור:</span><span class="data-meta-value"><a href="' + ad.url + '" target="_blank" style="color:#3b82f6;">פתח מודעה</a></span></div>' : '') +
                 '</div></div>';
         }
 
@@ -460,10 +481,9 @@ function generateDashboardHTML(stats) {
             const container = document.getElementById('messages-list');
             const badge = document.getElementById('messages-filter-badge');
             container.innerHTML = '<div class="loading">טוען הודעות...</div>';
-            if (badge) badge.innerHTML = filter === 'unread' ? '<span class="filter-active-badge">🔴 מסנן: הודעות שלא נקראו</span>' : '';
+            if (badge) badge.innerHTML = '';
             try {
-                const url = filter === 'unread' ? '/dashboard/api/whatsapp/messages?unread=true' : '/dashboard/api/whatsapp/messages';
-                const data = await fetchJSON(url);
+                const data = await fetchJSON('/dashboard/api/whatsapp/messages');
                 if (!data.success) throw new Error(data.error);
                 if (!data.data.length) { container.innerHTML = '<div class="loading">📋 אין הודעות</div>'; return; }
                 container.innerHTML = data.data.map(msg => renderMessage(msg)).join('');
@@ -471,14 +491,12 @@ function generateDashboardHTML(stats) {
         }
 
         function renderMessage(msg) {
-            return '<div class="data-item"><h3>' + (msg.sender_name || msg.sender_phone) + '</h3>' +
+            return '<div class="data-item"><h3>' + (msg.sender_name || msg.sender_phone || 'שולח לא ידוע') + '</h3>' +
                 '<p style="margin:5px 0;color:#d1d5db;">' + (msg.message_content||'') + '</p>' +
                 '<div class="data-meta">' +
-                '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + msg.sender_phone + '" style="color:#3b82f6;">' + msg.sender_phone + '</a></span></div>' +
-                '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-' + (msg.status||'new') + '">' + (msg.status||'new') + '</span></span></div>' +
+                (msg.sender_phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + msg.sender_phone + '" style="color:#3b82f6;">' + msg.sender_phone + '</a></span></div>' : '') +
                 '<div class="data-meta-item"><span class="data-meta-label">תאריך:</span><span class="data-meta-value">' + (msg.created_at ? new Date(msg.created_at).toLocaleDateString('he-IL') : '') + '</span></div>' +
                 '</div>' +
-                (!msg.lead_id ? '<div style="margin-top:12px;"><button class="btn" onclick="convertToLead(' + msg.id + ',\'' + msg.sender_phone + '\')">👤 הפוך ללי</button></div>' : '<div style="margin-top:12px;color:#22c55e;font-size:14px;">✅ הומר ללי (ID: ' + msg.lead_id + ')</div>') +
                 '</div>';
         }
 
@@ -486,7 +504,7 @@ function generateDashboardHTML(stats) {
             const container = document.getElementById('leads-list');
             const badge = document.getElementById('leads-filter-badge');
             container.innerHTML = '<div class="loading">טוען לידים...</div>';
-            const filterLabels = { qualified: '✰ מסנן: לידים מוכשרים', contacted: '📞 מסנן: בתהליך יצור', closed: '✅ מסנן: עסקאות' };
+            const filterLabels = { qualified: '✰ מסנן: לידים מוכשרים', contacted: '📞 מסנן: בתהליך', closed: '✅ מסנן: עסקאות' };
             if (badge) badge.innerHTML = filter && filterLabels[filter] ? '<span class="filter-active-badge">' + filterLabels[filter] + '</span>' : '';
             try {
                 const url = filter ? '/dashboard/api/leads?status=' + filter : '/dashboard/api/leads';
@@ -499,10 +517,11 @@ function generateDashboardHTML(stats) {
 
         function renderLead(lead, i) {
             return '<div class="data-item"><h3>' + (lead.name || 'ליד #' + (i+1)) + '</h3><div class="data-meta">' +
-                '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + lead.phone + '" style="color:#3b82f6;">' + lead.phone + '</a></span></div>' +
-                (lead.budget ? '<div class="data-meta-item"><span class="data-meta-label">תקציב:</span><span class="data-meta-value">₪' + (lead.budget).toLocaleString() + '</span></div>' : '') +
-                '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-' + (lead.status||'new') + '">' + (lead.status||'new') + '</span></span></div>' +
+                (lead.phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + lead.phone + '" style="color:#3b82f6;">' + lead.phone + '</a></span></div>' : '') +
+                (lead.email ? '<div class="data-meta-item"><span class="data-meta-label">אימייל:</span><span class="data-meta-value">' + lead.email + '</span></div>' : '') +
+                '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-' + (lead.status||'new') + '">' + (lead.status||'חדש') + '</span></span></div>' +
                 '<div class="data-meta-item"><span class="data-meta-label">מקור:</span><span class="data-meta-value">' + (lead.source||'לא ידוע') + '</span></div>' +
+                (lead.notes ? '<div class="data-meta-item"><span class="data-meta-label">הערות:</span><span class="data-meta-value">' + lead.notes + '</span></div>' : '') +
                 '</div></div>';
         }
 
@@ -510,7 +529,7 @@ function generateDashboardHTML(stats) {
             const container = document.getElementById('complexes-list');
             const badge = document.getElementById('complexes-filter-badge');
             container.innerHTML = '<div class="loading">טוען מתחמים...</div>';
-            if (badge) badge.innerHTML = filter === 'hot' ? '<span class="filter-active-badge">🔥 מסנן: הזדמנויות חמות - SSI > 75</span>' : '';
+            if (badge) badge.innerHTML = filter === 'hot' ? '<span class="filter-active-badge">🔥 מסנן: הזדמנויות חמות - IAI > 75</span>' : '';
             try {
                 const params = new URLSearchParams();
                 const city = document.getElementById('complexesCityFilter')?.value;
@@ -521,7 +540,7 @@ function generateDashboardHTML(stats) {
                 if (minIAI) params.append('minIAI', minIAI);
                 if (maxIAI) params.append('maxIAI', maxIAI);
                 if (status) params.append('status', status);
-                if (filter === 'hot') params.append('minSSI', '75');
+                if (filter === 'hot') params.append('minIAI', '75');
                 const data = await fetchJSON('/dashboard/api/complexes?' + params);
                 if (!data.success) throw new Error(data.error);
                 if (!data.data.length) { container.innerHTML = '<div class="loading">🏢 אין מתחמים</div>'; return; }
@@ -535,7 +554,8 @@ function generateDashboardHTML(stats) {
                 '<div class="data-meta-item"><span class="data-meta-label">יחידות קיים:</span><span class="data-meta-value">' + (c.units_count||0) + '</span></div>' +
                 '<div class="data-meta-item"><span class="data-meta-label">יחידות מתוכנן:</span><span class="data-meta-value">' + (c.planned_units||0) + '</span></div>' +
                 (c.iai_score ? '<div class="data-meta-item"><span class="data-meta-label">ציון IAI:</span><span class="data-meta-value" style="color:' + (c.iai_score > 80 ? '#22c55e' : c.iai_score > 60 ? '#f59e0b' : '#ef4444') + ';">' + c.iai_score + '</span></div>' : '') +
-                (c.ssi_score ? '<div class="data-meta-item"><span class="data-meta-label">ציון SSI:</span><span class="data-meta-value">' + c.ssi_score + '</span></div>' : '') +
+                (c.ssi_score ? '<div class="data-meta-item"><span class="data-meta-label">SSI ממוצע:</span><span class="data-meta-value">' + parseFloat(c.ssi_score||0).toFixed(1) + '</span></div>' : '') +
+                '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value">' + (c.status||'לא ידוע') + '</span></div>' +
                 '</div>' +
                 (c.address ? '<p style="margin-top:8px;color:#9ca3af;font-size:13px;">📍 ' + c.address + '</p>' : '') +
                 '</div>';
@@ -557,25 +577,8 @@ function generateDashboardHTML(stats) {
             } catch (e) { console.error('FB ads error:', e); }
         }
 
-        async function convertToLead(messageId, phone) {
-            const name = prompt('שם הלי:');
-            if (!name) return;
-            const budget = prompt('תקציב (₪):');
-            const propertyType = prompt('סוג נכס:');
-            const location = prompt('אזור מועדף:');
-            try {
-                const data = await fetchJSON('/dashboard/api/whatsapp/convert-to-lead', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messageId, name, phone, budget: budget ? parseInt(budget) : null, property_type: propertyType, location_preference: location })
-                });
-                if (data.success) { alert('✅ הומר ללי! (ID: ' + data.leadId + ')'); loadMessages(); }
-                else throw new Error(data.error);
-            } catch (e) { alert('❌ שגיאה: ' + e.message); }
-        }
-
         async function runAction(action) {
-            const endpoints = { enrichment: '/api/scan/dual', 'scan-yad2': '/api/scan/yad2', 'scan-facebook': '/api/facebook/sync' };
+            const endpoints = { 'scan-yad2': '/api/scan/yad2', 'scan-facebook': '/api/facebook/sync' };
             const endpoint = endpoints[action];
             if (!endpoint) return;
             if (!confirm('להפעיל ' + action + '?')) return;
