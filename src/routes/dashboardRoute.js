@@ -4,15 +4,16 @@ const pool = require('../db/pool');
 
 router.get('/', async (req, res) => {
     try {
-        let stats = { totalComplexes: 698, newListings: 931, hotOpportunities: 34, activeMessages: 0, qualifiedLeads: 7, closedDeals: 0 };
+        let stats = { totalComplexes: 698, newListings: 931, hotOpportunities: 34, activeMessages: 0, qualifiedLeads: 7, closedDeals: 0, konesCount: 0 };
         try {
-            const [complexes, listings, opportunities, messages, leads, deals] = await Promise.all([
+            const [complexes, listings, opportunities, messages, leads, deals, kones] = await Promise.all([
                 pool.query('SELECT COUNT(*) as total FROM complexes'),
                 pool.query('SELECT COUNT(*) as total FROM listings WHERE is_active = TRUE'),
                 pool.query('SELECT COUNT(*) as total FROM complexes WHERE iai_score > 75'),
                 pool.query("SELECT COUNT(*) as total FROM listing_messages WHERE direction = 'received'"),
                 pool.query("SELECT COUNT(*) as total FROM website_leads WHERE status IN ('contacted','qualified')"),
-                pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')")
+                pool.query("SELECT COUNT(*) as total FROM listings WHERE deal_status IN ('תיווך','סגור')"),
+                pool.query("SELECT COUNT(*) as total FROM kones_listings WHERE contact_status = 'pending' OR contact_status IS NULL").catch(() => ({ rows: [{ total: 0 }] }))
             ]);
             stats = {
                 totalComplexes: parseInt(complexes.rows[0]?.total) || 698,
@@ -20,7 +21,8 @@ router.get('/', async (req, res) => {
                 hotOpportunities: parseInt(opportunities.rows[0]?.total) || 34,
                 activeMessages: parseInt(messages.rows[0]?.total) || 0,
                 qualifiedLeads: parseInt(leads.rows[0]?.total) || 7,
-                closedDeals: parseInt(deals.rows[0]?.total) || 0
+                closedDeals: parseInt(deals.rows[0]?.total) || 0,
+                konesCount: parseInt(kones.rows[0]?.total) || 0
             };
         } catch (dbError) {
             console.warn('DB error, using defaults:', dbError.message);
@@ -49,6 +51,26 @@ router.get('/api/stats', async (req, res) => {
             qualifiedLeads: parseInt(leads.rows[0]?.total) || 0,
             closedDeals: parseInt(deals.rows[0]?.total) || 0
         }});
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/api/kones', async (req, res) => {
+    try {
+        const { city, status, search } = req.query;
+        let query = `SELECT id, case_number, property_address as address, city, price, phone,
+                            contact_status, contact_attempts, last_contact_at, source_site,
+                            created_at, url
+                     FROM kones_listings WHERE 1=1`;
+        const params = [];
+        let n = 1;
+        if (city?.trim()) { query += ` AND city ILIKE $${n}`; params.push('%' + city.trim() + '%'); n++; }
+        if (status) { query += ` AND contact_status = $${n}`; params.push(status); n++; }
+        if (search?.trim()) { query += ` AND (property_address ILIKE $${n} OR city ILIKE $${n} OR case_number ILIKE $${n})`; params.push('%' + search.trim() + '%'); n++; }
+        query += ` ORDER BY created_at DESC LIMIT 100`;
+        const result = await pool.query(query, params);
+        res.json({ success: true, data: result.rows });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -213,8 +235,9 @@ function generateDashboardHTML(stats) {
         .status-badge { padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
         .status-new { background:#ef4444; color:#fff; }
         .status-contacted { background:#3b82f6; color:#fff; }
-        .status-qualified { background:#22c55e; color:#fff; }
+        .status-qualified { background:#22c55e; color:#000; }
         .status-closed { background:#8b5cf6; color:#fff; }
+        .status-pending { background:#f59e0b; color:#000; }
         .loading { text-align:center; padding:40px; color:#9ca3af; }
         .loading::before { content:'⏳'; font-size:24px; margin-bottom:10px; display:block; }
         .error { background:#7f1d1d; border:1px solid #dc2626; color:#fecaca; padding:15px; border-radius:8px; margin:10px 0; }
@@ -245,6 +268,7 @@ function generateDashboardHTML(stats) {
         <div class="nav-tab" onclick="switchTab('messages')">💬 הודעות</div>
         <div class="nav-tab" onclick="switchTab('leads')">👤 לידים</div>
         <div class="nav-tab" onclick="switchTab('complexes')">🏢 מתחמים</div>
+        <div class="nav-tab" onclick="switchTab('kones')">🏗️ כינוס</div>
         <div class="nav-tab" onclick="switchTab('news')">📰 חדשות</div>
     </div>
 
@@ -286,6 +310,12 @@ function generateDashboardHTML(stats) {
                 <div class="stat-hint">→ לחץ לפתיחת נתונים</div>
                 <div class="stat-change">+67% השנה</div>
             </div>
+            <div class="stat-card" onclick="switchTab('kones')" title="לחץ לפתיחת כינוסי נכסים">
+                <div class="stat-number">${stats.konesCount}</div>
+                <div class="stat-label">כינוסי נכסים</div>
+                <div class="stat-hint">→ לחץ לפתיחת רשימת כינוסים</div>
+                <div class="stat-change" style="background:#f59e0b;">ממתינים לטיפול</div>
+            </div>
         </div>
 
         <div class="section">
@@ -305,7 +335,7 @@ function generateDashboardHTML(stats) {
                 <div class="data-item"><h3>📾 סריקה אוטומטית</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">פעיל</span></span></div></div></div>
                 <div class="data-item"><h3>📱 WhatsApp</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">מחובר</span></span></div></div></div>
                 <div class="data-item"><h3>📆 Auto Contact</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">פעיל (כל 30 דק)</span></span></div></div></div>
-                <div class="data-item"><h3>🏗️ כינוס נכסים</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">פעיל</span></span></div></div></div>
+                <div class="data-item"><h3>🏗️ כינוס נכסים</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">פעיל (07:45 יומי)</span></span></div></div></div>
             </div>
         </div>
     </div>
@@ -382,6 +412,30 @@ function generateDashboardHTML(stats) {
         </div>
     </div>
 
+    <div id="tab-kones" class="tab-content">
+        <div class="section">
+            <h2>🏗️ כינוסי נכסים</h2>
+            <div class="filters">
+                <input type="text" class="filter-input" id="konesCityFilter" placeholder="עיר">
+                <input type="text" class="filter-input" id="konesSearchFilter" placeholder="חיפוש חופשי">
+                <select class="filter-select" id="konesStatusFilter">
+                    <option value="">כל הסטטוסים</option>
+                    <option value="pending">ממתין לפנייה</option>
+                    <option value="contacted">נוצר קשר</option>
+                    <option value="failed">נכשל</option>
+                </select>
+            </div>
+            <div class="actions-bar">
+                <button class="btn" onclick="loadKones()">🔍 טען כינוסים</button>
+                <button class="btn btn-secondary" onclick="loadKones('pending')">⏳ ממתינים</button>
+                <button class="btn btn-green" onclick="runKonesAutoContact()">📱 הפעל Auto Contact</button>
+                <button class="btn btn-secondary" onclick="exportData('kones')">📊 ייצוא</button>
+            </div>
+            <div id="kones-filter-badge" style="margin-bottom:10px;"></div>
+            <div id="kones-list" class="data-list"><div class="loading">טוען כינוסי נכסים...</div></div>
+        </div>
+    </div>
+
     <div id="tab-news" class="tab-content">
         <div class="section">
             <h2>📰 חדשות שוק הנדלן</h2>
@@ -414,7 +468,7 @@ function generateDashboardHTML(stats) {
             document.querySelectorAll('.nav-tab').forEach(n => n.classList.remove('active'));
             const target = document.getElementById('tab-' + tabName);
             if (target) target.classList.add('active');
-            const tabs = ['dashboard','ads','messages','leads','complexes','news'];
+            const tabs = ['dashboard','ads','messages','leads','complexes','kones','news'];
             const idx = tabs.indexOf(tabName);
             const navTabs = document.querySelectorAll('.nav-tab');
             if (navTabs[idx]) navTabs[idx].classList.add('active');
@@ -424,6 +478,7 @@ function generateDashboardHTML(stats) {
             else if (tabName === 'messages') loadMessages();
             else if (tabName === 'leads') loadLeads(filter || null);
             else if (tabName === 'complexes') loadComplexes(filter === 'hot' ? 'hot' : null);
+            else if (tabName === 'kones') loadKones(filter || null);
         }
 
         async function loadAds() {
@@ -538,6 +593,50 @@ function generateDashboardHTML(stats) {
                 '</div>' +
                 (c.address ? '<p style="margin-top:8px;color:#9ca3af;font-size:13px;">📍 ' + c.address + '</p>' : '') +
                 '</div>';
+        }
+
+        async function loadKones(filter) {
+            const container = document.getElementById('kones-list');
+            const badge = document.getElementById('kones-filter-badge');
+            container.innerHTML = '<div class="loading">טוען כינוסי נכסים...</div>';
+            if (badge) badge.innerHTML = filter === 'pending' ? '<span class="filter-active-badge">⏳ מסנן: ממתינים לפנייה</span>' : '';
+            try {
+                const params = new URLSearchParams();
+                const city = document.getElementById('konesCityFilter')?.value;
+                const search = document.getElementById('konesSearchFilter')?.value;
+                const status = document.getElementById('konesStatusFilter')?.value || filter;
+                if (city) params.append('city', city);
+                if (search) params.append('search', search);
+                if (status) params.append('status', status);
+                const data = await fetchJSON('/dashboard/api/kones?' + params);
+                if (!data.success) throw new Error(data.error);
+                if (!data.data.length) { container.innerHTML = '<div class="loading">🏗️ אין כינוסי נכסים</div>'; return; }
+                container.innerHTML = data.data.map((k, i) => renderKones(k, i)).join('');
+            } catch (e) { container.innerHTML = errorHTML(e.message, 'loadKones()'); }
+        }
+
+        function renderKones(k, i) {
+            const statusClass = { pending: 'status-pending', contacted: 'status-contacted', failed: 'status-new' };
+            const statusLabel = { pending: 'ממתין', contacted: 'נוצר קשר', failed: 'נכשל' };
+            const st = k.contact_status || 'pending';
+            return '<div class="data-item"><h3>🏗️ ' + (k.address || 'כינוס #' + (i+1)) + '</h3><div class="data-meta">' +
+                '<div class="data-meta-item"><span class="data-meta-label">עיר:</span><span class="data-meta-value">' + (k.city||'לא ידוע') + '</span></div>' +
+                (k.case_number ? '<div class="data-meta-item"><span class="data-meta-label">מספר תיק:</span><span class="data-meta-value">' + k.case_number + '</span></div>' : '') +
+                (k.price ? '<div class="data-meta-item"><span class="data-meta-label">מחיר:</span><span class="data-meta-value">₪' + parseInt(k.price).toLocaleString() + '</span></div>' : '') +
+                '<div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge ' + (statusClass[st]||'status-pending') + '">' + (statusLabel[st]||st) + '</span></span></div>' +
+                (k.contact_attempts ? '<div class="data-meta-item"><span class="data-meta-label">ניסיונות פנייה:</span><span class="data-meta-value">' + k.contact_attempts + '</span></div>' : '') +
+                (k.phone ? '<div class="data-meta-item"><span class="data-meta-label">טלפון:</span><span class="data-meta-value"><a href="tel:' + k.phone + '" style="color:#3b82f6;">' + k.phone + '</a> <a href="https://wa.me/' + k.phone.replace(/[^0-9]/g,'') + '" style="background:#22c55e;color:white;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:12px;">WhatsApp</a></span></div>' : '') +
+                (k.url ? '<div class="data-meta-item"><span class="data-meta-label">קישור:</span><span class="data-meta-value"><a href="' + k.url + '" target="_blank" style="color:#3b82f6;">פתח כינוס</a></span></div>' : '') +
+                '</div></div>';
+        }
+
+        async function runKonesAutoContact() {
+            if (!confirm('להפעיל Auto Contact לכינוסי נכסים?')) return;
+            try {
+                const res = await fetch('/api/auto-contact/run-kones', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                if (res.ok) { alert('✅ Auto Contact לכינוסים הופעל!'); loadKones(); }
+                else throw new Error('HTTP ' + res.status);
+            } catch (e) { alert('❌ נכשל: ' + e.message); }
         }
 
         async function loadFacebookAds() {
