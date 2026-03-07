@@ -1,8 +1,12 @@
 /**
- * QUANTUM Export Routes - v4.70.0
+ * QUANTUM Export Routes - v4.71.0
  * CSV + Excel export for Leads, Complexes, Ads, Messages
  * Uses ExcelJS for Excel and built-in stream for CSV
- * Fix: leads are stored in "website_leads" table, not "leads"
+ * Fixes:
+ *   - leads: table is "website_leads"
+ *   - complexes: planned_units (not units_count), enrichment_score (not enrichment_status)
+ *   - messages: phone/message/direction columns (actual schema)
+ *   - ads: fallback to listings table if facebook_ads/yad2_listings missing
  */
 
 const express = require('express');
@@ -83,6 +87,7 @@ async function sendExport(res, format, sheetName, columns, rows, filename) {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/export/leads
+// Table: website_leads
 // ══════════════════════════════════════════════════════════════════════════════
 router.get('/leads', async (req, res) => {
   try {
@@ -128,13 +133,14 @@ router.get('/leads', async (req, res) => {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/export/complexes
+// Table: complexes — actual columns: planned_units, enrichment_score
 // ══════════════════════════════════════════════════════════════════════════════
 router.get('/complexes', async (req, res) => {
   try {
     const { format = 'xlsx', city, min_iai, status, limit = 5000 } = req.query;
-    let query = `SELECT id, name, city, address, status,
-                        units_count, iai_score, ssi_score, developer,
-                        enrichment_status, property_type, created_at
+    let query = `SELECT id, name, city, address, neighborhood, status,
+                        planned_units, existing_units, iai_score, developer,
+                        enrichment_score, plan_stage, created_at
                  FROM complexes`;
     const params = [];
     const conditions = [];
@@ -151,21 +157,21 @@ router.get('/complexes', async (req, res) => {
       { key: 'id', label: 'מזהה', width: 8 },
       { key: 'name', label: 'שם מתחם', width: 25 },
       { key: 'city', label: 'עיר', width: 15 },
+      { key: 'neighborhood', label: 'שכונה', width: 18 },
       { key: 'address', label: 'כתובת', width: 25 },
       { key: 'status', label: 'סטטוס', width: 15 },
-      { key: 'units_count', label: 'יחידות', width: 12 },
+      { key: 'planned_units', label: 'יחידות מתוכנן', width: 14 },
+      { key: 'existing_units', label: 'יחידות קיים', width: 14 },
       { key: 'iai_score', label: 'IAI', width: 10 },
-      { key: 'ssi_score', label: 'SSI', width: 10 },
       { key: 'developer', label: 'יזם', width: 20 },
-      { key: 'property_type', label: 'סוג נכס', width: 14 },
-      { key: 'enrichment_status', label: 'סטטוס העשרה', width: 16 },
+      { key: 'plan_stage', label: 'שלב תכנון', width: 14 },
+      { key: 'enrichment_score', label: 'ציון העשרה', width: 14 },
       { key: 'created_at', label: 'תאריך', width: 14 },
     ];
 
     const mapped = rows.map((r) => ({
       ...r,
       iai_score: r.iai_score ? parseFloat(r.iai_score).toFixed(1) : '',
-      ssi_score: r.ssi_score ? parseFloat(r.ssi_score).toFixed(1) : '',
       created_at: r.created_at ? new Date(r.created_at).toLocaleDateString('he-IL') : '',
     }));
 
@@ -178,39 +184,37 @@ router.get('/complexes', async (req, res) => {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/export/messages
+// Table: whatsapp_messages — actual columns: phone, message, direction
 // ══════════════════════════════════════════════════════════════════════════════
 router.get('/messages', async (req, res) => {
   try {
-    const { format = 'xlsx', channel, direction, limit = 2000 } = req.query;
-    let query = `SELECT id, phone_number, contact_name, message_text, channel,
-                        direction, status, is_lead, lead_id, created_at
-                 FROM whatsapp_messages`;
+    const { format = 'xlsx', direction, limit = 2000 } = req.query;
+    let query = `SELECT wm.id, wm.phone, wm.direction, wm.message, wm.status,
+                        wm.created_at, wc.source
+                 FROM whatsapp_messages wm
+                 LEFT JOIN whatsapp_conversations wc ON wc.id = wm.conversation_id`;
     const params = [];
     const conditions = [];
-    if (channel) { params.push(channel); conditions.push(`channel = $${params.length}`); }
-    if (direction) { params.push(direction); conditions.push(`direction = $${params.length}`); }
+    if (direction) { params.push(direction); conditions.push(`wm.direction = $${params.length}`); }
     if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
-    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1}`;
+    query += ` ORDER BY wm.created_at DESC LIMIT $${params.length + 1}`;
     params.push(parseInt(limit));
 
     const { rows } = await pool.query(query, params);
 
     const columns = [
       { key: 'id', label: 'מזהה', width: 8 },
-      { key: 'phone_number', label: 'טלפון', width: 16 },
-      { key: 'contact_name', label: 'שם', width: 20 },
-      { key: 'channel', label: 'ערוץ', width: 12 },
+      { key: 'phone', label: 'טלפון', width: 16 },
       { key: 'direction', label: 'כיוון', width: 10 },
-      { key: 'message_text', label: 'הודעה', width: 40 },
+      { key: 'message', label: 'הודעה', width: 40 },
       { key: 'status', label: 'סטטוס', width: 12 },
-      { key: 'is_lead', label: 'ליד?', width: 8 },
+      { key: 'source', label: 'מקור', width: 14 },
       { key: 'created_at', label: 'תאריך', width: 18 },
     ];
 
     const mapped = rows.map((r) => ({
       ...r,
-      is_lead: r.is_lead ? 'כן' : 'לא',
-      direction: r.direction === 'inbound' ? 'נכנס' : 'יוצא',
+      direction: r.direction === 'incoming' ? 'נכנס' : 'יוצא',
       created_at: r.created_at ? new Date(r.created_at).toLocaleString('he-IL') : '',
     }));
 
@@ -223,38 +227,51 @@ router.get('/messages', async (req, res) => {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/export/ads
+// Tries facebook_ads, then listings table, returns empty if neither exists
 // ══════════════════════════════════════════════════════════════════════════════
 router.get('/ads', async (req, res) => {
   try {
     const { format = 'xlsx', city, limit = 2000 } = req.query;
 
     let rows = [];
+    let source_table = 'none';
+
+    // Try facebook_ads
     try {
-      let q = `SELECT id, title, description, price, city, neighborhood,
-                      rooms, size_sqm, phone, source, status, created_at
+      let q = `SELECT id, title, price, city, neighborhood, rooms, size_sqm,
+                      phone, source, status, created_at
                FROM facebook_ads`;
       const params = [];
       if (city) { params.push(`%${city}%`); q += ` WHERE city ILIKE $1`; }
       q += ` ORDER BY created_at DESC LIMIT ${parseInt(limit)}`;
       const result = await pool.query(q, params);
       rows = result.rows;
+      source_table = 'facebook_ads';
     } catch {
-      const q = `SELECT id, title, price, city, neighborhood, rooms, size_sqm,
-                        phone, source, created_at
-                 FROM yad2_listings
-                 ORDER BY created_at DESC LIMIT ${parseInt(limit)}`;
-      const result = await pool.query(q);
-      rows = result.rows;
+      // Try listings table
+      try {
+        let q = `SELECT id, contact_name as title, price, city, address,
+                        phone, source, is_active as status, created_at
+                 FROM listings`;
+        const params = [];
+        if (city) { params.push(`%${city}%`); q += ` WHERE city ILIKE $1`; }
+        q += ` ORDER BY created_at DESC LIMIT ${parseInt(limit)}`;
+        const result = await pool.query(q, params);
+        rows = result.rows;
+        source_table = 'listings';
+      } catch {
+        // No ads table available - return empty export
+        rows = [];
+        source_table = 'none';
+      }
     }
 
     const columns = [
       { key: 'id', label: 'מזהה', width: 8 },
-      { key: 'title', label: 'כותרת', width: 30 },
+      { key: 'title', label: 'כותרת / שם', width: 30 },
       { key: 'price', label: 'מחיר', width: 14 },
       { key: 'city', label: 'עיר', width: 15 },
-      { key: 'neighborhood', label: 'שכונה', width: 18 },
-      { key: 'rooms', label: 'חדרים', width: 8 },
-      { key: 'size_sqm', label: 'מ"ר', width: 8 },
+      { key: 'address', label: 'כתובת', width: 25 },
       { key: 'phone', label: 'טלפון', width: 15 },
       { key: 'source', label: 'מקור', width: 12 },
       { key: 'status', label: 'סטטוס', width: 12 },
@@ -311,13 +328,13 @@ router.get('/full-report', async (req, res) => {
         { key: 'name', label: 'שם מתחם', width: 24 },
         { key: 'city', label: 'עיר', width: 14 },
         { key: 'iai_score', label: 'IAI', width: 10 },
-        { key: 'units_count', label: 'יחידות', width: 12 },
+        { key: 'planned_units', label: 'יחידות', width: 12 },
         { key: 'status', label: 'סטטוס', width: 15 },
         { key: 'developer', label: 'יזם', width: 20 },
       ];
       applyHeader(ws, cols);
       const { rows } = await pool.query(
-        `SELECT name, city, iai_score, units_count, status, developer
+        `SELECT name, city, iai_score, planned_units, status, developer
          FROM complexes WHERE iai_score IS NOT NULL
          ORDER BY iai_score DESC LIMIT 100`
       );
@@ -345,7 +362,7 @@ router.get('/full-report', async (req, res) => {
       ];
       applyHeader(ws, cols);
       const { rows } = await pool.query(
-        `SELECT name, email, phone, status, source, notes, is_urgent, created_at
+        `SELECT name, email, phone, status, source, notes, created_at
          FROM website_leads ORDER BY created_at DESC LIMIT 500`
       );
       rows.forEach((r, i) => {
@@ -420,7 +437,7 @@ router.get('/info', (req, res) => {
     exports: [
       { endpoint: '/api/export/leads', formats: ['xlsx', 'csv'], filters: ['status', 'source', 'limit'], description: 'ייצוא לידים' },
       { endpoint: '/api/export/complexes', formats: ['xlsx', 'csv'], filters: ['city', 'min_iai', 'status', 'limit'], description: 'ייצוא מתחמים' },
-      { endpoint: '/api/export/messages', formats: ['xlsx', 'csv'], filters: ['channel', 'direction', 'limit'], description: 'ייצוא הודעות' },
+      { endpoint: '/api/export/messages', formats: ['xlsx', 'csv'], filters: ['direction', 'limit'], description: 'ייצוא הודעות WhatsApp' },
       { endpoint: '/api/export/ads', formats: ['xlsx', 'csv'], filters: ['city', 'limit'], description: 'ייצוא מודעות' },
       { endpoint: '/api/export/full-report', formats: ['xlsx'], filters: [], description: 'דוח מלא רב-גיליוני' },
     ],
