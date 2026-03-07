@@ -7,14 +7,13 @@ router.get('/overview', async (req, res) => {
   try {
     const { period = '30d' } = req.query;
     const days = period === '7d' ? 7 : period === '90d' ? 90 : period === '1y' ? 365 : 30;
-    const since = `NOW() - INTERVAL '${days} days'`;
 
     const [complexes, leads, messages, deals, calls] = await Promise.all([
-      pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE enrichment_status = 'enriched') as enriched, ROUND(AVG(iai_score)::numeric, 1) as avg_iai FROM complexes`).catch(() => ({ rows: [{}] })),
-      pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE created_at > ${since}) as new_period, COUNT(*) FILTER (WHERE status = 'qualified') as qualified, COUNT(*) FILTER (WHERE status = 'converted') as converted FROM leads`).catch(() => ({ rows: [{}] })),
-      pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE created_at > ${since}) as new_period FROM whatsapp_messages`).catch(() => ({ rows: [{}] })),
+      pool.query(`SELECT COUNT(*) as total, ROUND(AVG(iai_score)::numeric, 1) as avg_iai FROM complexes`).catch(() => ({ rows: [{}] })),
+      pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '${days} days') as new_period, COUNT(*) FILTER (WHERE status = 'qualified') as qualified, COUNT(*) FILTER (WHERE status = 'converted') as converted FROM leads`).catch(() => ({ rows: [{}] })),
+      pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '${days} days') as new_period FROM whatsapp_messages`).catch(() => ({ rows: [{}] })),
       pool.query(`SELECT COUNT(*) as total, COALESCE(SUM(value) FILTER (WHERE stage = 'won'), 0) as won_value FROM deals`).catch(() => ({ rows: [{}] })),
-      pool.query(`SELECT COUNT(*) as total FROM call_logs WHERE called_at > ${since}`).catch(() => ({ rows: [{}] }))
+      pool.query(`SELECT COUNT(*) as total FROM call_logs WHERE called_at > NOW() - INTERVAL '${days} days'`).catch(() => ({ rows: [{}] }))
     ]);
 
     res.json({
@@ -23,7 +22,6 @@ router.get('/overview', async (req, res) => {
       overview: {
         complexes: {
           total: parseInt(complexes.rows[0]?.total) || 698,
-          enriched: parseInt(complexes.rows[0]?.enriched) || 0,
           avg_iai: parseFloat(complexes.rows[0]?.avg_iai) || 0
         },
         leads: {
@@ -32,7 +30,7 @@ router.get('/overview', async (req, res) => {
           qualified: parseInt(leads.rows[0]?.qualified) || 0,
           converted: parseInt(leads.rows[0]?.converted) || 0,
           conversion_rate: leads.rows[0]?.total > 0
-            ? Math.round((parseInt(leads.rows[0]?.converted) / parseInt(leads.rows[0]?.total)) * 100)
+            ? Math.round((parseInt(leads.rows[0]?.converted || 0) / parseInt(leads.rows[0]?.total)) * 100)
             : 0
         },
         messages: {
@@ -80,11 +78,11 @@ router.get('/leads', async (req, res) => {
 // GET /api/analytics/market
 router.get('/market', async (req, res) => {
   try {
-    const [byCity, topIAI, priceRanges, statusDist] = await Promise.all([
-      pool.query(`SELECT city, COUNT(*) as complexes, ROUND(AVG(iai_score)::numeric,1) as avg_iai, ROUND(AVG(ssi_score)::numeric,1) as avg_ssi FROM complexes WHERE city IS NOT NULL GROUP BY city ORDER BY avg_iai DESC NULLS LAST LIMIT 15`).catch(() => ({ rows: [] })),
-      pool.query(`SELECT id, name, city, iai_score, ssi_score, units_count, developer FROM complexes WHERE iai_score IS NOT NULL ORDER BY iai_score DESC LIMIT 10`).catch(() => ({ rows: [] })),
-      pool.query(`SELECT CASE WHEN price < 1000000 THEN 'מתחת למיליון' WHEN price < 2000000 THEN '1-2 מיליון' WHEN price < 3000000 THEN '2-3 מיליון' WHEN price < 5000000 THEN '3-5 מיליון' ELSE 'מעל 5 מיליון' END as range, COUNT(*) as count FROM yad2_listings WHERE price > 0 GROUP BY range ORDER BY count DESC`).catch(() => ({ rows: [] })),
-      pool.query(`SELECT status, COUNT(*) as count FROM complexes WHERE status IS NOT NULL GROUP BY status ORDER BY count DESC`).catch(() => ({ rows: [] }))
+    const [byCity, topIAI, statusDist, signatureDist] = await Promise.all([
+      pool.query(`SELECT city, COUNT(*) as complexes, ROUND(AVG(iai_score)::numeric,1) as avg_iai, ROUND(AVG(avg_ssi)::numeric,1) as avg_ssi FROM complexes WHERE city IS NOT NULL GROUP BY city ORDER BY avg_iai DESC NULLS LAST LIMIT 15`).catch(() => ({ rows: [] })),
+      pool.query(`SELECT id, name, city, iai_score, avg_ssi, planned_units, existing_units, developer FROM complexes WHERE iai_score IS NOT NULL ORDER BY iai_score DESC LIMIT 10`).catch(() => ({ rows: [] })),
+      pool.query(`SELECT status, COUNT(*) as count FROM complexes WHERE status IS NOT NULL GROUP BY status ORDER BY count DESC`).catch(() => ({ rows: [] })),
+      pool.query(`SELECT CASE WHEN signature_percent >= 80 THEN 'חתימות גבוהות (80%+)' WHEN signature_percent >= 50 THEN 'חתימות בינוניות (50-80%)' WHEN signature_percent >= 25 THEN 'חתימות נמוכות (25-50%)' ELSE 'מתחת ל-25%' END as range, COUNT(*) as count FROM complexes WHERE signature_percent IS NOT NULL GROUP BY range ORDER BY count DESC`).catch(() => ({ rows: [] }))
     ]);
 
     res.json({
@@ -92,8 +90,8 @@ router.get('/market', async (req, res) => {
       market: {
         by_city: byCity.rows,
         top_iai_complexes: topIAI.rows,
-        price_ranges: priceRanges.rows,
-        status_distribution: statusDist.rows
+        status_distribution: statusDist.rows,
+        signature_distribution: signatureDist.rows
       }
     });
   } catch (err) {
@@ -104,28 +102,26 @@ router.get('/market', async (req, res) => {
 // GET /api/analytics/performance
 router.get('/performance', async (req, res) => {
   try {
-    const [enrichment, scan, whatsapp] = await Promise.all([
-      pool.query(`SELECT enrichment_status, COUNT(*) as count FROM complexes GROUP BY enrichment_status`).catch(() => ({ rows: [] })),
-      pool.query(`SELECT status, COUNT(*) as count FROM scan_jobs GROUP BY status ORDER BY count DESC LIMIT 5`).catch(() => ({ rows: [] })),
-      pool.query(`SELECT direction, COUNT(*) as count FROM whatsapp_messages WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY direction`).catch(() => ({ rows: [] }))
+    const [iai_dist, developer_risk, whatsapp, enrichment] = await Promise.all([
+      pool.query(`SELECT CASE WHEN iai_score >= 80 THEN 'גבוה (80+)' WHEN iai_score >= 60 THEN 'בינוני (60-80)' WHEN iai_score >= 40 THEN 'נמוך (40-60)' ELSE 'מתחת ל-40' END as range, COUNT(*) as count FROM complexes WHERE iai_score IS NOT NULL GROUP BY range ORDER BY count DESC`).catch(() => ({ rows: [] })),
+      pool.query(`SELECT developer_risk_level, COUNT(*) as count FROM complexes WHERE developer_risk_level IS NOT NULL GROUP BY developer_risk_level ORDER BY count DESC`).catch(() => ({ rows: [] })),
+      pool.query(`SELECT direction, COUNT(*) as count FROM whatsapp_messages WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY direction`).catch(() => ({ rows: [] })),
+      pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE enrichment_score > 0) as enriched FROM complexes`).catch(() => ({ rows: [{ total: 698, enriched: 0 }] }))
     ]);
 
-    const enrichStats = {};
-    enrichment.rows.forEach(r => { enrichStats[r.enrichment_status || 'unknown'] = parseInt(r.count); });
-    const totalComplexes = Object.values(enrichStats).reduce((a, b) => a + b, 0);
-    const enrichedCount = enrichStats['enriched'] || 0;
+    const total = parseInt(enrichment.rows[0]?.total) || 698;
+    const enriched = parseInt(enrichment.rows[0]?.enriched) || 0;
 
     res.json({
       success: true,
       performance: {
+        iai_distribution: iai_dist.rows,
+        developer_risk: developer_risk.rows,
         enrichment: {
-          total: totalComplexes,
-          enriched: enrichedCount,
-          pending: enrichStats['pending'] || 0,
-          failed: enrichStats['failed'] || 0,
-          rate: totalComplexes > 0 ? Math.round((enrichedCount / totalComplexes) * 100) : 0
+          total,
+          enriched,
+          rate: total > 0 ? Math.round((enriched / total) * 100) : 0
         },
-        scans: scan.rows,
         whatsapp_activity: whatsapp.rows
       }
     });
