@@ -10,12 +10,14 @@
  *   GET  /api/vapi/calls                   - list logged calls
  *   GET  /api/vapi/calls/:id               - single call log
  *   GET  /api/vapi/agents                  - list agent configs (read-only)
+ *   POST /api/vapi/schedule-lead           - schedule lead call + create Google Calendar event
  */
 
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { logger } = require('../services/logger');
+const axios = require('axios');
 
 const VAPI_API_KEY = process.env.VAPI_API_KEY || '';
 const VAPI_BASE_URL = 'https://api.vapi.ai';
@@ -530,6 +532,157 @@ router.get('/stats', async (req, res) => {
     res.json({ success: true, stats: result.rows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Schedule Lead + Google Calendar Integration ─────────────────────────────
+// Called by Vapi tool "schedule_lead_call" when a call time is agreed
+// Creates a Google Calendar event in "QUANTUM נדל"ן - לידים" calendar
+
+const QUANTUM_CALENDAR_ID = process.env.QUANTUM_CALENDAR_ID ||
+  'cf4cd8ef53ef4cbdca7f172bdef3f6862509b4026a5e04b648ce09144ab5aa21@group.calendar.google.com';
+
+async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime, phoneNumber }) {
+  const accessToken = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN;
+  if (!accessToken) {
+    logger.warn('[VAPI] GOOGLE_CALENDAR_ACCESS_TOKEN not set - skipping calendar creation');
+    return null;
+  }
+
+  const startTime = new Date(scheduledTime);
+  const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // 30 min call
+
+  const event = {
+    summary: `\u{1F3E0} \u05e9\u05d9\u05d7\u05d4 \u05e2\u05dd ${leadName} - QUANTUM \u05e0\u05d3\u05dc"\u05df`,
+    description: [
+      `\u05dc\u05d9\u05d3: ${leadName}`,
+      `\u05db\u05ea\u05d5\u05d1\u05ea \u05d4\u05d3\u05d9\u05e8\u05d4: ${leadAddress}`,
+      phoneNumber ? `\u05d8\u05dc\u05e4\u05d5\u05df: ${phoneNumber}` : '',
+      '',
+      '\u05e0\u05d5\u05e6\u05e8 \u05d0\u05d5\u05d8\u05d5\u05de\u05d8\u05d9\u05ea \u05e2\u05dc \u05d9\u05d3\u05d9 \u05de\u05e2\u05e8\u05db\u05ea QUANTUM Voice AI',
+    ].filter(Boolean).join('\n'),
+    location: leadAddress,
+    start: { dateTime: startTime.toISOString(), timeZone: 'Asia/Jerusalem' },
+    end: { dateTime: endTime.toISOString(), timeZone: 'Asia/Jerusalem' },
+    reminders: {
+      useDefault: false,
+      overrides: [
+        { method: 'popup', minutes: 60 },
+        { method: 'popup', minutes: 15 },
+      ],
+    },
+    colorId: '11',
+  };
+
+  try {
+    const response = await axios.post(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(QUANTUM_CALENDAR_ID)}/events`,
+      event,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    logger.info(`[VAPI] Calendar event created: ${response.data.id} for ${leadName}`);
+    return response.data;
+  } catch (calErr) {
+    logger.error('[VAPI] Google Calendar API error:', calErr.response?.data || calErr.message);
+    return null;
+  }
+}
+
+router.post('/schedule-lead', async (req, res) => {
+  try {
+    // Vapi sends tool call results in a specific format
+    const body = req.body;
+    logger.info('[VAPI] schedule-lead called:', JSON.stringify(body).substring(0, 300));
+
+    // Extract parameters - Vapi tool calls come in different formats
+    let leadName, leadAddress, scheduledTime, phoneNumber;
+
+    // Format 1: Direct Vapi function call
+    if (body.message?.toolCalls) {
+      const toolCall = body.message.toolCalls.find(t => t.function?.name === 'schedule_lead_call');
+      if (toolCall) {
+        const args = typeof toolCall.function.arguments === 'string'
+          ? JSON.parse(toolCall.function.arguments)
+          : toolCall.function.arguments;
+        leadName = args.lead_name;
+        leadAddress = args.lead_address;
+        scheduledTime = args.scheduled_time;
+        phoneNumber = args.phone_number || body.message?.call?.customer?.number;
+      }
+    }
+    // Format 2: Direct parameters
+    else if (body.lead_name || body.leadName) {
+      leadName = body.lead_name || body.leadName;
+      leadAddress = body.lead_address || body.leadAddress;
+      scheduledTime = body.scheduled_time || body.scheduledTime;
+      phoneNumber = body.phone_number || body.phoneNumber;
+    }
+    // Format 3: Vapi server-side tool call format
+    else if (body.toolCallId) {
+      leadName = body.parameters?.lead_name;
+      leadAddress = body.parameters?.lead_address;
+      scheduledTime = body.parameters?.scheduled_time;
+      phoneNumber = body.parameters?.phone_number;
+    }
+
+    if (!leadName || !leadAddress || !scheduledTime) {
+      logger.warn('[VAPI] schedule-lead: missing required fields', { leadName, leadAddress, scheduledTime });
+      // Return success to Vapi even if we can't create the event
+      return res.json({
+        result: 'השיחה נרשמה. נציג יחזור אליך בקרוב.',
+        success: false,
+        error: 'Missing required fields'
+      });
+    }
+
+    // Create Google Calendar event
+    const calendarEvent = await createGoogleCalendarEvent({
+      leadName,
+      leadAddress,
+      scheduledTime,
+      phoneNumber,
+    });
+
+    // Log to DB if possible
+    try {
+      await pool.query(
+        `INSERT INTO vapi_leads (name, address, phone, scheduled_time, calendar_event_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT DO NOTHING`,
+        [leadName, leadAddress, phoneNumber || null, scheduledTime, calendarEvent?.id || null]
+      );
+    } catch (dbErr) {
+      // Table might not exist yet - that's OK
+      logger.warn('[VAPI] DB insert for lead failed (table may not exist):', dbErr.message);
+    }
+
+    const successMsg = calendarEvent
+      ? `מעולה! קבעתי שיחה עם ${leadName} ב-${new Date(scheduledTime).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })} ונוצר אירוע ביומן QUANTUM.`
+      : `נרשמה שיחה עם ${leadName}. נציג יצור קשר בזמן שנקבע.`;
+
+    logger.info(`[VAPI] Lead scheduled: ${leadName} | ${leadAddress} | ${scheduledTime}`);
+
+    // Return result to Vapi
+    res.json({
+      result: successMsg,
+      success: true,
+      calendarEventId: calendarEvent?.id || null,
+      leadName,
+      leadAddress,
+      scheduledTime,
+    });
+  } catch (err) {
+    logger.error('[VAPI] schedule-lead error:', err.message);
+    res.json({
+      result: 'השיחה נרשמה. נציג יחזור אליך בקרוב.',
+      success: false,
+      error: err.message
+    });
   }
 });
 
