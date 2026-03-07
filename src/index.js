@@ -14,17 +14,14 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.62.0';
-const BUILD = '2026-03-07-v4.62.0-search-crm-analytics-users-docs';
+const VERSION = '4.63.0';
+const BUILD = '2026-03-07-v4.63.0-auto-first-contact-P0-issue3';
 
 // What's in this version:
-// - NEW: Advanced Filtering & Search (/api/search)
-// - NEW: Enhanced CRM - calls, reminders, deals pipeline (/api/crm)
-// - NEW: Analytics & Reporting (/api/analytics)
-// - NEW: User Management (/api/users)
-// - NEW: API Documentation - Swagger UI (/api/docs)
-// - NEW: Performance indexes via migrations
-// - All previous: Export, Notifications SSE, Dashboard V5, Facebook, WhatsApp
+// - NEW: autoFirstContactService - P0 auto WhatsApp first contact for new Yad2+Facebook ads (Issue #3)
+// - NEW: /api/auto-contact endpoints - manual trigger + stats
+// - NEW: DB migration for listings.phone, contact_status, contact_attempts columns
+// - All previous: Search, CRM, Analytics, Users, Docs, Export, Notifications, Dashboard V5
 
 async function runAutoMigrations() {
   try {
@@ -72,7 +69,7 @@ app.use(helmet({
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token'] }));
 app.use(express.json({ limit: '10mb' }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, skip: (req) => req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' || req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') || req.path.startsWith('/api/scheduling/') || req.path.startsWith('/api/backup/') || req.path.startsWith('/api/notifications/') || req.path.startsWith('/api/search/') || req.path.startsWith('/api/docs'), message: { error: 'Too many requests, please try again later' } });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, skip: (req) => req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' || req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') || req.path.startsWith('/api/scheduling/') || req.path.startsWith('/api/backup/') || req.path.startsWith('/api/notifications/') || req.path.startsWith('/api/search/') || req.path.startsWith('/api/docs') || req.path.startsWith('/api/auto-contact'), message: { error: 'Too many requests, please try again later' } });
 app.use('/api/', limiter);
 
 app.use((req, res, next) => {
@@ -173,6 +170,39 @@ function loadBackupRoutes() {
   }
 }
 
+function loadAutoContactRoutes() {
+  try {
+    const { runAutoFirstContact, getContactStats } = require('./services/autoFirstContactService');
+
+    // GET /api/auto-contact/stats - contact activity stats
+    app.get('/api/auto-contact/stats', async (req, res) => {
+      try {
+        const stats = await getContactStats();
+        res.json({ success: true, ...stats });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    // POST /api/auto-contact/run - manual trigger
+    app.post('/api/auto-contact/run', async (req, res) => {
+      try {
+        logger.info('[AutoContact] Manual trigger via API');
+        const result = await runAutoFirstContact();
+        res.json({ success: true, result, timestamp: new Date().toISOString() });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    routeLoadResults.push({ path: '/api/auto-contact', status: 'ok', file: 'services/autoFirstContactService.js' });
+    logger.info('[AutoContact] API routes loaded: /api/auto-contact/stats, /api/auto-contact/run');
+  } catch (err) {
+    routeLoadResults.push({ path: '/api/auto-contact', status: 'failed', error: err.message, file: 'services/autoFirstContactService.js' });
+    logger.error('[AutoContact] Failed to load routes:', err.message);
+  }
+}
+
 app.get('/health', async (req, res) => {
   try {
     const result = await pool.query('SELECT COUNT(*) FROM complexes');
@@ -226,6 +256,7 @@ app.get('/api/debug', async (req, res) => {
     facebook_integration: 'active',
     dashboard_v5: 'complete_6_tabs',
     sandbox: 'active at /sandbox',
+    auto_first_contact: 'active (cron every 30min)',
     notifications_sse: `active (${notificationStats.connected_clients || 0} clients connected)`,
     export_api: 'active - leads/complexes/messages/ads/full-report',
     search_api: 'active - global/suggestions/saved/history',
@@ -252,12 +283,31 @@ async function start() {
   await runSchedulingMigrations();
   loadAllRoutes();
   loadBackupRoutes();
+  loadAutoContactRoutes();
 
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
   logger.info('=== ROUTE LOADING SUMMARY ===');
   loaded.forEach(r => logger.info(`  OK: ${r.path} (${r.file})`));
   failed.forEach(r => logger.error(`  FAILED: ${r.path} (${r.file}) -> ${r.error}`));
+
+  // Initialize Auto First Contact Service (P0 - Issue #3)
+  try {
+    const { initialize: initAutoContact, runAutoFirstContact } = require('./services/autoFirstContactService');
+    await initAutoContact();
+    const cron = require('node-cron');
+    // Run every 30 minutes
+    cron.schedule('*/30 * * * *', async () => {
+      try {
+        await runAutoFirstContact();
+      } catch (e) {
+        logger.warn('[AutoContact] Cron error:', e.message);
+      }
+    });
+    logger.info('[AutoContact] ACTIVE - cron every 30 minutes, /api/auto-contact/run for manual trigger');
+  } catch (e) {
+    logger.warn('[AutoContact] Failed to start:', e.message);
+  }
 
   try {
     const { initializeBackupService } = require('./services/backupService');
@@ -286,6 +336,7 @@ async function start() {
   logger.info('WhatsApp: WEBHOOK mode active at /api/whatsapp/webhook');
   logger.info('Facebook: Marketing API integration active');
   logger.info('Email notifications: DISABLED as requested');
+  logger.info('Auto First Contact: ACTIVE (P0, Issue #3) - cron every 30min');
   logger.info('Export API: ACTIVE at /api/export/{leads,complexes,messages,ads,full-report}');
   logger.info('Search API: ACTIVE at /api/search/{global,suggestions,saved,history}');
   logger.info('CRM API: ACTIVE at /api/crm/{calls,reminders,deals,pipeline,stats}');
