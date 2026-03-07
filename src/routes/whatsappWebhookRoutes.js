@@ -196,67 +196,20 @@ function buildEnhancedPrompt(leadInfo, conversationContext) {
   const name = leadInfo?.name || null;
   const userType = leadInfo?.user_type || null;
   
-  let basePrompt = `אתה QUANTUM Sales AI - הבוט החכם ביותר בתחום הנדל"ן בישראל.
-
-## זהות QUANTUM
-- מתווכים בוטיק עם מומחיות בפינוי-בינוי
-- "מח חד, הבנה עמוקה, גישה לנכסים סודיים"
-- כל לקוח מרגיש כמו "בן יחיד"
-- לא פלטפורמה טכנולוגית - אנשים אמיתיים עם יתרון טכנולוגי
-
-## הסגנון שלך
-- חד אבל חם - חכם אבל לא יהיר
-- ישיר אבל אכפתי
-- קצר - לא יותר מ-2-3 משפטים
-- אמוג'י במינון - רק 👋 בפתיחה או ✨ לנקודות חשובות
-- עברית טבעית - לא פורמלית מדי
-
-## המטרה שלך (לפי שלבים)`;
+  let basePrompt = `אתה QUANTUM Sales AI - הבוט החכם ביותר בתחום הנדל"ן בישראל.\n\n## זהות QUANTUM\n- מתווכים בוטיק עם מומחיות בפינוי-בינוי\n- "מח חד, הבנה עמוקה, גישה לנכסים סודיים"\n- כל לקוח מרגיש כמו "בן יחיד"\n- לא פלטפורמה טכנולוגית - אנשים אמיתיים עם יתרון טכנולוגי\n\n## הסגנון שלך\n- חד אבל חם - חכם אבל לא יהיר\n- ישיר אבל אכפתי\n- קצר - לא יותר מ-2-3 משפטים\n- אמוג'י במינון - רק 👋 בפתיחה או ✨ לנקודות חשובות\n- עברית טבעית - לא פורמלית מדי\n\n## המטרה שלך (לפי שלבים)`;
 
   // Stage-specific instructions
   if (stage === 'greeting') {
-    basePrompt += `
-
-### שלב: פתיחה
-1. שאל את השם (אם אין)
-2. זהה מהר: קונה או מוכר?
-3. המשך ישר לשאלות הנכונות`;
+    basePrompt += `\n\n### שלב: פתיחה\n1. שאל את השם (אם אין)\n2. זהה מהר: קונה או מוכר?\n3. המשך ישר לשאלות הנכונות`;
   } else if (stage === 'info_gathering') {
-    basePrompt += `
-
-### שלב: איסוף מידע
-${userType === 'buyer' ? `
-**קונה:**
-- איזה אזור מעניין?
-- באיזה תקציב?
-- יש מתווך כבר?
-- למה לא מצא עדיין? (חשוב!)
-` : userType === 'seller' ? `
-**מוכר:**
-- איפה הנכס ומה הסוג?
-- למה רוצה למכור? (דחיפות!)
-- יש מתווך כבר?
-- מה לא עובד עם המתווך הנוכחי?
-` : `
-- קודם כל: קונה או מוכר?
-`}`;
+    basePrompt += `\n\n### שלב: איסוף מידע\n${userType === 'buyer' ? `\n**קונה:**\n- איזה אזור מעניין?\n- באיזה תקציב?\n- יש מתווך כבר?\n- למה לא מצא עדיין? (חשוב!)\n` : userType === 'seller' ? `\n**מוכר:**\n- איפה הנכס ומה הסוג?\n- למה רוצה למכור? (דחיפות!)\n- יש מתווך כבר?\n- מה לא עובד עם המתווך הנוכחי?\n` : `\n- קודם כל: קונה או מוכר?\n`}`;
   } else if (stage === 'scheduling') {
-    basePrompt += `
-
-### שלב: קביעת פגישה
-- "בוא נקבע שיחת היכרות קצרה עם [שם מומחה]"
-- שאל מתי נוח - היום? מחר?
-- אל תהיה לחוץ - תן ללקוח להחליט`;
+    basePrompt += `\n\n### שלב: קביעת פגישה\n- "בוא נקבע שיחת היכרות קצרה עם [שם מומחה]"\n- שאל מתי נוח - היום? מחר?\n- אל תהיה לחוץ - תן ללקוח להחליט`;
   }
 
   // Add conversation context if exists
   if (conversationContext) {
-    basePrompt += `
-
-## השיחה עד כה:
-${conversationContext}
-
-המשך את השיחה באופן טבעי בהתאם למה שכבר נאמר.`;
+    basePrompt += `\n\n## השיחה עד כה:\n${conversationContext}\n\nהמשך את השיחה באופן טבעי בהתאם למה שכבר נאמר.`;
   }
 
   // Add name if we have it
@@ -264,17 +217,7 @@ ${conversationContext}
     basePrompt += `\n\nשם הלקוח: ${name} - השתמש בשם מדי פעם.`;
   }
 
-  basePrompt += `
-
-## חוקי זהב
-❌ לעולם אל תשאל את אותה שאלה פעמיים
-❌ אל תהיה דוחף - תן ללקוח לנשום
-❌ אל תדבר יותר מדי - שאל, הקשב, המשך
-✓ היה אנושי - לא סקריפט
-✓ התאם את עצמך ללקוח - יש כאלה שרוצים עסקי, יש שרוצים יותר חברותי
-✓ אם הלקוח לא מעוניין - בסדר! "אם תשנה דעתך, אני כאן"
-
-תן תשובה אחת קצרה, ממוקדת, טבעית.`;
+  basePrompt += `\n\n## חוקי זהב\n❌ לעולם אל תשאל את אותה שאלה פעמיים\n❌ אל תהיה דוחף - תן ללקוח לנשום\n❌ אל תדבר יותר מדי - שאל, הקשב, המשך\n✓ היה אנושי - לא סקריפט\n✓ התאם את עצמך ללקוח - יש כאלה שרוצים עסקי, יש שרוצים יותר חברותי\n✓ אם הלקוח לא מעוניין - בסדר! "אם תשנה דעתך, אני כאן"\n\nתן תשובה אחת קצרה, ממוקדת, טבעית.`;
 
   return basePrompt;
 }
@@ -489,10 +432,11 @@ router.post('/whatsapp/webhook', async (req, res) => {
   }
 });
 
-// Conversations dashboard
+// Conversations dashboard - returns both 'conversations' and 'data' for compatibility
 router.get('/whatsapp/conversations', async (req, res) => {
   try {
-    const result = await pool.query(`
+    const { search, status } = req.query;
+    let query = `
       SELECT 
         l.id, l.phone, l.name, l.user_type, l.status,
         l.raw_data->>'stage' as stage,
@@ -501,18 +445,30 @@ router.get('/whatsapp/conversations', async (req, res) => {
         MAX(wc.created_at) as last_message_at
       FROM leads l
       LEFT JOIN whatsapp_conversations wc ON l.id = wc.lead_id
-      WHERE l.source = 'whatsapp_bot'
-      GROUP BY l.id
-      ORDER BY MAX(wc.created_at) DESC NULLS LAST
-      LIMIT 50
-    `);
+      WHERE l.source = 'whatsapp_bot'`;
+    const params = [];
+    let n = 1;
+    if (search) {
+      query += ` AND (l.phone ILIKE $${n} OR COALESCE(l.name,'') ILIKE $${n})`;
+      params.push('%' + search + '%');
+      n++;
+    }
+    if (status) {
+      query += ` AND l.status = $${n}`;
+      params.push(status);
+      n++;
+    }
+    query += ` GROUP BY l.id ORDER BY MAX(wc.created_at) DESC NULLS LAST LIMIT 50`;
     
-    res.json({ success: true, conversations: result.rows, total: result.rows.length });
+    const result = await pool.query(query, params);
+    // Return both keys for dashboard compatibility
+    res.json({ success: true, conversations: result.rows, data: result.rows, total: result.rows.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// Get messages by leadId
 router.get('/whatsapp/conversations/:leadId', async (req, res) => {
   try {
     const { leadId } = req.params;
@@ -532,6 +488,61 @@ router.get('/whatsapp/conversations/:leadId', async (req, res) => {
     res.json({ success: true, lead: leadResult.rows[0], messages: messagesResult.rows });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Get messages by phone OR leadId - dashboard compatibility endpoint
+router.get('/whatsapp/conversations/:identifier/messages', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    let leadId;
+
+    // Short numeric = leadId, longer string or phone = look up by phone
+    if (/^\d{1,8}$/.test(identifier)) {
+      leadId = parseInt(identifier);
+    } else {
+      const byPhone = await pool.query(
+        `SELECT id FROM leads WHERE phone = $1 AND source = 'whatsapp_bot' ORDER BY created_at DESC LIMIT 1`,
+        [identifier]
+      );
+      if (!byPhone.rows.length) {
+        return res.status(404).json({ success: false, error: 'Lead not found' });
+      }
+      leadId = byPhone.rows[0].id;
+    }
+
+    const leadResult = await pool.query(`SELECT * FROM leads WHERE id = $1`, [leadId]);
+    const msgResult = await pool.query(
+      `SELECT sender, message, ai_metadata, created_at
+       FROM whatsapp_conversations WHERE lead_id = $1 ORDER BY created_at ASC`,
+      [leadId]
+    );
+
+    if (!leadResult.rows.length) {
+      return res.status(404).json({ success: false, error: 'Lead not found' });
+    }
+
+    const lead = leadResult.rows[0];
+    // Transform to format dashboard JS expects: direction instead of sender
+    const data = msgResult.rows.map(m => ({
+      direction: m.sender === 'bot' ? 'outgoing' : 'incoming',
+      message: m.message,
+      message_content: m.message,
+      created_at: m.created_at
+    }));
+
+    res.json({
+      success: true,
+      conversation: {
+        display_name: lead.name || lead.phone,
+        phone: lead.phone,
+        city: lead.city || null,
+        address: null
+      },
+      data
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
