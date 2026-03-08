@@ -434,4 +434,68 @@ router.delete('/whatsapp/subscriptions/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ===== SCHEDULING / APPOINTMENTS OVERVIEW =====
+
+// API: Scheduling overview — sessions + slots summary
+router.get('/scheduling/overview', async (req, res) => {
+  try {
+    const [sessionStats, slotStats, ceremonyStats, contacts] = await Promise.all([
+      pool.query(`
+        SELECT
+          COUNT(*) AS total,
+          COUNT(CASE WHEN state = 'confirmed' THEN 1 END) AS confirmed,
+          COUNT(CASE WHEN state IN ('declined','cancelled') THEN 1 END) AS declined,
+          COUNT(CASE WHEN state NOT IN ('confirmed','declined','cancelled') THEN 1 END) AS pending,
+          COUNT(CASE WHEN language = 'ru' THEN 1 END) AS russian,
+          COUNT(CASE WHEN language = 'he' THEN 1 END) AS hebrew
+        FROM bot_sessions
+        WHERE created_at > NOW() - INTERVAL '30 days'
+      `),
+      pool.query(`
+        SELECT
+          COUNT(*) AS total,
+          COUNT(CASE WHEN status = 'confirmed' THEN 1 END) AS confirmed,
+          COUNT(CASE WHEN status = 'open' THEN 1 END) AS open,
+          COUNT(CASE WHEN status = 'cancelled' THEN 1 END) AS cancelled
+        FROM meeting_slots
+        WHERE created_at > NOW() - INTERVAL '30 days'
+      `).catch(() => ({ rows: [{ total: 0, confirmed: 0, open: 0, cancelled: 0 }] })),
+      pool.query(`
+        SELECT COUNT(*) AS total, COUNT(CASE WHEN status = 'confirmed' THEN 1 END) AS confirmed
+        FROM ceremony_slots
+        WHERE slot_date >= CURRENT_DATE
+      `).catch(() => ({ rows: [{ total: 0, confirmed: 0 }] })),
+      pool.query(`
+        SELECT
+          bs.phone,
+          bs.context->>'contactName' AS contact_name,
+          bs.zoho_campaign_id AS campaign_id,
+          bs.state,
+          bs.language,
+          bs.last_message_at,
+          ms.slot_datetime,
+          TO_CHAR(ms.slot_datetime AT TIME ZONE 'Asia/Jerusalem', 'DD/MM/YYYY HH24:MI') AS slot_display,
+          ms.representative_name,
+          ms.meeting_type,
+          csc.meeting_type AS campaign_meeting_type
+        FROM bot_sessions bs
+        LEFT JOIN meeting_slots ms ON ms.contact_phone = bs.phone AND ms.campaign_id = bs.zoho_campaign_id AND ms.status = 'confirmed'
+        LEFT JOIN campaign_schedule_config csc ON csc.zoho_campaign_id = bs.zoho_campaign_id
+        WHERE bs.created_at > NOW() - INTERVAL '30 days'
+        ORDER BY bs.last_message_at DESC
+        LIMIT 200
+      `).catch(() => ({ rows: [] }))
+    ]);
+    res.json({
+      success: true,
+      sessions: sessionStats.rows[0],
+      slots: slotStats.rows[0],
+      ceremonies: ceremonyStats.rows[0],
+      contacts: contacts.rows
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;

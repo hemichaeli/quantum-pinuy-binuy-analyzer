@@ -15,11 +15,59 @@
 
 const express = require('express');
 const router = express.Router();
+const path = require('path');
 const pool = require('../db/pool');
 const botEngine = require('../services/botEngine');
 const inforuService = require('../services/inforuService');
+let zohoSchedulingService;
+try { zohoSchedulingService = require('../services/zohoSchedulingService'); } catch (e) { /* optional */ }
 
-// ── WEBHOOK ────────────────────────────────────────────────────
+// ── ZOHO CRM WIDGET ────────────────────────────────────────────
+router.get('/widget', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/zoho-scheduling-widget.html'));
+});
+
+// ── CAMPAIGN CONTACTS (from Zoho CRM) ──────────────────────────
+/**
+ * GET /api/scheduling/campaign/:id/contacts
+ * Fetch all contacts for a Zoho Campaign.
+ * Falls back to bot_sessions in DB if Zoho CRM is not configured.
+ */
+router.get('/campaign/:id/contacts', async (req, res) => {
+  const campaignId = req.params.id;
+  try {
+    // Try Zoho CRM first
+    if (zohoSchedulingService?.getCampaignContacts) {
+      try {
+        const contacts = await zohoSchedulingService.getCampaignContacts(campaignId);
+        if (contacts.length > 0) {
+          return res.json({ success: true, source: 'zoho', contacts });
+        }
+      } catch (zohoErr) {
+        // Fall through to DB fallback
+      }
+    }
+    // DB fallback: return bot_sessions for this campaign
+    const { rows } = await pool.query(
+      `SELECT
+         bs.phone,
+         bs.context->>'contactName' AS name,
+         bs.context->>'contactId' AS id,
+         bs.language,
+         bs.state AS status,
+         bs.last_message_at
+       FROM bot_sessions bs
+       WHERE bs.zoho_campaign_id = $1
+       ORDER BY bs.last_message_at DESC`,
+      [campaignId]
+    );
+    res.json({ success: true, source: 'db', contacts: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── WEBHOOK ────────────────────────────────────────────
 router.post('/webhook', async (req, res) => {
   try {
     const { From, Body, CampaignId } = req.body;

@@ -300,6 +300,7 @@ function generateDashboardHTML(stats) {
         <div class="nav-tab" onclick="switchTab('complexes')">🏢 מתחמים</div>
         <div class="nav-tab" onclick="switchTab('kones')">🏗️ כינוס</div>
         <div class="nav-tab" onclick="switchTab('news')">📰 חדשות</div>
+        <div class="nav-tab" onclick="switchTab('scheduling')">📅 תיאומים</div>
     </div>
 
     <div id="tab-dashboard" class="tab-content active">
@@ -512,9 +513,35 @@ function generateDashboardHTML(stats) {
         </div>
     </div>
 
+    <div id="tab-scheduling" class="tab-content">
+        <div class="section">
+            <h2>📅 תיאום פגישות — QUANTUM BOT</h2>
+            <div class="actions-bar" style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                <select id="sched-filter-state" onchange="loadScheduling()" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:8px 12px;font-size:13px;">
+                    <option value="">כל הסטטוסים</option>
+                    <option value="confirmed">✅ מאושר</option>
+                    <option value="pending">⏳ ממתין</option>
+                    <option value="declined">❌ סירב</option>
+                    <option value="cancelled">🚫 בוטל</option>
+                </select>
+                <select id="sched-filter-lang" onchange="loadScheduling()" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:8px 12px;font-size:13px;">
+                    <option value="">כל השפות</option>
+                    <option value="he">🇮🇱 עברית</option>
+                    <option value="ru">🇷🇺 רוסית</option>
+                </select>
+                <input id="sched-search" type="text" placeholder="🔍 חיפוש שם / טלפון..." oninput="filterSchedulingTable()" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:8px 12px;font-size:13px;min-width:200px;">
+                <button class="btn" onclick="loadScheduling()" style="margin-right:auto;">🔄 רענן</button>
+                <a href="/api/scheduling/campaign" target="_blank" class="btn" style="background:#1e3a5f;border-color:#3b82f6;color:#93c5fd;">📊 דוח קמפיין</a>
+            </div>
+            <div id="sched-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px;"></div>
+            <div id="sched-list" class="data-list"><div class="loading">טוען נתוני תיאומים...</div></div>
+        </div>
+    </div>
+
     <script>
         let currentTab = 'dashboard';
         let activeConvPhone = null;
+        let schedulingData = [];
 
         document.addEventListener('DOMContentLoaded', function() {
             updateTime();
@@ -531,7 +558,7 @@ function generateDashboardHTML(stats) {
             document.querySelectorAll('.nav-tab').forEach(n => n.classList.remove('active'));
             const target = document.getElementById('tab-' + tabName);
             if (target) target.classList.add('active');
-            const tabs = ['dashboard','ads','messages','leads','complexes','kones','news'];
+            const tabs = ['dashboard','ads','messages','leads','complexes','kones','news','scheduling'];
             const idx = tabs.indexOf(tabName);
             const navTabs = document.querySelectorAll('.nav-tab');
             if (navTabs[idx]) navTabs[idx].classList.add('active');
@@ -542,6 +569,7 @@ function generateDashboardHTML(stats) {
             else if (tabName === 'leads') loadLeads(filter || null);
             else if (tabName === 'complexes') loadComplexes(filter === 'hot' ? 'hot' : null);
             else if (tabName === 'kones') loadKones(filter || null);
+            else if (tabName === 'scheduling') loadScheduling();
         }
 
         async function loadMorningIntelligence() {
@@ -954,6 +982,75 @@ function generateDashboardHTML(stats) {
 
         function errorHTML(msg, retryFn) {
             return '<div class="error"><p>❌ שגיאה: ' + msg + '</p><button class="btn" onclick="' + retryFn + '" style="margin-top:10px;">נסה שוב</button></div>';
+        }
+
+        // ── SCHEDULING TAB ───────────────────────────────────────────
+        async function loadScheduling() {
+            const list = document.getElementById('sched-list');
+            const kpis = document.getElementById('sched-kpis');
+            const stateFilter = document.getElementById('sched-filter-state')?.value || '';
+            const langFilter = document.getElementById('sched-filter-lang')?.value || '';
+            list.innerHTML = '<div class="loading">טוען נתוני תיאומים...</div>';
+            try {
+                const data = await fetchJSON('/api/dashboard/scheduling/overview');
+                if (!data.success) throw new Error(data.error);
+                const s = data.sessions || {};
+                const sl = data.slots || {};
+                const cer = data.ceremonies || {};
+                // KPIs
+                kpis.innerHTML = [
+                    { label: 'סה"כ שיחות', val: s.total || 0, cls: 'blue' },
+                    { label: 'מאושרות', val: s.confirmed || 0, cls: 'green' },
+                    { label: 'ממתינות', val: s.pending || 0, cls: 'yellow' },
+                    { label: 'סירבו', val: s.declined || 0, cls: 'red' },
+                    { label: 'עברית', val: s.hebrew || 0, cls: 'blue' },
+                    { label: 'רוסית', val: s.russian || 0, cls: 'blue' },
+                    { label: 'סלוטים פנויים', val: sl.open || 0, cls: 'yellow' },
+                    { label: 'טקסי חתימה', val: cer.total || 0, cls: 'blue' }
+                ].map(k => '<div style="background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;text-align:center;"><div style="font-size:26px;font-weight:800;color:' + (k.cls==='green'?'#34d399':k.cls==='yellow'?'#fbbf24':k.cls==='red'?'#f87171':'#60a5fa') + ';">' + k.val + '</div><div style="font-size:11px;color:#64748b;margin-top:4px;">' + k.label + '</div></div>').join('');
+                // Table
+                schedulingData = data.contacts || [];
+                renderSchedulingTable(schedulingData, stateFilter, langFilter);
+            } catch (e) {
+                list.innerHTML = errorHTML(e.message, 'loadScheduling()');
+            }
+        }
+
+        function filterSchedulingTable() {
+            const stateFilter = document.getElementById('sched-filter-state')?.value || '';
+            const langFilter = document.getElementById('sched-filter-lang')?.value || '';
+            renderSchedulingTable(schedulingData, stateFilter, langFilter);
+        }
+
+        function renderSchedulingTable(rows, stateFilter, langFilter) {
+            const list = document.getElementById('sched-list');
+            const search = (document.getElementById('sched-search')?.value || '').toLowerCase();
+            let filtered = rows.filter(r => {
+                if (stateFilter && r.state !== stateFilter) return false;
+                if (langFilter && r.language !== langFilter) return false;
+                if (search) {
+                    const name = (r.contact_name || '').toLowerCase();
+                    const phone = (r.phone || '').toLowerCase();
+                    if (!name.includes(search) && !phone.includes(search)) return false;
+                }
+                return true;
+            });
+            if (!filtered.length) { list.innerHTML = '<div style="color:#64748b;padding:20px;text-align:center;">אין נתונים תואמים לסינון</div>'; return; }
+            const stateLabel = { confirmed: '<span style="color:#34d399;font-weight:700;">✅ מאושר</span>', pending: '<span style="color:#fbbf24;">⏳ ממתין</span>', declined: '<span style="color:#f87171;">❌ סירב</span>', cancelled: '<span style="color:#94a3b8;">🚫 בוטל</span>', no_answer: '<span style="color:#f87171;">📵 לא ענה</span>' };
+            const langLabel = { he: '🇮🇱', ru: '🇷🇺' };
+            const rows_html = filtered.map(r => {
+                const wa = 'https://wa.me/' + (r.phone || '').replace(/\D/g,'') + '?text=' + encodeURIComponent('שלום ' + (r.contact_name || '') + ', QUANTUM כאן');
+                const meetingType = r.meeting_type || r.campaign_meeting_type || '';
+                const typeMap = { signing_ceremony: 'כנס חתימות', consultation: 'ייעוץ', appraiser: 'שמאי', surveyor: 'מודד', physical: 'פגישה' };
+                return '<div class="data-item" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:center;padding:12px 16px;">'
+                    + '<div><div style="font-weight:600;font-size:14px;">' + (r.contact_name || 'לא ידוע') + '</div><div style="font-size:12px;color:#64748b;">' + (r.phone || '') + ' ' + (langLabel[r.language] || '') + '</div></div>'
+                    + '<div>' + (stateLabel[r.state] || '<span style="color:#94a3b8;">' + (r.state || '') + '</span>') + '</div>'
+                    + '<div style="font-size:12px;color:#94a3b8;">' + (typeMap[meetingType] || meetingType || '—') + '</div>'
+                    + '<div style="font-size:12px;color:#60a5fa;">' + (r.slot_display || (r.last_message_at ? new Date(r.last_message_at).toLocaleString('he-IL') : '—')) + '</div>'
+                    + '<a href="' + wa + '" target="_blank" class="btn" style="padding:6px 12px;font-size:12px;background:#064e3b;border-color:#34d399;color:#34d399;white-space:nowrap;">💬 WA</a>'
+                    + '</div>';
+            }).join('');
+            list.innerHTML = '<div style="font-size:12px;color:#64748b;padding:8px 16px;border-bottom:1px solid #1e293b;">' + filtered.length + ' רשומות</div>' + rows_html;
         }
     </script>
 </body>

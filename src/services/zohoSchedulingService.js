@@ -223,6 +223,39 @@ async function createMeetingActivity({ contactId, campaignId, meetingType, meeti
   }
 }
 
+// ── CAMPAIGN CONTACTS ────────────────────────────────────────
+/**
+ * Fetch all contacts for a Zoho Campaign.
+ * Returns array of { id, name, phone, email, language, status }
+ */
+async function getCampaignContacts(campaignId) {
+  if (!campaignId) return [];
+  try {
+    // Fetch campaign members (contacts in the campaign)
+    const res = await zohoRequest('GET',
+      `/Campaigns/${campaignId}/Contacts?fields=id,Full_Name,Phone,Mobile,Email,Member_Status&per_page=200`
+    );
+    const members = res.data || [];
+    return members.map(m => {
+      // Detect language from name (Cyrillic characters → Russian)
+      const name = m.Full_Name || '';
+      const isCyrillic = /[\u0400-\u04FF]/.test(name);
+      const phone = m.Mobile || m.Phone || '';
+      return {
+        id: m.id,
+        name,
+        phone: phone.replace(/[^\d+]/g, ''),
+        email: m.Email || '',
+        language: isCyrillic ? 'ru' : 'he',
+        status: (m.Member_Status || 'pending').toLowerCase()
+      };
+    }).filter(c => c.phone);
+  } catch (err) {
+    logger.warn(`[ZohoScheduling] getCampaignContacts failed for ${campaignId}:`, err.message);
+    return [];
+  }
+}
+
 // ── BULK STATUS UPDATE ────────────────────────────────────────
 /**
  * Called by reminder job when no answer after 24h / 48h
@@ -243,6 +276,7 @@ function normalizePhone(phone) {
 
 module.exports = {
   findContactByPhone,
+  getCampaignContacts,
   updateCampaignContactStatus,
   logIncomingMessage,
   createMeetingActivity,
