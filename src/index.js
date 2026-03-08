@@ -14,15 +14,15 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.73.0';
-const BUILD = '2026-03-08-v4.73.0-konesonline-live-scraper';
+const VERSION = '4.74.0';
+const BUILD = '2026-03-08-v4.74.0-appointments-bot-issue8';
 
 // What's in this version:
-// - NEW: konesonline.co.il live scraper - 24+ active auction listings, daily 07:15 cron
-// - NEW: POST /api/kones/scrape-konesonline - manual trigger endpoint
-// - NEW: external_id dedup for konesonline listings (prevents duplicates)
-// - PREV: Morning Intelligence panel in dashboard (v4.72.0)
-// - PREV: Kones landline/no_phone UX (v4.72.0)
+// - NEW: Appointments bot (Issue #8) - WhatsApp + Vapi fallback scheduling
+// - NEW: POST /api/appointments/send-slots - send available slots to lead via WhatsApp
+// - NEW: Vapi fallback cron - auto-call after 1hr no reply
+// - PREV: konesonline.co.il GitHub Actions scraper (runs on GitHub IPs)
+// - PREV: Dashboard Morning Intelligence + Kones UX (v4.72.0)
 
 async function runAutoMigrations() {
   try {
@@ -78,7 +78,8 @@ const limiter = rateLimit({
     req.path.startsWith('/api/scheduling/') || req.path.startsWith('/api/backup/') ||
     req.path.startsWith('/api/notifications/') || req.path.startsWith('/api/search/') ||
     req.path.startsWith('/api/docs') || req.path.startsWith('/api/auto-contact') ||
-    req.path.startsWith('/booking/') || req.path.startsWith('/api/kones/'),
+    req.path.startsWith('/booking/') || req.path.startsWith('/api/kones/') ||
+    req.path.startsWith('/api/appointments/'),
   message: { error: 'Too many requests, please try again later' }
 });
 app.use('/api/', limiter);
@@ -115,6 +116,7 @@ function loadAllRoutes() {
     { path: '/api/vapi', file: 'routes/vapiRoutes.js' },
     { path: '/api/inforu', file: 'routes/inforuRoutes.js' },
     { path: '/api/kones', file: 'routes/konesRoutes.js' },
+    { path: '/api/appointments', file: 'routes/appointmentRoutes.js' },
     { path: '/api', file: 'routes/whatsappWebhookRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
@@ -290,9 +292,10 @@ app.get('/api/debug', async (req, res) => {
     auto_first_contact: 'active (cron every 30min)',
     kones_auto_contact: 'active (cron daily 07:45) - mobile-only, landline detection',
     kones_api: 'active at /api/kones (Issue #5)',
-    konesonline_scraper: 'active (cron daily 07:15) - konesonline.co.il live scraping',
+    konesonline_scraper: 'active (GitHub Actions daily 07:00 UTC)',
     morning_intelligence: 'active at /api/morning/preview - shown in dashboard',
     kones_ux: 'landline/no_phone color-coded + stats bar + filter (v4.72.0)',
+    appointments_bot: 'active at /api/appointments (Issue #8) - WhatsApp + Vapi fallback',
     notifications_sse: `active (${notificationStats.connected_clients || 0} clients connected)`,
     export_api: 'active - leads/complexes/messages/ads/full-report',
     search_api: 'active - global/suggestions/saved/history',
@@ -350,35 +353,71 @@ async function start() {
     logger.warn('[AutoContact] Failed to start:', e.message);
   }
 
-  // Konesonline.co.il daily scraper - 07:15
+  // Konesonline.co.il daily scraper (now handled by GitHub Actions)
   try {
     const konesIsraelService = require('./services/konesIsraelService');
     const cron = require('node-cron');
 
-    // Run immediately on startup to populate DB
-    setTimeout(async () => {
-      try {
-        logger.info('[KonesonlineScraper] Running startup scrape...');
-        const result = await konesIsraelService.runKonesonlineScrape();
-        logger.info(`[KonesonlineScraper] Startup: ${result.imported} imported, ${result.skipped} skipped`);
-      } catch (e) {
-        logger.warn('[KonesonlineScraper] Startup scrape failed:', e.message);
-      }
-    }, 15000); // 15 seconds after start
-
-    // Daily at 07:15
+    // Note: Primary scraping is via GitHub Actions (.github/workflows/konesonline-scraper.yml)
+    // Railway backup cron kept as fallback (Railway IPs may be blocked)
     cron.schedule('15 7 * * *', async () => {
       try {
         const result = await konesIsraelService.runKonesonlineScrape();
-        logger.info(`[KonesonlineScraper] Daily: ${result.imported} imported, ${result.skipped} skipped`);
+        logger.info(`[KonesonlineScraper] Daily fallback: ${result.imported} imported, ${result.skipped} skipped`);
       } catch (e) {
-        logger.warn('[KonesonlineScraper] Daily cron error:', e.message);
+        logger.warn('[KonesonlineScraper] Daily cron error (expected if Railway IP blocked):', e.message);
       }
     });
 
-    logger.info('[KonesonlineScraper] ACTIVE - startup + daily 07:15');
+    logger.info('[KonesonlineScraper] ACTIVE - GitHub Actions primary + Railway fallback 07:15');
   } catch (e) {
     logger.warn('[KonesonlineScraper] Failed to initialize:', e.message);
+  }
+
+  // Appointments Vapi fallback cron - check every 15 minutes for unanswered appointments
+  try {
+    const cron = require('node-cron');
+    cron.schedule('*/15 * * * *', async () => {
+      try {
+        // Find appointments sent >1hr ago with no reply
+        const { rows: stale } = await pool.query(`
+          SELECT a.* FROM appointments a
+          WHERE a.status = 'whatsapp_sent'
+            AND a.created_at < NOW() - INTERVAL '1 hour'
+            AND a.vapi_call_id IS NULL
+          LIMIT 5
+        `);
+        if (stale.length === 0) return;
+
+        const axios = require('axios');
+        const apiKey = process.env.VAPI_API_KEY;
+        const assistantId = process.env.VAPI_ASSISTANT_COLD || process.env.VAPI_ASSISTANT_SELLER;
+        const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+        if (!apiKey || !phoneNumberId) return;
+
+        for (const appt of stale) {
+          try {
+            const cleanPhone = appt.phone.replace(/\D/g, '');
+            const intlPhone = cleanPhone.startsWith('0') ? '+972' + cleanPhone.slice(1) : '+' + cleanPhone;
+            const resp = await axios.post('https://api.vapi.ai/call/phone', {
+              phoneNumberId, assistantId,
+              customer: { number: intlPhone, name: appt.lead_name || 'לקוח' },
+              assistantOverrides: { variableValues: { appointment_id: appt.id.toString() } }
+            }, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
+            const callId = resp.data?.id;
+            await pool.query(`UPDATE appointments SET status='vapi_called', vapi_call_id=$1 WHERE id=$2`, [callId, appt.id]);
+            logger.info(`[AppointmentsBot] Vapi fallback call triggered for ${appt.phone} (appt #${appt.id})`);
+          } catch (e2) {
+            logger.warn(`[AppointmentsBot] Vapi call failed for ${appt.phone}:`, e2.message);
+          }
+        }
+      } catch (e) {
+        logger.warn('[AppointmentsBot] Vapi fallback cron error:', e.message);
+      }
+    });
+    logger.info('[AppointmentsBot] Vapi fallback cron ACTIVE - every 15 minutes');
+  } catch (e) {
+    logger.warn('[AppointmentsBot] Failed to start Vapi cron:', e.message);
   }
 
   try {
@@ -410,9 +449,10 @@ async function start() {
   logger.info('Auto First Contact: ACTIVE (P0) - cron every 30min');
   logger.info('Kones Auto Contact: ACTIVE (Issue #5) - mobile-only, daily 07:45');
   logger.info('Kones API: ACTIVE at /api/kones');
-  logger.info('Konesonline Scraper: ACTIVE - daily 07:15 + startup');
+  logger.info('Konesonline Scraper: ACTIVE - GitHub Actions daily + Railway fallback');
   logger.info('Morning Intelligence: ACTIVE - /api/morning/preview');
   logger.info('WhatsApp Conversations: FIXED (Issue #6)');
+  logger.info('Appointments Bot: ACTIVE (Issue #8) - /api/appointments');
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);
