@@ -1,5 +1,5 @@
 /**
- * QUANTUM Visual Booking Route v4
+ * QUANTUM Visual Booking Route v5
  *
  * Regular meetings:  meeting_slots table, one slot = one person
  * Signing ceremony:  ceremony_slots table, parallel stations per building
@@ -8,7 +8,7 @@
  *
  * GET  /booking/:token          - Visual calendar HTML
  * GET  /booking/:token/slots    - JSON slot data
- * POST /booking/:token/confirm  - Confirm booking
+ * POST /booking/:token/confirm  - Confirm booking + create Google Calendar event
  */
 
 const express = require('express');
@@ -17,6 +17,9 @@ const pool = require('../db/pool');
 const inforuService = require('../services/inforuService');
 const { logger } = require('../services/logger');
 const crypto = require('crypto');
+
+let gcal;
+try { gcal = require('../services/googleCalendarService'); } catch (e) { /* optional */ }
 
 const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
@@ -69,16 +72,6 @@ async function getMeetingSlots(campaignId) {
   return res.rows.map(s => ({ ...s, booking_type: 'meeting', capacity: 1, open_count: 1, is_recommended: s.id === recommendedId }));
 }
 
-/**
- * getCeremonySlots(ceremonyId, buildingId)
- *
- * Returns time slots for a specific building only.
- * Each "slot" represents one time point with open_count = available stations.
- * Slot ID format: ceremony:CEREMONY_ID:BUILDING_ID:HH:MM
- * This lets the confirm handler know exactly which building to lock in.
- *
- * If buildingId is null/undefined → falls back to showing all buildings.
- */
 async function getCeremonySlots(ceremonyId, buildingId) {
   let query, params;
 
@@ -104,7 +97,6 @@ async function getCeremonySlots(ceremonyId, buildingId) {
       ORDER BY cs.slot_time`;
     params = [ceremonyId, buildingId];
   } else {
-    // No building assigned: show all (admin/fallback)
     query = `
       SELECT
         cs.slot_time AS time_str,
@@ -256,7 +248,7 @@ router.post('/:token/confirm', async (req, res) => {
     const session = sessionRes.rows[0];
     const ctx = typeof session.context === 'string' ? JSON.parse(session.context) : (session.context || {});
     const lang = session.language || 'he';
-    let dateStr, timeStr, repName, slotDatetime;
+    let dateStr, timeStr, repName, slotDatetime, confirmedSlotId, confirmedSlotType;
 
     if (slotId.startsWith('ceremony:')) {
       // Format: ceremony:CEREMONY_ID:BUILDING_ID:HH:MM
@@ -265,7 +257,6 @@ router.post('/:token/confirm', async (req, res) => {
       const buildingId  = parseInt(parts[2]) || null;
       const timeStr_    = parts.slice(3).join(':'); // HH:MM
 
-      // Atomically claim one open station slot at this time in this building
       const buildingFilter = buildingId ? `AND cst.building_id=${buildingId}` : '';
       const lockRes = await pool.query(
         `UPDATE ceremony_slots SET
@@ -294,6 +285,20 @@ router.post('/:token/confirm', async (req, res) => {
       timeStr = timeStr_;
       repName = null;
       slotDatetime = `${slot.slot_date}T${timeStr_}:00`;
+      confirmedSlotId = slot.id;
+      confirmedSlotType = 'ceremony';
+
+      // Create Google Calendar event (fire-and-forget)
+      if (gcal?.createCeremonySlotEvent) {
+        gcal.createCeremonySlotEvent(pool, slot, ctx.contactName || '', session.phone)
+          .then(eventId => {
+            if (eventId) {
+              pool.query(`UPDATE ceremony_slots SET google_event_id=$1 WHERE id=$2`, [eventId, slot.id]).catch(() => {});
+              logger.info(`[BookingRoute] GCal ceremony event created: ${eventId}`);
+            }
+          })
+          .catch(e => logger.warn('[BookingRoute] GCal ceremony event failed:', e.message));
+      }
 
     } else {
       // Regular meeting slot
@@ -311,6 +316,20 @@ router.post('/:token/confirm', async (req, res) => {
       timeStr = slotDt.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
       repName = slot.representative_name;
       slotDatetime = slot.slot_datetime;
+      confirmedSlotId = slot.id;
+      confirmedSlotType = 'meeting';
+
+      // Create Google Calendar event (fire-and-forget)
+      if (gcal?.createMeetingSlotEvent) {
+        gcal.createMeetingSlotEvent(pool, slot, ctx.contactName || '', session.phone)
+          .then(eventId => {
+            if (eventId) {
+              pool.query(`UPDATE meeting_slots SET google_event_id=$1 WHERE id=$2`, [eventId, slot.id]).catch(() => {});
+              logger.info(`[BookingRoute] GCal meeting event created: ${eventId}`);
+            }
+          })
+          .catch(e => logger.warn('[BookingRoute] GCal meeting event failed:', e.message));
+      }
     }
 
     ctx.confirmedSlot = { dateStr, timeStr, time: timeStr, date_str: dateStr, rep_name: repName || '' };
