@@ -1,6 +1,6 @@
 /**
  * QUANTUM Voice AI - Vapi Integration Routes
- * v1.0.0
+ * v1.1.0 - Google Service Account auth (permanent, no token expiry)
  *
  * Endpoints:
  *   GET  /api/vapi/caller-context/:phone   - context lookup for inbound call
@@ -18,9 +18,49 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { logger } = require('../services/logger');
 const axios = require('axios');
+const { JWT } = require('google-auth-library');
 
 const VAPI_API_KEY = process.env.VAPI_API_KEY || '';
 const VAPI_BASE_URL = 'https://api.vapi.ai';
+
+// ─── Google Service Account Auth ─────────────────────────────────────────────
+
+let _googleAuthClient = null;
+
+function getGoogleAuthClient() {
+  if (_googleAuthClient) return _googleAuthClient;
+
+  const email = process.env.GOOGLE_SA_EMAIL;
+  const rawKey = process.env.GOOGLE_SA_PRIVATE_KEY;
+
+  if (!email || !rawKey) {
+    logger.warn('[VAPI] Google Service Account credentials not set (GOOGLE_SA_EMAIL / GOOGLE_SA_PRIVATE_KEY)');
+    return null;
+  }
+
+  // Railway stores private key with literal \n — convert to real newlines
+  const key = rawKey.replace(/\\n/g, '\n');
+
+  _googleAuthClient = new JWT({
+    email,
+    key,
+    scopes: ['https://www.googleapis.com/auth/calendar'],
+  });
+
+  return _googleAuthClient;
+}
+
+async function getGoogleAccessToken() {
+  const client = getGoogleAuthClient();
+  if (!client) return null;
+  try {
+    const tokenResponse = await client.getAccessToken();
+    return tokenResponse.token;
+  } catch (err) {
+    logger.error('[VAPI] Failed to get Google access token:', err.message);
+    return null;
+  }
+}
 
 // ─── Agent Configurations ────────────────────────────────────────────────────
 
@@ -537,20 +577,20 @@ router.get('/stats', async (req, res) => {
 
 // ─── Schedule Lead + Google Calendar Integration ─────────────────────────────
 // Called by Vapi tool "schedule_lead_call" when a call time is agreed
-// Creates a Google Calendar event in "QUANTUM נדל"ן - לידים" calendar
+// Creates a Google Calendar event using Service Account (permanent auth)
 
 const QUANTUM_CALENDAR_ID = process.env.QUANTUM_CALENDAR_ID ||
   'cf4cd8ef53ef4cbdca7f172bdef3f6862509b4026a5e04b648ce09144ab5aa21@group.calendar.google.com';
 
 async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime, phoneNumber, leadSource }) {
-  const accessToken = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN;
+  const accessToken = await getGoogleAccessToken();
   if (!accessToken) {
-    logger.warn('[VAPI] GOOGLE_CALENDAR_ACCESS_TOKEN not set - skipping calendar creation');
+    logger.warn('[VAPI] No Google access token available - skipping calendar creation');
     return null;
   }
 
   const startTime = new Date(scheduledTime);
-  const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // 30 min call
+  const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // 30 min
 
   const event = {
     summary: `\u{1F3E0} \u05e9\u05d9\u05d7\u05d4 \u05e2\u05dd ${leadName}`,
@@ -596,11 +636,9 @@ async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime,
 
 router.post('/schedule-lead', async (req, res) => {
   try {
-    // Vapi sends tool call results in a specific format
     const body = req.body;
     logger.info('[VAPI] schedule-lead called:', JSON.stringify(body).substring(0, 300));
 
-    // Extract parameters - Vapi tool calls come in different formats
     let leadName, leadAddress, scheduledTime, phoneNumber, leadSource;
 
     // Format 1: Direct Vapi function call
@@ -636,7 +674,6 @@ router.post('/schedule-lead', async (req, res) => {
 
     if (!leadName || !leadAddress || !scheduledTime) {
       logger.warn('[VAPI] schedule-lead: missing required fields', { leadName, leadAddress, scheduledTime });
-      // Return success to Vapi even if we can't create the event
       return res.json({
         result: 'השיחה נרשמה. נציג יחזור אליך בקרוב.',
         success: false,
@@ -644,7 +681,7 @@ router.post('/schedule-lead', async (req, res) => {
       });
     }
 
-    // Create Google Calendar event
+    // Create Google Calendar event via Service Account
     const calendarEvent = await createGoogleCalendarEvent({
       leadName,
       leadAddress,
@@ -653,16 +690,15 @@ router.post('/schedule-lead', async (req, res) => {
       leadSource,
     });
 
-    // Log to DB if possible
+    // Log to DB - save calendar_event_id for future updates/cancellations
     try {
       await pool.query(
-        `INSERT INTO vapi_leads (name, address, phone, scheduled_time, calendar_event_id, created_at)
+        `INSERT INTO vapi_leads (name, address, phone, scheduled_time, lead_source, calendar_event_id, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, NOW())
          ON CONFLICT DO NOTHING`,
-        [leadName, leadAddress, phoneNumber || null, scheduledTime, calendarEvent?.id || null, leadSource || null]
+        [leadName, leadAddress, phoneNumber || null, scheduledTime, leadSource || null, calendarEvent?.id || null]
       );
     } catch (dbErr) {
-      // Table might not exist yet - that's OK
       logger.warn('[VAPI] DB insert for lead failed (table may not exist):', dbErr.message);
     }
 
@@ -670,9 +706,13 @@ router.post('/schedule-lead', async (req, res) => {
       ? `מעולה! קבעתי שיחה עם ${leadName} ב-${new Date(scheduledTime).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })} ונוצר אירוע ביומן QUANTUM.`
       : `נרשמה שיחה עם ${leadName}. נציג יצור קשר בזמן שנקבע.`;
 
-    logger.info(`[VAPI] Lead scheduled: ${leadName} | ${leadAddress} | ${scheduledTime}`);
+    // Alert on calendar failure
+    if (!calendarEvent) {
+      logger.error(`[VAPI] ALERT: Calendar event failed for lead ${leadName} - check GOOGLE_SA_EMAIL / GOOGLE_SA_PRIVATE_KEY`);
+    }
 
-    // Return result to Vapi
+    logger.info(`[VAPI] Lead scheduled: ${leadName} | ${leadAddress} | ${scheduledTime} | calendar=${!!calendarEvent}`);
+
     res.json({
       result: successMsg,
       success: true,
@@ -689,6 +729,37 @@ router.post('/schedule-lead', async (req, res) => {
       success: false,
       error: err.message
     });
+  }
+});
+
+// ─── Google Auth Status ───────────────────────────────────────────────────────
+// GET /api/vapi/google-auth-status - verify Service Account is working
+
+router.get('/google-auth-status', async (req, res) => {
+  try {
+    const email = process.env.GOOGLE_SA_EMAIL;
+    const hasKey = !!process.env.GOOGLE_SA_PRIVATE_KEY;
+
+    if (!email || !hasKey) {
+      return res.json({
+        success: false,
+        configured: false,
+        message: 'GOOGLE_SA_EMAIL or GOOGLE_SA_PRIVATE_KEY not set'
+      });
+    }
+
+    const token = await getGoogleAccessToken();
+    res.json({
+      success: !!token,
+      configured: true,
+      serviceAccountEmail: email,
+      tokenObtained: !!token,
+      message: token
+        ? 'Service Account auth working - token obtained successfully'
+        : 'Service Account configured but token request failed'
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
