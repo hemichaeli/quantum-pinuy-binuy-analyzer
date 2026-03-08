@@ -157,7 +157,6 @@ async function findRescheduleCandidates(campaignId) {
       if (Math.abs(openMs - slotMs) < 60000) continue;
 
       // Calculate what gap saving would result
-      // New nearest confirmed to openSlot
       const nearestConfirmed = confirmed
         .filter(c => c.id !== slot.id)
         .map(c => Math.abs(new Date(c.slot_datetime).getTime() - openMs))
@@ -238,9 +237,12 @@ async function sendRescheduleOffers(campaignId) {
       );
       const reqId = reqRes.rows[0].id;
 
-      // Send WhatsApp
+      // Send WhatsApp free-text chat message (sendWhatsAppChat, NOT sendWhatsApp which requires a template key)
       const msg = S.offer(name, origTime, propTime, propDate);
-      await inforuService.sendWhatsApp(originalSlot.contact_phone, msg);
+      await inforuService.sendWhatsAppChat(originalSlot.contact_phone, msg, {
+        customerParameter: 'QUANTUM_RESCHEDULE',
+        customerMessageId: `reschedule_${reqId}_${Date.now()}`
+      });
 
       // Queue Vapi fallback call for 2h later
       await pool.query(
@@ -252,7 +254,7 @@ async function sendRescheduleOffers(campaignId) {
           originalSlot.contact_phone,
           originalSlot.zoho_contact_id || null,
           campaignId,
-          new Date(Date.now() + 2 * 3600000), // 2h from now
+          new Date(Date.now() + 2 * 3600000),
           JSON.stringify({ reschedule_request_id: reqId, lang, name, origTime, propTime, propDate })
         ]
       );
@@ -261,7 +263,7 @@ async function sendRescheduleOffers(campaignId) {
       results.sent++;
 
     } catch (err) {
-      logger.error(`[Optimization] Error processing slot ${originalSlot.id}:`, err.message);
+      logger.error(`[Optimization] Error processing slot ${originalSlot.id}: ${err.message}`, { stack: err.stack });
       results.errors++;
     }
   }
@@ -269,12 +271,8 @@ async function sendRescheduleOffers(campaignId) {
   return results;
 }
 
-// ── PHASE 2: Handle WhatsApp reply (called from botEngine / schedulingWebhook) ─
+// ── PHASE 2: Handle WhatsApp reply ─────────────────────────────────────────────
 
-/**
- * Called when an inbound WhatsApp message arrives from a phone that has a pending reschedule request.
- * Returns true if this message was handled as a reschedule reply (caller should suppress normal bot flow).
- */
 async function handleRescheduleReply(phone, messageText) {
   const reqRes = await pool.query(
     `SELECT * FROM reschedule_requests
@@ -296,42 +294,34 @@ async function handleRescheduleReply(phone, messageText) {
   );
 
   if (msg === '1') {
-    // Accept: perform atomic swap
     const swapped = await performSwap(req);
     if (swapped) {
       const propTime = formatTime(req.proposed_datetime);
       const propDate = formatDate(req.proposed_datetime);
-      await inforuService.sendWhatsApp(phone, S.accepted(req.contact_name || '', propTime, propDate));
+      await inforuService.sendWhatsAppChat(phone, S.accepted(req.contact_name || '', propTime, propDate));
     } else {
-      // Proposed slot was taken in the interim
-      await inforuService.sendWhatsApp(phone, S.alreadyPast);
+      await inforuService.sendWhatsAppChat(phone, S.alreadyPast);
       await pool.query(
         `UPDATE reschedule_requests SET status='expired', updated_at=NOW() WHERE id=$1`,
         [req.id]
       );
     }
   } else {
-    // Decline (reply "2" or anything else)
     await declineRequest(req);
     const origTime = formatTime(req.original_datetime);
-    await inforuService.sendWhatsApp(phone, S.declined(req.contact_name || '', origTime));
+    await inforuService.sendWhatsAppChat(phone, S.declined(req.contact_name || '', origTime));
   }
 
-  return true; // consumed
+  return true;
 }
 
 // ── SWAP LOGIC ─────────────────────────────────────────────────────────────────
 
-/**
- * Atomically swap original → open, proposed → confirmed.
- * Returns true if successful.
- */
 async function performSwap(req) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Lock and verify proposed slot is still reserved (or open)
     const lockRes = await client.query(
       `SELECT id FROM meeting_slots
        WHERE id=$1 AND status IN ('reserved','open')
@@ -343,7 +333,6 @@ async function performSwap(req) {
       return false;
     }
 
-    // Get original slot contact info
     const origRes = await client.query(
       `SELECT contact_phone, zoho_contact_id, contact_name, contact_address, contact_street
        FROM meeting_slots WHERE id=$1`,
@@ -355,7 +344,6 @@ async function performSwap(req) {
     }
     const orig = origRes.rows[0];
 
-    // Free original slot
     await client.query(
       `UPDATE meeting_slots SET
          status='open', contact_phone=NULL, zoho_contact_id=NULL,
@@ -365,7 +353,6 @@ async function performSwap(req) {
       [req.original_slot_id]
     );
 
-    // Confirm proposed slot with contact info
     await client.query(
       `UPDATE meeting_slots SET
          status='confirmed', contact_phone=$1, zoho_contact_id=$2,
@@ -376,13 +363,11 @@ async function performSwap(req) {
        orig.contact_address, orig.contact_street, req.proposed_slot_id]
     );
 
-    // Update reschedule request
     await client.query(
       `UPDATE reschedule_requests SET status='accepted', swapped_at=NOW(), updated_at=NOW() WHERE id=$1`,
       [req.id]
     );
 
-    // Update bot_session context with new slot datetime
     const newSlotRes = await client.query(
       `SELECT slot_datetime,
               TO_CHAR(slot_datetime AT TIME ZONE 'Asia/Jerusalem','HH24:MI') AS time_str
@@ -411,16 +396,13 @@ async function performSwap(req) {
 
   } catch (err) {
     await client.query('ROLLBACK');
-    logger.error(`[Optimization] Swap failed for req #${req.id}:`, err.message);
+    logger.error(`[Optimization] Swap failed for req #${req.id}: ${err.message}`);
     return false;
   } finally {
     client.release();
   }
 }
 
-/**
- * Release the reserved proposed slot and mark request declined.
- */
 async function declineRequest(req) {
   await pool.query(
     `UPDATE meeting_slots SET status='open', reserved_at=NULL WHERE id=$1 AND status='reserved'`,
@@ -430,7 +412,6 @@ async function declineRequest(req) {
     `UPDATE reschedule_requests SET status='declined', updated_at=NOW() WHERE id=$1`,
     [req.id]
   );
-  // Cancel the Vapi fallback call from reminder_queue
   await pool.query(
     `DELETE FROM reminder_queue
      WHERE phone=$1 AND reminder_type='reschedule_call'
@@ -441,10 +422,6 @@ async function declineRequest(req) {
 
 // ── EXPIRE stale pending requests ─────────────────────────────────────────────
 
-/**
- * Called by cron: release reserved slots for requests that have passed their expires_at
- * without a reply (Vapi call handles them separately).
- */
 async function expireStaleRequests() {
   const res = await pool.query(
     `UPDATE reschedule_requests SET status='expired', updated_at=NOW()
@@ -452,7 +429,6 @@ async function expireStaleRequests() {
      RETURNING id, proposed_slot_id, phone`
   );
   for (const row of res.rows) {
-    // Release the reserved proposed slot
     await pool.query(
       `UPDATE meeting_slots SET status='open', reserved_at=NULL
        WHERE id=$1 AND status='reserved'`,
@@ -466,7 +442,6 @@ async function expireStaleRequests() {
 // ── Run full optimization for all active campaigns ─────────────────────────────
 
 async function runOptimizationForAllCampaigns() {
-  // Find campaigns that have confirmed slots tomorrow
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStr = tomorrow.toISOString().split('T')[0];
