@@ -14,15 +14,15 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.72.0';
-const BUILD = '2026-03-08-v4.72.0-morning-intelligence-kones-ux';
+const VERSION = '4.73.0';
+const BUILD = '2026-03-08-v4.73.0-konesonline-live-scraper';
 
 // What's in this version:
-// - NEW: Morning Intelligence panel in dashboard (Daily intel button -> shows opportunities + stressed sellers)
-// - NEW: Kones landline/no_phone UX - color-coded cards, stats bar, filter by landline
-// - FIX: runKonesAutoContact result displayed in alert with breakdown
-// - PREV: Kones auto-contact mobile-only filter (v4.71.0)
-// - PREV: WhatsApp conversations dashboard compat (Issue #6, v4.70.0)
+// - NEW: konesonline.co.il live scraper - 24+ active auction listings, daily 07:15 cron
+// - NEW: POST /api/kones/scrape-konesonline - manual trigger endpoint
+// - NEW: external_id dedup for konesonline listings (prevents duplicates)
+// - PREV: Morning Intelligence panel in dashboard (v4.72.0)
+// - PREV: Kones landline/no_phone UX (v4.72.0)
 
 async function runAutoMigrations() {
   try {
@@ -290,6 +290,7 @@ app.get('/api/debug', async (req, res) => {
     auto_first_contact: 'active (cron every 30min)',
     kones_auto_contact: 'active (cron daily 07:45) - mobile-only, landline detection',
     kones_api: 'active at /api/kones (Issue #5)',
+    konesonline_scraper: 'active (cron daily 07:15) - konesonline.co.il live scraping',
     morning_intelligence: 'active at /api/morning/preview - shown in dashboard',
     kones_ux: 'landline/no_phone color-coded + stats bar + filter (v4.72.0)',
     notifications_sse: `active (${notificationStats.connected_clients || 0} clients connected)`,
@@ -349,6 +350,37 @@ async function start() {
     logger.warn('[AutoContact] Failed to start:', e.message);
   }
 
+  // Konesonline.co.il daily scraper - 07:15
+  try {
+    const konesIsraelService = require('./services/konesIsraelService');
+    const cron = require('node-cron');
+
+    // Run immediately on startup to populate DB
+    setTimeout(async () => {
+      try {
+        logger.info('[KonesonlineScraper] Running startup scrape...');
+        const result = await konesIsraelService.runKonesonlineScrape();
+        logger.info(`[KonesonlineScraper] Startup: ${result.imported} imported, ${result.skipped} skipped`);
+      } catch (e) {
+        logger.warn('[KonesonlineScraper] Startup scrape failed:', e.message);
+      }
+    }, 15000); // 15 seconds after start
+
+    // Daily at 07:15
+    cron.schedule('15 7 * * *', async () => {
+      try {
+        const result = await konesIsraelService.runKonesonlineScrape();
+        logger.info(`[KonesonlineScraper] Daily: ${result.imported} imported, ${result.skipped} skipped`);
+      } catch (e) {
+        logger.warn('[KonesonlineScraper] Daily cron error:', e.message);
+      }
+    });
+
+    logger.info('[KonesonlineScraper] ACTIVE - startup + daily 07:15');
+  } catch (e) {
+    logger.warn('[KonesonlineScraper] Failed to initialize:', e.message);
+  }
+
   try {
     const { initializeBackupService } = require('./services/backupService');
     const backupResult = await initializeBackupService();
@@ -378,6 +410,7 @@ async function start() {
   logger.info('Auto First Contact: ACTIVE (P0) - cron every 30min');
   logger.info('Kones Auto Contact: ACTIVE (Issue #5) - mobile-only, daily 07:45');
   logger.info('Kones API: ACTIVE at /api/kones');
+  logger.info('Konesonline Scraper: ACTIVE - daily 07:15 + startup');
   logger.info('Morning Intelligence: ACTIVE - /api/morning/preview');
   logger.info('WhatsApp Conversations: FIXED (Issue #6)');
 
