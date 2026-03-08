@@ -14,34 +14,18 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.76.0';
-const BUILD = '2026-03-08-v4.76.0-schedule-optimization-engine';
-
-// What's in this version:
-// - NEW: Schedule Optimization Engine (v4.76.0)
-//   * optimizationService.js - detects isolated slots, sends WA offer, queues Vapi fallback
-//   * optimizationCron.js - runs at 20:00 Sun-Thu + 22:30 expire stale requests
-//   * Atomic slot swap on accept (PostgreSQL transaction)
-//   * reschedule_requests table in DB
-//   * API: POST /api/scheduling/optimization/run + GET /api/scheduling/optimization/status
-//   * Webhook intercepts reschedule replies before normal bot flow
-// - PREV: Smart Slot Clustering - address-based scoring (v4.75.0)
-// - PREV: Appointments bot (Issue #8) - WhatsApp + Vapi fallback scheduling
+const VERSION = '4.77.0';
+const BUILD = '2026-03-08-v4.77.0-optimization-test-route';
 
 async function runAutoMigrations() {
   try {
     logger.info('[MIGRATIONS] Running auto-migrations...');
     const migFile = path.join(__dirname, 'db', 'auto_migrations.sql');
-    if (!fs.existsSync(migFile)) {
-      logger.warn('[MIGRATIONS] No auto_migrations.sql found');
-      return;
-    }
+    if (!fs.existsSync(migFile)) { logger.warn('[MIGRATIONS] No auto_migrations.sql found'); return; }
     const sql = fs.readFileSync(migFile, 'utf8');
     await pool.query(sql);
     logger.info('[MIGRATIONS] Auto-migrations completed');
-  } catch (err) {
-    logger.error('[MIGRATIONS] Failed:', err.message);
-  }
+  } catch (err) { logger.error('[MIGRATIONS] Failed:', err.message); }
 }
 
 async function runSchedulingMigrations() {
@@ -52,9 +36,7 @@ async function runSchedulingMigrations() {
       await pool.query(sql);
       logger.info('[MIGRATIONS] Scheduling schema applied');
     }
-  } catch (err) {
-    logger.error('[MIGRATIONS] Scheduling schema failed:', err.message);
-  }
+  } catch (err) { logger.error('[MIGRATIONS] Scheduling schema failed:', err.message); }
 }
 
 app.use(helmet({
@@ -83,7 +65,7 @@ const limiter = rateLimit({
     req.path.startsWith('/api/notifications/') || req.path.startsWith('/api/search/') ||
     req.path.startsWith('/api/docs') || req.path.startsWith('/api/auto-contact') ||
     req.path.startsWith('/booking/') || req.path.startsWith('/api/kones/') ||
-    req.path.startsWith('/api/appointments/'),
+    req.path.startsWith('/api/appointments/') || req.path.startsWith('/api/test/'),
   message: { error: 'Too many requests, please try again later' }
 });
 app.use('/api/', limiter);
@@ -125,6 +107,7 @@ function loadAllRoutes() {
     { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
     { path: '/api/scheduling', file: 'routes/schedulingRoutes.js' },
+    { path: '/api/test/optimization', file: 'routes/optimizationTestRoute.js' },
     { path: '/api/notifications', file: 'routes/notificationRoutes.js' },
     { path: '/api/export', file: 'routes/exportRoutes.js' },
     { path: '/api/search', file: 'routes/searchRoutes.js' },
@@ -140,7 +123,7 @@ function loadAllRoutes() {
       delete require.cache[fullPath];
       const router = require(`./${file}`);
       app.use(routePath, router);
-      routeLoadResults.push({ path: routePath, status: 'ok' , file });
+      routeLoadResults.push({ path: routePath, status: 'ok', file });
     } catch (err) {
       routeLoadResults.push({ path: routePath, status: 'failed', error: err.message, file });
     }
@@ -150,37 +133,21 @@ function loadAllRoutes() {
 function loadBackupRoutes() {
   try {
     const { createFullBackup, getBackupStats, restoreFromBackup } = require('./services/backupService');
-    
     app.post('/api/backup/create', async (req, res) => {
-      try {
-        const result = await createFullBackup();
-        res.json({ success: true, message: 'Backup created successfully', backup: result, timestamp: new Date().toISOString() });
-      } catch (error) {
-        res.status(500).json({ success: false, error: 'Backup creation failed', message: error.message });
-      }
+      try { const result = await createFullBackup(); res.json({ success: true, backup: result }); }
+      catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-
     app.get('/api/backup/list', async (req, res) => {
-      try {
-        const stats = await getBackupStats();
-        res.json({ success: true, stats: stats, timestamp: new Date().toISOString() });
-      } catch (error) {
-        res.status(500).json({ success: false, error: 'Failed to list backups', message: error.message });
-      }
+      try { const stats = await getBackupStats(); res.json({ success: true, stats }); }
+      catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-
     app.post('/api/backup/restore/:timestamp', async (req, res) => {
       try {
-        const { timestamp } = req.params;
-        const { confirmed } = req.body;
-        if (!confirmed) return res.status(400).json({ success: false, error: 'Confirmation required' });
-        const result = await restoreFromBackup(`quantum_backup_${timestamp}.sql.gz`, { confirmed: true });
-        res.json({ success: true, result: result, timestamp: new Date().toISOString() });
-      } catch (error) {
-        res.status(500).json({ success: false, error: 'Restore operation failed', message: error.message });
-      }
+        if (!req.body.confirmed) return res.status(400).json({ success: false, error: 'Confirmation required' });
+        const result = await restoreFromBackup(`quantum_backup_${req.params.timestamp}.sql.gz`, { confirmed: true });
+        res.json({ success: true, result });
+      } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-    
     routeLoadResults.push({ path: '/api/backup', status: 'ok', file: 'services/backupService.js' });
     logger.info('[BACKUP API] Backup API routes loaded successfully');
   } catch (err) {
@@ -192,45 +159,18 @@ function loadBackupRoutes() {
 function loadAutoContactRoutes() {
   try {
     const { runAutoFirstContact, runKonesAutoContact, getContactStats, getKonesContactStats } = require('./services/autoFirstContactService');
-
     app.get('/api/auto-contact/stats', async (req, res) => {
-      try {
-        const stats = await getContactStats();
-        res.json({ success: true, ...stats });
-      } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-      }
+      try { res.json({ success: true, ...await getContactStats() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-
     app.get('/api/auto-contact/kones-stats', async (req, res) => {
-      try {
-        const stats = await getKonesContactStats();
-        res.json({ success: true, kones: stats });
-      } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-      }
+      try { res.json({ success: true, kones: await getKonesContactStats() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-
     app.post('/api/auto-contact/run', async (req, res) => {
-      try {
-        logger.info('[AutoContact] Manual trigger via API');
-        const result = await runAutoFirstContact();
-        res.json({ success: true, result, timestamp: new Date().toISOString() });
-      } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-      }
+      try { res.json({ success: true, result: await runAutoFirstContact() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-
     app.post('/api/auto-contact/run-kones', async (req, res) => {
-      try {
-        logger.info('[KonesContact] Manual trigger via API');
-        const result = await runKonesAutoContact();
-        res.json({ success: true, result, timestamp: new Date().toISOString() });
-      } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-      }
+      try { res.json({ success: true, result: await runKonesAutoContact() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-
     routeLoadResults.push({ path: '/api/auto-contact', status: 'ok', file: 'services/autoFirstContactService.js' });
     logger.info('[AutoContact] API routes loaded');
   } catch (err) {
@@ -244,7 +184,7 @@ app.get('/health', async (req, res) => {
     const result = await pool.query('SELECT COUNT(*) FROM complexes');
     res.json({ status: 'ok', timestamp: new Date().toISOString(), db: 'connected', complexes: parseInt(result.rows[0].count), version: VERSION });
   } catch (err) {
-    res.status(503).json({ status: 'error', timestamp: new Date().toISOString(), db: 'disconnected', error: err.message, version: VERSION });
+    res.status(503).json({ status: 'error', db: 'disconnected', error: err.message, version: VERSION });
   }
 });
 
@@ -253,87 +193,35 @@ app.get('/api/complexes', async (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
     const { rows } = await pool.query(
       `SELECT id, name, address, city, iai_score, ssi_score, status, units_count, property_type, enrichment_status, developer
-       FROM complexes ORDER BY iai_score DESC NULLS LAST LIMIT $1`,
-      [limit]
+       FROM complexes ORDER BY iai_score DESC NULLS LAST LIMIT $1`, [limit]
     );
     res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/debug', async (req, res) => {
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
-  
   let backupStatus = 'unknown';
-  try {
-    const { getBackupStats } = require('./services/backupService');
-    const stats = await getBackupStats();
-    backupStatus = `active (${stats.totalBackups} backups, ${stats.totalSizeMB}MB)`;
-  } catch (error) {
-    backupStatus = 'failed to initialize';
-  }
-
+  try { const { getBackupStats } = require('./services/backupService'); const s = await getBackupStats(); backupStatus = `active (${s.totalBackups} backups, ${s.totalSizeMB}MB)`; } catch (e) { backupStatus = 'failed'; }
   let notificationStats = {};
-  try {
-    const ns = require('./services/notificationService');
-    notificationStats = ns.getStats();
-  } catch (e) { /* ignore */ }
-
+  try { notificationStats = require('./services/notificationService').getStats(); } catch (e) {}
   let optimizationStats = {};
-  try {
-    const { rows } = await pool.query(
-      `SELECT status, COUNT(*) AS total FROM reschedule_requests GROUP BY status`
-    );
-    optimizationStats = Object.fromEntries(rows.map(r => [r.status, parseInt(r.total)]));
-  } catch (e) { /* table may not exist yet */ }
-  
+  try { const { rows } = await pool.query(`SELECT status, COUNT(*) AS total FROM reschedule_requests GROUP BY status`); optimizationStats = Object.fromEntries(rows.map(r => [r.status, parseInt(r.total)])); } catch (e) {}
   res.json({
-    version: VERSION,
-    build: BUILD,
-    timestamp: new Date().toISOString(),
-    whatsapp_mode: 'webhook_push',
-    webhook_url: 'https://pinuy-binuy-analyzer-production.up.railway.app/api/whatsapp/webhook',
-    backup_service: backupStatus,
-    email_notifications: 'disabled',
-    facebook_integration: 'active',
-    dashboard_v5: 'complete_7_tabs',
-    sandbox: 'active at /sandbox',
-    visual_booking: 'active at /booking/:token',
-    auto_first_contact: 'active (cron every 30min)',
-    kones_auto_contact: 'active (cron daily 07:45) - mobile-only, landline detection',
-    kones_api: 'active at /api/kones (Issue #5)',
-    konesonline_scraper: 'active (GitHub Actions daily 07:00 UTC)',
-    morning_intelligence: 'active at /api/morning/preview - shown in dashboard',
-    kones_ux: 'landline/no_phone color-coded + stats bar + filter (v4.72.0)',
-    appointments_bot: 'active at /api/appointments (Issue #8) - WhatsApp + Vapi fallback',
-    schedule_optimization: `active - cron 20:00 Sun-Thu + 22:30 expire | stats: ${JSON.stringify(optimizationStats)}`,
+    version: VERSION, build: BUILD, timestamp: new Date().toISOString(),
+    schedule_optimization: `active - cron 20:00 Sun-Thu + 22:30 expire | ${JSON.stringify(optimizationStats)}`,
+    optimization_test: 'active at POST /api/test/optimization/setup',
     smart_slot_clustering: 'active - address-based proximity scoring (v4.75.0)',
-    notifications_sse: `active (${notificationStats.connected_clients || 0} clients connected)`,
-    export_api: 'active - leads/complexes/messages/ads/full-report',
-    search_api: 'active - global/suggestions/saved/history',
-    crm_api: 'active - calls/reminders/deals/pipeline/stats',
-    analytics_api: 'active - overview/leads/market/performance/revenue',
-    users_api: 'active - users/login/logout/roles/activity',
-    api_docs: 'active at /api/docs (Swagger UI)',
-    whatsapp_conversations: 'fixed - Issue #6 (conversations key + phone fallback for messages)',
-    kones_mobile_filter: 'active - only 05x numbers get WhatsApp, landlines flagged for phone call',
-    routes: {
-      loaded: loaded.map(r => r.path + ' (' + r.file + ')'),
-      failed: failed.map(r => ({ path: r.path, file: r.file, error: r.error }))
-    }
+    notifications_sse: `active (${notificationStats.connected_clients || 0} clients)`,
+    routes: { loaded: loaded.map(r => r.path + ' (' + r.file + ')'), failed: failed.map(r => ({ path: r.path, error: r.error })) }
   });
 });
 
-app.get('/', (req, res) => {
-  res.redirect('/dashboard');
-});
+app.get('/', (req, res) => res.redirect('/dashboard'));
 
 async function start() {
   logger.info(`=== QUANTUM ANALYZER ${VERSION} ===`);
-  logger.info(`Build: ${BUILD}`);
-
   await runAutoMigrations();
   await runSchedulingMigrations();
   loadAllRoutes();
@@ -350,158 +238,72 @@ async function start() {
     const { initialize: initAutoContact, runAutoFirstContact, runKonesAutoContact } = require('./services/autoFirstContactService');
     await initAutoContact();
     const cron = require('node-cron');
+    cron.schedule('*/30 * * * *', async () => { try { await runAutoFirstContact(); } catch (e) { logger.warn('[AutoContact] Cron error:', e.message); } });
+    cron.schedule('45 7 * * *', async () => { try { await runKonesAutoContact(); } catch (e) { logger.warn('[KonesContact] Cron error:', e.message); } });
+    logger.info('[AutoContact] ACTIVE - every 30 min');
+  } catch (e) { logger.warn('[AutoContact] Failed to start:', e.message); }
 
-    cron.schedule('*/30 * * * *', async () => {
-      try { await runAutoFirstContact(); } catch (e) { logger.warn('[AutoContact] Cron error:', e.message); }
-    });
+  try { const { startOptimizationCron } = require('./cron/optimizationCron'); startOptimizationCron(); logger.info('[ScheduleOptimization] ACTIVE'); } catch (e) { logger.warn('[ScheduleOptimization] Failed:', e.message); }
 
-    cron.schedule('45 7 * * *', async () => {
-      try { await runKonesAutoContact(); } catch (e) { logger.warn('[KonesContact] Cron error:', e.message); }
-    });
-
-    logger.info('[AutoContact] ACTIVE - cron every 30 minutes');
-    logger.info('[KonesContact] ACTIVE - cron daily at 07:45 (mobile-only)');
-  } catch (e) {
-    logger.warn('[AutoContact] Failed to start:', e.message);
-  }
-
-  // Schedule Optimization Engine - runs 20:00 Sun-Thu + 22:30 expire
-  try {
-    const { startOptimizationCron } = require('./cron/optimizationCron');
-    startOptimizationCron();
-    logger.info('[ScheduleOptimization] ACTIVE - 20:00 Sun-Thu (offer) + 22:30 (expire stale)');
-  } catch (e) {
-    logger.warn('[ScheduleOptimization] Failed to start:', e.message);
-  }
-
-  // Konesonline.co.il daily scraper (now handled by GitHub Actions)
   try {
     const konesIsraelService = require('./services/konesIsraelService');
     const cron = require('node-cron');
+    cron.schedule('15 7 * * *', async () => { try { await konesIsraelService.runKonesonlineScrape(); } catch (e) {} });
+  } catch (e) {}
 
-    cron.schedule('15 7 * * *', async () => {
-      try {
-        const result = await konesIsraelService.runKonesonlineScrape();
-        logger.info(`[KonesonlineScraper] Daily fallback: ${result.imported} imported, ${result.skipped} skipped`);
-      } catch (e) {
-        logger.warn('[KonesonlineScraper] Daily cron error (expected if Railway IP blocked):', e.message);
-      }
-    });
-
-    logger.info('[KonesonlineScraper] ACTIVE - GitHub Actions primary + Railway fallback 07:15');
-  } catch (e) {
-    logger.warn('[KonesonlineScraper] Failed to initialize:', e.message);
-  }
-
-  // Appointments Vapi fallback cron - check every 15 minutes for unanswered appointments
   try {
     const cron = require('node-cron');
     cron.schedule('*/15 * * * *', async () => {
       try {
-        const { rows: stale } = await pool.query(`
-          SELECT a.* FROM appointments a
-          WHERE a.status = 'whatsapp_sent'
-            AND a.created_at < NOW() - INTERVAL '1 hour'
-            AND a.vapi_call_id IS NULL
-          LIMIT 5
-        `);
-        if (stale.length === 0) return;
-
+        const { rows: stale } = await pool.query(`SELECT a.* FROM appointments a WHERE a.status='whatsapp_sent' AND a.created_at < NOW() - INTERVAL '1 hour' AND a.vapi_call_id IS NULL LIMIT 5`);
+        if (!stale.length) return;
         const axios = require('axios');
-        const apiKey = process.env.VAPI_API_KEY;
+        const apiKey = process.env.VAPI_API_KEY, phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
         const assistantId = process.env.VAPI_ASSISTANT_COLD || process.env.VAPI_ASSISTANT_SELLER;
-        const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
         if (!apiKey || !phoneNumberId) return;
-
         for (const appt of stale) {
-          try {
-            const cleanPhone = appt.phone.replace(/\D/g, '');
-            const intlPhone = cleanPhone.startsWith('0') ? '+972' + cleanPhone.slice(1) : '+' + cleanPhone;
-            const resp = await axios.post('https://api.vapi.ai/call/phone', {
-              phoneNumberId, assistantId,
-              customer: { number: intlPhone, name: appt.lead_name || 'לקוח' },
-              assistantOverrides: { variableValues: { appointment_id: appt.id.toString() } }
-            }, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
-            const callId = resp.data?.id;
-            await pool.query(`UPDATE appointments SET status='vapi_called', vapi_call_id=$1 WHERE id=$2`, [callId, appt.id]);
-            logger.info(`[AppointmentsBot] Vapi fallback call triggered for ${appt.phone} (appt #${appt.id})`);
-          } catch (e2) {
-            logger.warn(`[AppointmentsBot] Vapi call failed for ${appt.phone}:`, e2.message);
-          }
+          const p = appt.phone.replace(/\D/g,''); const ip = p.startsWith('0') ? '+972'+p.slice(1) : '+'+p;
+          const r = await axios.post('https://api.vapi.ai/call/phone', { phoneNumberId, assistantId, customer: { number: ip, name: appt.lead_name||'לקוח' }, assistantOverrides: { variableValues: { appointment_id: appt.id.toString() } } }, { headers: { Authorization: `Bearer ${apiKey}` } });
+          await pool.query(`UPDATE appointments SET status='vapi_called', vapi_call_id=$1 WHERE id=$2`, [r.data?.id, appt.id]);
         }
-      } catch (e) {
-        logger.warn('[AppointmentsBot] Vapi fallback cron error:', e.message);
-      }
+      } catch (e) {}
     });
-    logger.info('[AppointmentsBot] Vapi fallback cron ACTIVE - every 15 minutes');
-  } catch (e) {
-    logger.warn('[AppointmentsBot] Failed to start Vapi cron:', e.message);
-  }
+  } catch (e) {}
 
-  try {
-    const { initializeBackupService } = require('./services/backupService');
-    const backupResult = await initializeBackupService();
-    logger.info(`[BACKUP] Service initialized: ${backupResult.stats.totalBackups} backups, ${backupResult.stats.totalSizeMB}MB`);
-  } catch (error) {
-    logger.error('[BACKUP] Failed to initialize backup service:', error.message);
-  }
+  try { const { initializeBackupService } = require('./services/backupService'); await initializeBackupService(); } catch (e) {}
 
-  app.use((req, res) => { res.status(404).json({ error: 'Not Found', path: req.path, version: VERSION }); });
-  app.use((err, req, res, next) => { logger.error('Unhandled error:', err); res.status(500).json({ error: 'Internal Server Error', message: err.message, version: VERSION }); });
-
-  try { const { startScheduler } = require('./jobs/weeklyScanner'); startScheduler(); } catch (e) { logger.warn('Scheduler failed to start:', e.message); }
-  try { const { startWatcher } = require('./jobs/stuckScanWatcher'); startWatcher(); } catch (e) { logger.warn('Stuck scan watcher failed to start:', e.message); }
-  try { const { startDiscoveryScheduler } = require('./jobs/discoveryScheduler'); startDiscoveryScheduler(); } catch (e) { logger.warn('Discovery scheduler failed to start:', e.message); }
-
-  try { const { initialize: initAppointmentFallback } = require('./jobs/appointmentFallbackJob'); initAppointmentFallback(); } catch (e) { logger.warn('Appointment fallback job failed to start:', e.message); }
   try { const { processReminderQueue } = require('./jobs/reminderJob'); const cron = require('node-cron');
-    cron.schedule('* * * * *', async () => {
-      try { await processReminderQueue(); } catch (e) { logger.warn('[ReminderJob] Error:', e.message); }
-    });
-    logger.info('Reminder queue job: ACTIVE (every minute)');
-  } catch (e) { logger.warn('Reminder job failed to start:', e.message); }
+    cron.schedule('* * * * *', async () => { try { await processReminderQueue(); } catch (e) {} });
+    logger.info('Reminder queue: ACTIVE');
+  } catch (e) {}
+
+  try { require('./jobs/weeklyScanner').startScheduler(); } catch (e) {}
+  try { require('./jobs/stuckScanWatcher').startWatcher(); } catch (e) {}
+  try { require('./jobs/discoveryScheduler').startDiscoveryScheduler(); } catch (e) {}
+  try { require('./jobs/appointmentFallbackJob').initialize(); } catch (e) {}
 
   const scraperDefs = [
-    { name: 'Komo',       module: './services/komoScraper',       cron: '0 8 * * *',  fn: 'scanAll' },
+    { name: 'Komo', module: './services/komoScraper', cron: '0 8 * * *', fn: 'scanAll' },
     { name: 'BankNadlan', module: './services/bankNadlanScraper', cron: '15 8 * * *', fn: 'scanAll' },
-    { name: 'Yad1',       module: './services/yad1Scraper',       cron: '30 8 * * *', fn: 'scanAll' },
-    { name: 'Dira',       module: './services/diraScraper',       cron: '45 8 * * *', fn: 'scanAll' },
-    { name: 'Kones2',     module: './services/kones2Scraper',     cron: '0 9 * * *',  fn: 'scanAll' },
-    { name: 'BidSpirit',  module: './services/bidspiritScraper',  cron: '15 9 * * *', fn: 'scanAll' },
-    { name: 'Govmap',     module: './services/govmapScraper',     cron: '0 7 * * 1',  fn: 'scanAll' },
+    { name: 'Yad1', module: './services/yad1Scraper', cron: '30 8 * * *', fn: 'scanAll' },
+    { name: 'Dira', module: './services/diraScraper', cron: '45 8 * * *', fn: 'scanAll' },
+    { name: 'Kones2', module: './services/kones2Scraper', cron: '0 9 * * *', fn: 'scanAll' },
+    { name: 'BidSpirit', module: './services/bidspiritScraper', cron: '15 9 * * *', fn: 'scanAll' },
+    { name: 'Govmap', module: './services/govmapScraper', cron: '0 7 * * 1', fn: 'scanAll' },
   ];
   for (const def of scraperDefs) {
     try {
-      const scraper = require(def.module);
-      const cron = require('node-cron');
-      cron.schedule(def.cron, async () => {
-        try {
-          const result = await scraper[def.fn]();
-          logger.info(`[${def.name}Scraper] Daily scan: ${result.total_inserted || 0} new, ${result.total_updated || 0} updated`);
-        } catch (e) {
-          logger.warn(`[${def.name}Scraper] Daily cron error:`, e.message);
-        }
-      });
-      logger.info(`[${def.name}Scraper] ACTIVE - cron ${def.cron}`);
-    } catch (e) {
-      logger.warn(`[${def.name}Scraper] Failed to initialize:`, e.message);
-    }
+      const scraper = require(def.module); const cron = require('node-cron');
+      cron.schedule(def.cron, async () => { try { await scraper[def.fn](); } catch (e) {} });
+      logger.info(`[${def.name}Scraper] ACTIVE`);
+    } catch (e) {}
   }
 
-  logger.info('WhatsApp: WEBHOOK mode active');
-  logger.info('Visual Booking: ACTIVE at /booking/:token');
-  logger.info('Auto First Contact: ACTIVE (P0) - cron every 30min');
-  logger.info('Kones Auto Contact: ACTIVE (Issue #5) - mobile-only, daily 07:45');
-  logger.info('Kones API: ACTIVE at /api/kones');
-  logger.info('Konesonline Scraper: ACTIVE - GitHub Actions daily + Railway fallback');
-  logger.info('Morning Intelligence: ACTIVE - /api/morning/preview');
-  logger.info('WhatsApp Conversations: FIXED (Issue #6)');
-  logger.info('Appointments Bot: ACTIVE (Issue #8) - /api/appointments');
-  logger.info('Schedule Optimization: ACTIVE - 20:00 + 22:30 cron');
+  app.use((req, res) => res.status(404).json({ error: 'Not Found', path: req.path, version: VERSION }));
+  app.use((err, req, res, next) => { logger.error('Unhandled error:', err); res.status(500).json({ error: err.message, version: VERSION }); });
 
   app.listen(PORT, '0.0.0.0', () => {
-    logger.info(`Server running on port ${PORT}`);
-    logger.info(`Routes: ${loaded.length} loaded, ${failed.length} failed`);
+    logger.info(`Server running on port ${PORT} | ${loaded.length} routes loaded`);
   });
 }
 
