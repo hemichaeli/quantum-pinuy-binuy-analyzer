@@ -1,8 +1,9 @@
 /**
  * QUANTUM Optimization Test Route
- * POST /api/test/optimization/setup   - seed test data (Zoho + DB)
- * POST /api/test/optimization/reset   - clean up test data
- * GET  /api/test/optimization/state   - show current test state
+ * POST /api/test/optimization/setup          - seed test data + run optimization
+ * POST /api/test/optimization/reset          - clean up test data
+ * GET  /api/test/optimization/state          - show current state
+ * POST /api/test/optimization/simulate-reply - simulate WA reply (1=כן / 2=לא)
  */
 
 const express = require('express');
@@ -81,7 +82,6 @@ async function seedTestSlots(phone, street) {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tDate = tomorrow.toISOString().split('T')[0];
 
-  // Israel = UTC+2 (winter) / UTC+3 (summer)
   const isDST = (() => {
     const jan = new Date(new Date().getFullYear(), 0, 1).getTimezoneOffset();
     const jul = new Date(new Date().getFullYear(), 6, 1).getTimezoneOffset();
@@ -96,12 +96,10 @@ async function seedTestSlots(phone, street) {
     return d.toISOString();
   };
 
-  // Clean previous test data
   await pool.query(`DELETE FROM reschedule_requests WHERE campaign_id=$1`, [CAMPAIGN_ID]);
   await pool.query(`DELETE FROM meeting_slots WHERE campaign_id=$1`, [CAMPAIGN_ID]);
   await pool.query(`DELETE FROM bot_sessions WHERE zoho_campaign_id=$1`, [CAMPAIGN_ID]);
 
-  // NOTE: All inserts include meeting_type (NOT NULL column)
   const ins = (time, status, phone, name, street, addr) => pool.query(
     `INSERT INTO meeting_slots
        (campaign_id, slot_datetime, duration_minutes, meeting_type, status, contact_phone, contact_name, contact_street, contact_address)
@@ -116,7 +114,6 @@ async function seedTestSlots(phone, street) {
   await ins('16:45', 'confirmed', '972504444444', 'רחל מזרחי', 'הרצל', null);
   const proposedSlot = await ins('10:30', 'open', null, null, null, null);
 
-  // Bot session for Hemi
   await pool.query(
     `INSERT INTO bot_sessions (phone, zoho_campaign_id, state, language, contact_address, contact_street, context)
      VALUES ($1,$2,'confirmed','he',$3,$4,$5)
@@ -130,6 +127,8 @@ async function seedTestSlots(phone, street) {
   return { hemi_slot_id: hemiSlot.rows[0].id, proposed_slot_id: proposedSlot.rows[0].id, tomorrow: tDate, project_id: projectId, slots_created: 6 };
 }
 
+// ══════════════════════════════════════════════════════════════
+// SETUP
 // ══════════════════════════════════════════════════════════════
 
 router.post('/setup', async (req, res) => {
@@ -187,12 +186,17 @@ router.post('/setup', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════
+
 router.get('/state', async (req, res) => {
   try {
+    const campaignId = req.query.campaignId || CAMPAIGN_ID;
     const slots = await pool.query(
       `SELECT id, TO_CHAR(slot_datetime AT TIME ZONE 'Asia/Jerusalem','HH24:MI') AS time,
               status, contact_name, contact_phone, contact_street
-       FROM meeting_slots WHERE campaign_id=$1 ORDER BY slot_datetime`, [CAMPAIGN_ID]
+       FROM meeting_slots WHERE campaign_id=$1 ORDER BY slot_datetime`, [campaignId]
     );
     const requests = await pool.query(
       `SELECT rr.*,
@@ -201,18 +205,79 @@ router.get('/state', async (req, res) => {
        FROM reschedule_requests rr
        LEFT JOIN meeting_slots ms_o ON ms_o.id = rr.original_slot_id
        LEFT JOIN meeting_slots ms_p ON ms_p.id = rr.proposed_slot_id
-       WHERE rr.campaign_id=$1 ORDER BY rr.created_at DESC`, [CAMPAIGN_ID]
+       WHERE rr.campaign_id=$1 ORDER BY rr.created_at DESC`, [campaignId]
     );
     const sessions = await pool.query(
-      `SELECT phone, state, language, contact_street, context FROM bot_sessions WHERE zoho_campaign_id=$1`, [CAMPAIGN_ID]
+      `SELECT phone, state, language, contact_street, context FROM bot_sessions WHERE zoho_campaign_id=$1`, [campaignId]
     );
-    res.json({ campaign_id: CAMPAIGN_ID, slots: slots.rows, requests: requests.rows, sessions: sessions.rows });
+    const queue = await pool.query(
+      `SELECT reminder_type, phone, scheduled_at, status FROM reminder_queue WHERE zoho_campaign_id=$1 ORDER BY scheduled_at`, [campaignId]
+    );
+    res.json({ campaign_id: campaignId, slots: slots.rows, requests: requests.rows, sessions: sessions.rows, reminder_queue: queue.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ══════════════════════════════════════════════════════════════
+// SIMULATE REPLY  (1 = כן אעבור | 2 = לא אשמור)
+// ══════════════════════════════════════════════════════════════
+
+router.post('/simulate-reply', async (req, res) => {
+  const { reply, phone } = req.body;
+  if (!reply || !['1', '2'].includes(String(reply))) {
+    return res.status(400).json({ error: 'reply must be "1" (accept) or "2" (decline)' });
+  }
+  const testPhone = phone || TEST_PHONE;
+
+  try {
+    const optimizationService = require('../services/optimizationService');
+    const handled = await optimizationService.handleRescheduleReply(testPhone, String(reply));
+
+    if (!handled) {
+      return res.status(404).json({
+        success: false,
+        message: 'No pending reschedule request found for this phone',
+        phone: testPhone
+      });
+    }
+
+    // Fetch updated state
+    const slots = await pool.query(
+      `SELECT id, TO_CHAR(slot_datetime AT TIME ZONE 'Asia/Jerusalem','HH24:MI') AS time,
+              status, contact_name, contact_phone
+       FROM meeting_slots WHERE campaign_id=$1 ORDER BY slot_datetime`, [CAMPAIGN_ID]
+    );
+    const requests = await pool.query(
+      `SELECT id, status, wa_replied_at, swapped_at, original_slot_id, proposed_slot_id
+       FROM reschedule_requests WHERE campaign_id=$1 ORDER BY created_at DESC LIMIT 3`, [CAMPAIGN_ID]
+    );
+
+    const replyLabel = reply === '1' ? 'כן - החלפה!' : 'לא - נשמר';
+    logger.info(`[TestSetup] Simulated reply "${replyLabel}" from ${testPhone}`);
+
+    res.json({
+      success: true,
+      reply: String(reply),
+      reply_label: replyLabel,
+      phone: testPhone,
+      handled: true,
+      slots: slots.rows,
+      requests: requests.rows
+    });
+
+  } catch (err) {
+    logger.error('[SimulateReply] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// RESET
+// ══════════════════════════════════════════════════════════════
 
 router.post('/reset', async (req, res) => {
   try {
     await pool.query(`DELETE FROM reschedule_requests WHERE campaign_id=$1`, [CAMPAIGN_ID]);
+    await pool.query(`DELETE FROM reminder_queue WHERE zoho_campaign_id=$1`, [CAMPAIGN_ID]);
     await pool.query(`DELETE FROM meeting_slots WHERE campaign_id=$1`, [CAMPAIGN_ID]);
     await pool.query(`DELETE FROM bot_sessions WHERE zoho_campaign_id=$1`, [CAMPAIGN_ID]);
     await pool.query(`DELETE FROM campaign_schedule_config WHERE zoho_campaign_id=$1`, [CAMPAIGN_ID]);
