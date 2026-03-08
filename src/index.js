@@ -14,8 +14,8 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.77.0';
-const BUILD = '2026-03-08-v4.77.0-optimization-test-route';
+const VERSION = '4.78.0';
+const BUILD = '2026-03-09-v4.78.0-gcal-calendar-routes';
 
 async function runAutoMigrations() {
   try {
@@ -107,6 +107,7 @@ function loadAllRoutes() {
     { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
     { path: '/api/scheduling', file: 'routes/schedulingRoutes.js' },
+    { path: '/api/scheduling/calendar', file: 'routes/calendarRoutes.js' },
     { path: '/api/test/optimization', file: 'routes/optimizationTestRoute.js' },
     { path: '/api/notifications', file: 'routes/notificationRoutes.js' },
     { path: '/api/export', file: 'routes/exportRoutes.js' },
@@ -208,11 +209,19 @@ app.get('/api/debug', async (req, res) => {
   try { notificationStats = require('./services/notificationService').getStats(); } catch (e) {}
   let optimizationStats = {};
   try { const { rows } = await pool.query(`SELECT status, COUNT(*) AS total FROM reschedule_requests GROUP BY status`); optimizationStats = Object.fromEntries(rows.map(r => [r.status, parseInt(r.total)])); } catch (e) {}
+  let gcalStatus = 'not configured';
+  try {
+    const gcal = require('./services/googleCalendarService');
+    gcalStatus = gcal.isConfigured()
+      ? `configured (${process.env.GOOGLE_SA_EMAIL || process.env.GOOGLE_CLIENT_EMAIL})`
+      : 'credentials missing';
+  } catch (e) { gcalStatus = 'service error'; }
   res.json({
     version: VERSION, build: BUILD, timestamp: new Date().toISOString(),
     schedule_optimization: `active - cron 20:00 Sun-Thu + 22:30 expire | ${JSON.stringify(optimizationStats)}`,
     optimization_test: 'active at POST /api/test/optimization/setup',
     smart_slot_clustering: 'active - address-based proximity scoring (v4.75.0)',
+    google_calendar: gcalStatus,
     notifications_sse: `active (${notificationStats.connected_clients || 0} clients)`,
     routes: { loaded: loaded.map(r => r.path + ' (' + r.file + ')'), failed: failed.map(r => ({ path: r.path, error: r.error })) }
   });
@@ -233,6 +242,16 @@ async function start() {
   logger.info('=== ROUTE LOADING SUMMARY ===');
   loaded.forEach(r => logger.info(`  OK: ${r.path} (${r.file})`));
   failed.forEach(r => logger.error(`  FAILED: ${r.path} (${r.file}) -> ${r.error}`));
+
+  // Log GCal status at startup
+  try {
+    const gcal = require('./services/googleCalendarService');
+    if (gcal.isConfigured()) {
+      logger.info(`[GCal] Configured with service account: ${process.env.GOOGLE_SA_EMAIL || process.env.GOOGLE_CLIENT_EMAIL}`);
+    } else {
+      logger.warn('[GCal] Not configured - set GOOGLE_SA_EMAIL + GOOGLE_SA_PRIVATE_KEY on Railway');
+    }
+  } catch (e) {}
 
   try {
     const { initialize: initAutoContact, runAutoFirstContact, runKonesAutoContact } = require('./services/autoFirstContactService');
