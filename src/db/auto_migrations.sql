@@ -81,3 +81,20 @@ CREATE TABLE IF NOT EXISTS konesonline_listings (
 CREATE INDEX IF NOT EXISTS idx_konesonline_contact ON konesonline_listings(contact_status) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_konesonline_phone ON konesonline_listings(phone) WHERE phone IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_konesonline_city ON konesonline_listings(city);
+
+-- ========================================================
+-- QUANTUM v4.75+ - Smart Slot Clustering (address-based)
+-- ========================================================
+
+-- Store contact's property address pulled from Zoho CRM
+-- Used to score slots by geographic proximity (same building > same street > same area)
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS contact_address TEXT;
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS contact_street TEXT;
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS contact_building_no TEXT;
+
+-- Store the booked contact address on the slot itself (for future cluster scoring)
+ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS contact_address TEXT;
+ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS contact_street TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_meeting_slots_street ON meeting_slots(campaign_id, contact_street)
+  WHERE status = 'confirmed';
