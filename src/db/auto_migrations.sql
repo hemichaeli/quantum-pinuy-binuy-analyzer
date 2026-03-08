@@ -86,15 +86,68 @@ CREATE INDEX IF NOT EXISTS idx_konesonline_city ON konesonline_listings(city);
 -- QUANTUM v4.75+ - Smart Slot Clustering (address-based)
 -- ========================================================
 
--- Store contact's property address pulled from Zoho CRM
--- Used to score slots by geographic proximity (same building > same street > same area)
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS contact_address TEXT;
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS contact_street TEXT;
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS contact_building_no TEXT;
 
--- Store the booked contact address on the slot itself (for future cluster scoring)
 ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS contact_address TEXT;
 ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS contact_street TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_meeting_slots_street ON meeting_slots(campaign_id, contact_street)
   WHERE status = 'confirmed';
+
+-- ========================================================
+-- QUANTUM v4.76+ - Schedule Optimization Engine
+-- ========================================================
+-- Tracks reschedule requests sent to contacts on the eve of their appointment.
+-- Phase 1: WhatsApp offer  →  Phase 2: Vapi call if no response
+
+CREATE TABLE IF NOT EXISTS reschedule_requests (
+  id                    SERIAL PRIMARY KEY,
+
+  -- Original confirmed slot
+  original_slot_id      INTEGER NOT NULL REFERENCES meeting_slots(id),
+  campaign_id           TEXT NOT NULL,
+  phone                 VARCHAR(30) NOT NULL,
+  zoho_contact_id       TEXT,
+  contact_name          TEXT,
+  language              TEXT DEFAULT 'he',
+  original_datetime     TIMESTAMPTZ NOT NULL,
+
+  -- Proposed better slot
+  proposed_slot_id      INTEGER NOT NULL REFERENCES meeting_slots(id),
+  proposed_datetime     TIMESTAMPTZ NOT NULL,
+
+  -- Optimization metrics
+  gap_saved_minutes     INTEGER,        -- how many minutes of idle time we eliminate
+  cluster_gain          INTEGER,        -- delta in cluster score
+
+  -- Status lifecycle:
+  --   pending        → WA sent, waiting for reply
+  --   accepted       → contact said yes, swap done
+  --   declined       → contact said no or no reply within window
+  --   call_queued    → no WA response, Vapi call triggered
+  --   call_accepted  → accepted on call
+  --   call_declined  → declined on call
+  --   expired        → past the cutoff, no action taken
+  status                TEXT NOT NULL DEFAULT 'pending',
+
+  -- Timing
+  wa_sent_at            TIMESTAMPTZ,
+  wa_replied_at         TIMESTAMPTZ,
+  call_triggered_at     TIMESTAMPTZ,
+  call_completed_at     TIMESTAMPTZ,
+  swapped_at            TIMESTAMPTZ,    -- when the actual slot swap was executed
+  expires_at            TIMESTAMPTZ,    -- deadline for response (e.g. 2 hours before original)
+
+  created_at            TIMESTAMPTZ DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ DEFAULT NOW(),
+
+  -- One active request per slot max
+  UNIQUE(original_slot_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reschedule_status   ON reschedule_requests(status);
+CREATE INDEX IF NOT EXISTS idx_reschedule_phone    ON reschedule_requests(phone);
+CREATE INDEX IF NOT EXISTS idx_reschedule_campaign ON reschedule_requests(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_reschedule_expires  ON reschedule_requests(expires_at) WHERE status = 'pending';
