@@ -1,10 +1,20 @@
 /**
- * QUANTUM Visual Booking Route v5
+ * QUANTUM Visual Booking Route v6
  *
  * Regular meetings:  meeting_slots table, one slot = one person
  * Signing ceremony:  ceremony_slots table, parallel stations per building
  *                    Each contact sees ONLY their building's slots
  *                    capacity = number of active stations in that building
+ *
+ * v6: Smart slot clustering
+ *   - Pulls contact_street from bot_sessions (sourced from Zoho Mailing_Street)
+ *   - Scores each open slot by geographic density:
+ *       +5  same street already has confirmed/reserved appointments in ±90 min window
+ *       +2  adjacent slots on same street (within ±3 slots)
+ *       +1  any other confirmed slot within ±60 min
+ *       -3  slot creates an isolated "island" (gap > 90 min on both sides)
+ *   - Surfaces 3 smart picks: recommended, earliest, latest
+ *   - Full list still accessible via "show all times"
  *
  * GET  /booking/:token          - Visual calendar HTML
  * GET  /booking/:token/slots    - JSON slot data
@@ -47,15 +57,80 @@ module.exports.ensureBookingToken = ensureBookingToken;
 module.exports.BASE_URL = BASE_URL;
 
 // ══════════════════════════════════════════════════════════════
+// SMART SLOT CLUSTERING
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Score open slots by geographic density.
+ * contactStreet: extracted from Zoho Mailing_Street (e.g. "הרצל")
+ * Modifies slots in-place, adding a `cluster_score` field.
+ * Returns the same array sorted by score DESC, slot_datetime ASC.
+ */
+async function scoreSlotsByProximity(slots, campaignId, contactStreet) {
+  if (!slots.length) return slots;
+
+  // Fetch all confirmed/reserved slots for this campaign (with street + datetime)
+  const confirmedRes = await pool.query(
+    `SELECT slot_datetime, contact_street
+     FROM meeting_slots
+     WHERE campaign_id=$1
+       AND status IN ('confirmed','reserved')
+       AND slot_datetime > NOW() - INTERVAL '1 hour'
+     ORDER BY slot_datetime`,
+    [campaignId]
+  );
+  const confirmed = confirmedRes.rows;
+
+  const WINDOW_SAME_STREET = 90 * 60 * 1000;  // 90 min
+  const WINDOW_ANY          = 60 * 60 * 1000;  // 60 min
+  const ISOLATION_GAP       = 90 * 60 * 1000;  // isolation penalty threshold
+
+  for (const slot of slots) {
+    let score = 0;
+    const slotMs = new Date(slot.slot_datetime).getTime();
+
+    for (const c of confirmed) {
+      const cMs = new Date(c.slot_datetime).getTime();
+      const diff = Math.abs(slotMs - cMs);
+
+      if (diff <= WINDOW_SAME_STREET && contactStreet && c.contact_street === contactStreet) {
+        score += 5;  // same street, close in time
+      } else if (diff <= WINDOW_ANY) {
+        score += 1;  // any confirmed slot nearby
+      }
+    }
+
+    // Penalty: if this slot would be isolated (no confirmed within 90min on EITHER side)
+    const before = confirmed.filter(c => new Date(c.slot_datetime).getTime() < slotMs);
+    const after  = confirmed.filter(c => new Date(c.slot_datetime).getTime() > slotMs);
+    const nearestBefore = before.length ? slotMs - new Date(before[before.length - 1].slot_datetime).getTime() : Infinity;
+    const nearestAfter  = after.length  ? new Date(after[0].slot_datetime).getTime() - slotMs : Infinity;
+    if (nearestBefore > ISOLATION_GAP && nearestAfter > ISOLATION_GAP) {
+      score -= 3;
+    }
+
+    slot.cluster_score = score;
+  }
+
+  // Sort: highest score first, then chronological
+  slots.sort((a, b) => {
+    if (b.cluster_score !== a.cluster_score) return b.cluster_score - a.cluster_score;
+    return new Date(a.slot_datetime) - new Date(b.slot_datetime);
+  });
+
+  // Mark recommended = top-scoring slot
+  if (slots.length > 0) {
+    slots[0].is_recommended = true;
+  }
+
+  return slots;
+}
+
+// ══════════════════════════════════════════════════════════════
 // SLOT FETCHERS
 // ══════════════════════════════════════════════════════════════
 
-async function getMeetingSlots(campaignId) {
-  const lastRes = await pool.query(
-    `SELECT MAX(slot_datetime) AS last_dt FROM meeting_slots WHERE campaign_id=$1 AND status='confirmed'`,
-    [campaignId]
-  );
-  const lastDt = lastRes.rows[0]?.last_dt || null;
+async function getMeetingSlots(campaignId, contactStreet) {
   const res = await pool.query(
     `SELECT id, slot_datetime,
             TO_CHAR(slot_datetime AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD') AS slot_date,
@@ -64,12 +139,17 @@ async function getMeetingSlots(campaignId) {
             representative_name
      FROM meeting_slots
      WHERE campaign_id=$1 AND status='open' AND slot_datetime > NOW()
-     ORDER BY slot_datetime LIMIT 40`,
+     ORDER BY slot_datetime LIMIT 60`,
     [campaignId]
   );
   if (!res.rows.length) return [];
-  let recommendedId = !lastDt ? res.rows[0].id : (res.rows.find(s => new Date(s.slot_datetime) > new Date(lastDt))?.id || null);
-  return res.rows.map(s => ({ ...s, booking_type: 'meeting', capacity: 1, open_count: 1, is_recommended: s.id === recommendedId }));
+
+  let slots = res.rows.map(s => ({ ...s, booking_type: 'meeting', capacity: 1, open_count: 1, cluster_score: 0, is_recommended: false }));
+
+  // Apply smart scoring if we have street info
+  slots = await scoreSlotsByProximity(slots, campaignId, contactStreet || null);
+
+  return slots;
 }
 
 async function getCeremonySlots(ceremonyId, buildingId) {
@@ -129,6 +209,7 @@ async function getCeremonySlots(ceremonyId, buildingId) {
     open_count: parseInt(row.open_count),
     total_count: parseInt(row.total_count),
     capacity: parseInt(row.total_count),
+    cluster_score: 0,
     is_recommended: false,
     representative_name: null
   }));
@@ -146,7 +227,12 @@ function groupByDate(slots, lang = 'he') {
     }
     groups[key].slots.push(slot);
   }
-  return Object.values(groups).sort((a, b) => a.date.localeCompare(b.date));
+  // Within each day, sort by time (scoring may have reordered)
+  const sorted = Object.values(groups).sort((a, b) => a.date.localeCompare(b.date));
+  for (const g of sorted) {
+    g.slots.sort((a, b) => a.time_str.localeCompare(b.time_str));
+  }
+  return sorted;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -191,11 +277,27 @@ router.get('/:token', async (req, res) => {
         buildingLabel = slots[0]?.building_label || null;
       }
     } else {
-      slots = await getMeetingSlots(session.zoho_campaign_id);
+      // Pass contact_street for smart clustering
+      slots = await getMeetingSlots(session.zoho_campaign_id, session.contact_street || null);
+    }
+
+    // Build smart picks (for meetings only)
+    let smartPicks = null;
+    if (!isCeremony && slots.length >= 2) {
+      const recommended = slots.find(s => s.is_recommended) || slots[0];
+      const earliest    = [...slots].sort((a, b) => a.slot_datetime.localeCompare(b.slot_datetime))[0];
+      const latest      = [...slots].sort((a, b) => b.slot_datetime.localeCompare(a.slot_datetime))[0];
+      // Deduplicate
+      const seen = new Set();
+      smartPicks = [recommended, earliest, latest].filter(s => {
+        if (seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      });
     }
 
     const grouped = groupByDate(slots, lang);
-    res.type('html').send(calendarPage(token, ctx.contactName || '', lang, config, grouped, isCeremony, buildingLabel));
+    res.type('html').send(calendarPage(token, ctx.contactName || '', lang, config, grouped, isCeremony, buildingLabel, smartPicks));
   } catch (err) {
     logger.error('[BookingRoute] GET error:', err);
     res.status(500).type('html').send(errorPage('שגיאה טכנית', 'Technical error. Please try again.'));
@@ -208,19 +310,20 @@ router.get('/:token', async (req, res) => {
 router.get('/:token/slots', async (req, res) => {
   try {
     const sessionRes = await pool.query(
-      `SELECT bs.zoho_campaign_id, bs.language, bs.context, bs.ceremony_building_id, csc.meeting_type
+      `SELECT bs.zoho_campaign_id, bs.language, bs.context, bs.ceremony_building_id,
+              bs.contact_street, csc.meeting_type
        FROM bot_sessions bs
        LEFT JOIN campaign_schedule_config csc ON csc.zoho_campaign_id = bs.zoho_campaign_id
        WHERE bs.booking_token=$1`,
       [req.params.token]
     );
     if (!sessionRes.rows.length) return res.status(404).json({ error: 'Invalid token' });
-    const { zoho_campaign_id, language, context, ceremony_building_id, meeting_type } = sessionRes.rows[0];
+    const { zoho_campaign_id, language, context, ceremony_building_id, contact_street, meeting_type } = sessionRes.rows[0];
     const ctx = typeof context === 'string' ? JSON.parse(context) : (context || {});
     const isCeremony = meeting_type === 'signing_ceremony';
     const slots = isCeremony
       ? await getCeremonySlots(ctx.ceremony?.id, ceremony_building_id)
-      : await getMeetingSlots(zoho_campaign_id);
+      : await getMeetingSlots(zoho_campaign_id, contact_street || null);
     res.json({ slots, lang: language, isCeremony });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -288,7 +391,6 @@ router.post('/:token/confirm', async (req, res) => {
       confirmedSlotId = slot.id;
       confirmedSlotType = 'ceremony';
 
-      // Create Google Calendar event (fire-and-forget)
       if (gcal?.createCeremonySlotEvent) {
         gcal.createCeremonySlotEvent(pool, slot, ctx.contactName || '', session.phone)
           .then(eventId => {
@@ -301,12 +403,19 @@ router.post('/:token/confirm', async (req, res) => {
       }
 
     } else {
-      // Regular meeting slot
+      // Regular meeting slot - also save contact_address + contact_street for future cluster scoring
       const lockRes = await pool.query(
-        `UPDATE meeting_slots SET status='confirmed', reserved_at=NOW(),
-         contact_phone=$1, zoho_contact_id=$2, contact_name=$3
-         WHERE id=$4 AND status='open' RETURNING *`,
-        [session.phone, session.zoho_contact_id, ctx.contactName || '', slotId]
+        `UPDATE meeting_slots SET
+           status='confirmed', reserved_at=NOW(),
+           contact_phone=$1, zoho_contact_id=$2, contact_name=$3,
+           contact_address=$4, contact_street=$5
+         WHERE id=$6 AND status='open'
+         RETURNING *`,
+        [
+          session.phone, session.zoho_contact_id, ctx.contactName || '',
+          session.contact_address || null, session.contact_street || null,
+          slotId
+        ]
       );
       if (!lockRes.rows.length) return res.status(409).json({ error: 'slot_taken' });
 
@@ -319,7 +428,6 @@ router.post('/:token/confirm', async (req, res) => {
       confirmedSlotId = slot.id;
       confirmedSlotType = 'meeting';
 
-      // Create Google Calendar event (fire-and-forget)
       if (gcal?.createMeetingSlotEvent) {
         gcal.createMeetingSlotEvent(pool, slot, ctx.contactName || '', session.phone)
           .then(eventId => {
@@ -383,7 +491,7 @@ h2{color:#34d399;font-size:18px;margin-bottom:8px}p{color:#94a3b8;font-size:14px
 </head><body><div class="box"><div class="logo">⚡ QUANTUM</div><h2>${title}</h2><p>${msg}</p></div></body></html>`;
 }
 
-function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLabel) {
+function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLabel, smartPicks) {
   const isRu = lang === 'ru';
   const dir = isRu ? 'ltr' : 'rtl';
 
@@ -397,10 +505,16 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
       success_title: '✅ הפגישה נקבעה!',
       success_sub: isCeremony ? 'תקבל/י אישור ב-WhatsApp.' : 'תקבל/י אישור ב-WhatsApp ותזכורת יום לפני.',
       slot_taken: 'המועד כבר נתפס - אנא בחר/י מועד אחר.',
-      recommended: 'מומלץ',
+      recommended: '⭐ מומלץ',
+      earliest: '⏰ מוקדם',
+      latest: '🌙 מאוחר',
+      show_all: 'הצג את כל המועדים',
+      hide_all: 'הסתר',
       cancel: 'בחר/י מועד אחר',
       rep_label: 'נציג',
       spots: (n) => n === 1 ? 'מקום אחד פנוי' : `${n} מקומות פנויים`,
+      smart_heading: 'מועדים מומלצים',
+      all_heading: 'כל המועדים הפנויים',
     },
     ru: {
       heading: isCeremony ? 'Выберите время для церемонии' : 'Выберите удобное время',
@@ -411,13 +525,44 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
       success_title: '✅ Встреча назначена!',
       success_sub: isCeremony ? 'Подтверждение придёт в WhatsApp.' : 'Подтверждение придёт в WhatsApp. Напомним за сутки.',
       slot_taken: 'Это время уже занято — выберите другое.',
-      recommended: 'Рекомендуем',
+      recommended: '⭐ Рекомендуем',
+      earliest: '⏰ Раньше',
+      latest: '🌙 Позже',
+      show_all: 'Показать все слоты',
+      hide_all: 'Скрыть',
       cancel: 'Выбрать другое время',
       rep_label: 'Представитель',
       spots: (n) => n === 1 ? '1 место' : `${n} места`,
+      smart_heading: 'Рекомендуемые',
+      all_heading: 'Все доступные слоты',
     },
   }[lang] || {};
 
+  // ── Smart picks section (regular meetings only) ──
+  let smartHtml = '';
+  if (!isCeremony && smartPicks && smartPicks.length > 0) {
+    const LABELS = [T.recommended, T.earliest, T.latest];
+    smartHtml = `<div class="smart-section">
+      <div class="section-label">✨ ${T.smart_heading}</div>
+      <div class="smart-row">`;
+    smartPicks.forEach((slot, i) => {
+      const repSafe = (slot.representative_name || '').replace(/'/g, "\\'");
+      const slotIdSafe = String(slot.id).replace(/'/g, "\\'");
+      const dateObj = new Date(`${slot.slot_date}T${slot.time_str}`);
+      const dayLabel = (isRu ? DAY_NAMES_RU : DAY_NAMES_HE)[slot.dow] || '';
+      const dayNum = `${String(dateObj.getDate()).padStart(2,'0')}/${String(dateObj.getMonth()+1).padStart(2,'0')}`;
+      smartHtml += `<button class="smart-btn" data-id="${slotIdSafe}"
+        onclick="selectSlot(this,'${slotIdSafe}','${dayLabel} ${dayNum}','${slot.time_str}','${repSafe}')">
+        <span class="smart-label">${LABELS[i] || ''}</span>
+        <span class="smart-time">${slot.time_str}</span>
+        <span class="smart-date">${dayLabel} ${dayNum}</span>
+        ${config.show_rep_name && slot.representative_name ? `<span class="smart-rep">${slot.representative_name}</span>` : ''}
+      </button>`;
+    });
+    smartHtml += `</div></div>`;
+  }
+
+  // ── Full slot grid (collapsible for meetings, always shown for ceremony) ──
   let slotsHtml = '';
   if (!grouped.length) {
     slotsHtml = `<div class="no-slots">${T.noSlots}</div>`;
@@ -433,12 +578,10 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
         const repSafe = (slot.representative_name || '').replace(/'/g, "\\'");
         const slotIdSafe = String(slot.id).replace(/'/g, "\\'");
         const capacityBadge = isCeremony && slot.open_count ? `<span class="cap-badge">${T.spots(slot.open_count)}</span>` : '';
-        const recBadge = !isCeremony && slot.is_recommended ? `<span class="rec-badge">${T.recommended}</span>` : '';
-        const recClass = !isCeremony && slot.is_recommended ? ' recommended' : '';
+        const recClass = slot.is_recommended ? ' recommended' : '';
         const disabledAttr = slot.open_count === 0 ? 'disabled' : '';
         slotsHtml += `<button class="slot-btn${recClass}" data-id="${slotIdSafe}" ${disabledAttr}
           onclick="selectSlot(this,'${slotIdSafe}','${group.label} ${group.dayNum}','${slot.time_str}','${repSafe}')">
-          ${recBadge}
           <span class="slot-time">${slot.time_str}</span>
           ${capacityBadge}
           ${!isCeremony && config.show_rep_name && slot.representative_name ? `<span class="rep-name">${slot.representative_name}</span>` : ''}
@@ -449,6 +592,10 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   }
 
   const buildingHtml = T.building ? `<div class="building-tag">📍 ${T.building}</div>` : '';
+  const allSlotsToggle = (!isCeremony && smartPicks && smartPicks.length > 0 && grouped.length > 0)
+    ? `<div class="all-toggle" onclick="toggleAllSlots()" id="allToggle">▼ ${T.show_all}</div>
+       <div id="allSlots" style="display:none">${slotsHtml}</div>`
+    : slotsHtml;
 
   return `<!DOCTYPE html>
 <html dir="${dir}" lang="${lang}">
@@ -466,6 +613,24 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .subhead{font-size:13px;color:#94a3b8;margin-top:3px}
   .building-tag{display:inline-block;margin-top:6px;background:#1e3a5f;color:#93c5fd;border:1px solid #3b82f660;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:600}
   .container{padding:16px;max-width:500px;margin:0 auto;padding-bottom:110px}
+
+  /* Smart picks */
+  .smart-section{margin-bottom:24px}
+  .section-label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+  .smart-row{display:flex;gap:10px;flex-wrap:wrap}
+  .smart-btn{flex:1;min-width:100px;background:linear-gradient(135deg,#1e293b,#0f172a);border:1.5px solid var(--blue);border-radius:14px;padding:12px 10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;touch-action:manipulation;transition:all .15s}
+  .smart-btn:hover{border-color:#60a5fa;background:#1e3a5f}
+  .smart-btn.selected{background:#1e3a5f;box-shadow:0 0 0 3px #3b82f630}
+  .smart-label{font-size:10px;font-weight:700;color:var(--blue);letter-spacing:.5px}
+  .smart-time{font-size:20px;font-weight:800;color:var(--text)}
+  .smart-date{font-size:11px;color:var(--muted)}
+  .smart-rep{font-size:10px;color:var(--muted)}
+
+  /* All slots toggle */
+  .all-toggle{text-align:center;padding:10px;color:var(--blue);font-size:14px;cursor:pointer;border:1px dashed var(--border);border-radius:10px;margin-bottom:16px}
+  .all-toggle:hover{background:#1e293b}
+
+  /* Full slot grid */
   .day-group{margin-bottom:24px}
   .day-label{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
   .day-name{font-size:14px;font-weight:700;color:var(--blue)}
@@ -475,14 +640,13 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .slot-btn:hover{border-color:var(--blue);background:#1e293b}
   .slot-btn.selected{border-color:var(--blue);background:#1e3a5f;box-shadow:0 0 0 3px #3b82f620}
   .slot-btn.recommended{border-color:var(--amber);background:#1c1608}
-  .slot-btn.recommended:hover{background:#27200a}
-  .slot-btn.recommended.selected{border-color:var(--blue);background:#1e3a5f;box-shadow:0 0 0 3px #3b82f620}
   .slot-btn:disabled{opacity:.35;cursor:not-allowed}
   .slot-time{font-size:16px;font-weight:700;color:var(--text)}
   .rep-name{font-size:10px;color:var(--muted);max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .rec-badge{position:absolute;top:-9px;${dir==='rtl'?'right:6px':'left:6px'};background:var(--amber);color:#0a0a0f;font-size:9px;font-weight:800;padding:1px 6px;border-radius:20px;white-space:nowrap}
   .cap-badge{font-size:9px;font-weight:600;color:#6ee7b7;letter-spacing:.2px}
   .no-slots{text-align:center;color:var(--muted);padding:40px 20px;font-size:14px}
+
+  /* Confirm panel */
   .confirm-panel{position:fixed;bottom:0;left:0;right:0;background:#0f172a;border-top:1px solid var(--blue);padding:16px 20px 28px;transform:translateY(100%);transition:transform .25s cubic-bezier(.4,0,.2,1);z-index:100}
   .confirm-panel.open{transform:translateY(0)}
   .selected-time{font-size:20px;font-weight:800;margin-bottom:4px}
@@ -491,6 +655,8 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .confirm-btn:hover{background:var(--blue-dark)}
   .confirm-btn:disabled{background:#374151;color:#6b7280;cursor:not-allowed}
   .cancel-link{display:block;text-align:center;margin-top:10px;color:var(--muted);font-size:13px;cursor:pointer}
+
+  /* Success */
   .success-screen{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:40px 24px}
   .success-screen.show{display:flex}
   .success-icon{font-size:64px;margin-bottom:20px}
@@ -498,6 +664,8 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .success-detail{font-size:16px;font-weight:600;margin-bottom:6px}
   .success-sub{font-size:13px;color:var(--muted);margin-bottom:24px}
   .gcal-btn{display:inline-block;background:#1e3a5f;color:#93c5fd;border:1px solid #3b82f6;border-radius:12px;padding:12px 20px;font-size:14px;text-decoration:none;font-weight:600}
+
+  /* Toast + loader */
   .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-80px);background:#7f1d1d;color:#fca5a5;padding:10px 20px;border-radius:10px;font-size:14px;transition:transform .25s;z-index:200;max-width:300px;text-align:center}
   .toast.show{transform:translateX(-50%) translateY(0)}
   .loading-overlay{display:none;position:fixed;inset:0;background:#0a0a0fcc;z-index:150;align-items:center;justify-content:center}
@@ -514,7 +682,10 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
     <div class="subhead">${T.subheading}</div>
     ${buildingHtml}
   </div>
-  <div class="container">${slotsHtml}</div>
+  <div class="container">
+    ${smartHtml}
+    ${allSlotsToggle}
+  </div>
 </div>
 
 <div class="confirm-panel" id="confirmPanel">
@@ -540,10 +711,19 @@ const TOKEN = '${token}';
 const SHOW_REP = ${config.show_rep_name};
 const REP_LABEL = '${T.rep_label}';
 const SLOT_TAKEN_MSG = '${T.slot_taken}';
+const SHOW_ALL_TXT = '▼ ${T.show_all}';
+const HIDE_ALL_TXT = '▲ ${T.hide_all}';
 let selectedSlotId = null;
+let allVisible = false;
+
+function toggleAllSlots() {
+  allVisible = !allVisible;
+  document.getElementById('allSlots').style.display = allVisible ? 'block' : 'none';
+  document.getElementById('allToggle').textContent = allVisible ? HIDE_ALL_TXT : SHOW_ALL_TXT;
+}
 
 function selectSlot(btn, id, dateLabel, time, rep) {
-  document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('.slot-btn,.smart-btn').forEach(b => b.classList.remove('selected'));
   btn.classList.add('selected');
   selectedSlotId = id;
   document.getElementById('selectedLabel').textContent = dateLabel + '  ⏰ ' + time;
@@ -551,7 +731,7 @@ function selectSlot(btn, id, dateLabel, time, rep) {
   document.getElementById('confirmPanel').classList.add('open');
 }
 function cancelSelection() {
-  document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('.slot-btn,.smart-btn').forEach(b => b.classList.remove('selected'));
   selectedSlotId = null;
   document.getElementById('confirmPanel').classList.remove('open');
 }
