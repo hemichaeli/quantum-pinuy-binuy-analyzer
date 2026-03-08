@@ -444,6 +444,36 @@ async function start() {
     logger.info('Reminder queue job: ACTIVE (every minute)');
   } catch (e) { logger.warn('Reminder job failed to start:', e.message); }
 
+  // ============================================
+  // Issues #4 + #5: New Scrapers — daily cron
+  // ============================================
+  const scraperDefs = [
+    { name: 'Komo',       module: './services/komoScraper',       cron: '0 8 * * *',  fn: 'scanAll' },
+    { name: 'BankNadlan', module: './services/bankNadlanScraper', cron: '15 8 * * *', fn: 'scanAll' },
+    { name: 'Yad1',       module: './services/yad1Scraper',       cron: '30 8 * * *', fn: 'scanAll' },
+    { name: 'Dira',       module: './services/diraScraper',       cron: '45 8 * * *', fn: 'scanAll' },
+    { name: 'Kones2',     module: './services/kones2Scraper',     cron: '0 9 * * *',  fn: 'scanAll' },
+    { name: 'BidSpirit',  module: './services/bidspiritScraper',  cron: '15 9 * * *', fn: 'scanAll' },
+    { name: 'Govmap',     module: './services/govmapScraper',     cron: '0 7 * * 1',  fn: 'scanAll' },
+  ];
+  for (const def of scraperDefs) {
+    try {
+      const scraper = require(def.module);
+      const cron = require('node-cron');
+      cron.schedule(def.cron, async () => {
+        try {
+          const result = await scraper[def.fn]();
+          logger.info(`[${def.name}Scraper] Daily scan: ${result.total_inserted || 0} new, ${result.total_updated || 0} updated`);
+        } catch (e) {
+          logger.warn(`[${def.name}Scraper] Daily cron error:`, e.message);
+        }
+      });
+      logger.info(`[${def.name}Scraper] ACTIVE - cron ${def.cron}`);
+    } catch (e) {
+      logger.warn(`[${def.name}Scraper] Failed to initialize:`, e.message);
+    }
+  }
+
   logger.info('WhatsApp: WEBHOOK mode active');
   logger.info('Visual Booking: ACTIVE at /booking/:token');
   logger.info('Auto First Contact: ACTIVE (P0) - cron every 30min');
