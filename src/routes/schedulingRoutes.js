@@ -11,6 +11,8 @@
  * GET  /api/scheduling/ceremony/:id/slots            - Get ceremony slot grid (admin view)
  * GET  /api/scheduling/campaign/:id/stats            - Basic booking stats
  * GET  /api/scheduling/campaign/:id/report           - Full campaign report (HTML+JSON)
+ * POST /api/scheduling/optimization/run              - Manual trigger for optimization engine
+ * GET  /api/scheduling/optimization/status           - Reschedule request stats
  */
 
 const express = require('express');
@@ -21,6 +23,8 @@ const botEngine = require('../services/botEngine');
 const inforuService = require('../services/inforuService');
 let zohoSchedulingService;
 try { zohoSchedulingService = require('../services/zohoSchedulingService'); } catch (e) { /* optional */ }
+let optimizationService;
+try { optimizationService = require('../services/optimizationService'); } catch (e) { /* optional */ }
 
 // ── ZOHO CRM WIDGET ────────────────────────────────────────────
 router.get('/widget', (req, res) => {
@@ -28,26 +32,17 @@ router.get('/widget', (req, res) => {
 });
 
 // ── CAMPAIGN CONTACTS (from Zoho CRM) ──────────────────────────
-/**
- * GET /api/scheduling/campaign/:id/contacts
- * Fetch all contacts for a Zoho Campaign.
- * Falls back to bot_sessions in DB if Zoho CRM is not configured.
- */
 router.get('/campaign/:id/contacts', async (req, res) => {
   const campaignId = req.params.id;
   try {
-    // Try Zoho CRM first
     if (zohoSchedulingService?.getCampaignContacts) {
       try {
         const contacts = await zohoSchedulingService.getCampaignContacts(campaignId);
         if (contacts.length > 0) {
           return res.json({ success: true, source: 'zoho', contacts });
         }
-      } catch (zohoErr) {
-        // Fall through to DB fallback
-      }
+      } catch (zohoErr) { /* fall through */ }
     }
-    // DB fallback: return bot_sessions for this campaign
     const { rows } = await pool.query(
       `SELECT
          bs.phone,
@@ -67,12 +62,28 @@ router.get('/campaign/:id/contacts', async (req, res) => {
   }
 });
 
-// ── WEBHOOK ────────────────────────────────────────────
+// ── WEBHOOK ────────────────────────────────────────────────────
+// Priority:
+//   1. Check if message is a reschedule reply (optimization engine) → handle + stop
+//   2. Fall through to normal bot engine
 router.post('/webhook', async (req, res) => {
   try {
     const { From, Body, CampaignId } = req.body;
     if (!From || !Body) return res.sendStatus(200);
 
+    // Phase 1: reschedule reply intercept
+    if (optimizationService?.handleRescheduleReply) {
+      try {
+        const handled = await optimizationService.handleRescheduleReply(From, Body);
+        if (handled) {
+          return res.sendStatus(200); // consumed by optimization engine
+        }
+      } catch (optErr) {
+        console.warn('[Webhook] Optimization reply check failed:', optErr.message);
+      }
+    }
+
+    // Phase 2: normal bot flow
     let campaignId = CampaignId;
     if (!campaignId) {
       const sess = await pool.query(
@@ -93,6 +104,58 @@ router.post('/webhook', async (req, res) => {
   } catch (err) {
     console.error('[Webhook] Error:', err);
     res.sendStatus(500);
+  }
+});
+
+// ── OPTIMIZATION ENGINE API ────────────────────────────────────
+
+/**
+ * POST /api/scheduling/optimization/run
+ * Manual trigger for the optimization engine (for testing / on-demand runs).
+ * Body: { campaignId } (optional - runs all campaigns if omitted)
+ */
+router.post('/optimization/run', async (req, res) => {
+  if (!optimizationService) return res.status(503).json({ error: 'Optimization service not available' });
+  try {
+    const { campaignId } = req.body;
+    let result;
+    if (campaignId) {
+      result = await optimizationService.sendRescheduleOffers(campaignId);
+    } else {
+      result = await optimizationService.runOptimizationForAllCampaigns();
+    }
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/scheduling/optimization/status
+ * Returns reschedule request stats.
+ */
+router.get('/optimization/status', async (req, res) => {
+  try {
+    const { campaignId } = req.query;
+    const whereClause = campaignId ? `WHERE campaign_id=$1` : '';
+    const params = campaignId ? [campaignId] : [];
+    const result = await pool.query(
+      `SELECT status, COUNT(*) AS total, AVG(gap_saved_minutes) AS avg_gap_saved
+       FROM reschedule_requests ${whereClause}
+       GROUP BY status ORDER BY total DESC`,
+      params
+    );
+    const pending = await pool.query(
+      `SELECT rr.*, ms.slot_datetime AS proposed_dt
+       FROM reschedule_requests rr
+       JOIN meeting_slots ms ON ms.id = rr.proposed_slot_id
+       WHERE rr.status='pending'
+       ORDER BY rr.created_at DESC LIMIT 20`,
+      []
+    );
+    res.json({ summary: result.rows, pending: pending.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -214,32 +277,6 @@ function buildInitialMessage(contact, cfg, lang) {
 // CEREMONY MANAGEMENT
 // ══════════════════════════════════════════════════════════════
 
-/**
- * POST /api/scheduling/ceremony
- *
- * Create a ceremony with buildings and stations.
- * Each building specifies station_count (integer) instead of individual station objects.
- * Slots are auto-generated for all stations.
- *
- * Body:
- * {
- *   project_id, zoho_campaign_id, name,
- *   ceremony_date,          // "YYYY-MM-DD"
- *   start_time,             // "09:00"
- *   end_time,               // "17:00"
- *   slot_duration_minutes,  // 15
- *   break_duration_minutes, // 0
- *   location,
- *   buildings: [
- *     {
- *       address: "רחוב הרצל 1",
- *       label: "בניין א",     // optional
- *       station_count: 3,     // NUMBER OF PARALLEL STATIONS (e.g. 3 lawyers)
- *       display_order: 0      // optional
- *     }
- *   ]
- * }
- */
 router.post('/ceremony', async (req, res) => {
   try {
     const {
@@ -249,7 +286,6 @@ router.post('/ceremony', async (req, res) => {
       location, buildings
     } = req.body;
 
-    // Create ceremony
     const cermRes = await pool.query(
       `INSERT INTO signing_ceremonies
          (project_id, zoho_campaign_id, name, ceremony_date, start_time, end_time,
@@ -262,7 +298,6 @@ router.post('/ceremony', async (req, res) => {
 
     const buildingResults = [];
     for (const [idx, bld] of (buildings || []).entries()) {
-      // Each building gets N stations where N = station_count
       const stationCount = parseInt(bld.station_count) || 1;
 
       const bldRes = await pool.query(
@@ -273,7 +308,6 @@ router.post('/ceremony', async (req, res) => {
       );
       const buildingId = bldRes.rows[0].id;
 
-      // Create N stations (auto-numbered 1..N, no rep name required)
       let slotsCreated = 0;
       for (let n = 1; n <= stationCount; n++) {
         const stRes = await pool.query(
@@ -327,29 +361,6 @@ async function generateCeremonySlots(ceremonyId, stationId, date, startTime, end
   return count;
 }
 
-/**
- * POST /api/scheduling/ceremony/:id/assign
- *
- * Assign contacts to buildings for this ceremony.
- * Must be done BEFORE broadcasting so the bot knows which building's slots to show.
- *
- * Body:
- * {
- *   assignments: [
- *     { phone: "972501234567", building_id: 12 },
- *     { phone: "972509876543", building_id: 13 },
- *     ...
- *   ]
- * }
- *
- * Or by building address:
- * {
- *   zoho_campaign_id: "...",
- *   assignments: [
- *     { phone: "972501234567", building_address: "רחוב הרצל 1" },
- *   ]
- * }
- */
 router.post('/ceremony/:id/assign', async (req, res) => {
   try {
     const ceremonyId = parseInt(req.params.id);
@@ -357,7 +368,6 @@ router.post('/ceremony/:id/assign', async (req, res) => {
 
     if (!assignments?.length) return res.status(400).json({ error: 'assignments[] required' });
 
-    // Build address→id map if needed
     let addressToId = {};
     const needsLookup = assignments.some(a => !a.building_id && a.building_address);
     if (needsLookup) {
@@ -373,9 +383,6 @@ router.post('/ceremony/:id/assign', async (req, res) => {
       const buildingId = a.building_id || addressToId[a.building_address];
       if (!buildingId) { skipped++; continue; }
 
-      // Update existing session OR create/mark the assignment in the DB
-      // The session will be created by the bot when the contact first replies.
-      // We store the building assignment in bot_sessions (upsert on phone+campaign).
       const campaignId = zoho_campaign_id || a.zoho_campaign_id;
       if (!campaignId) { skipped++; continue; }
 
@@ -396,10 +403,6 @@ router.post('/ceremony/:id/assign', async (req, res) => {
   }
 });
 
-/**
- * GET /api/scheduling/ceremony/:id/buildings
- * Returns buildings with their station count and slot stats.
- */
 router.get('/ceremony/:id/buildings', async (req, res) => {
   try {
     const result = await pool.query(
@@ -423,10 +426,6 @@ router.get('/ceremony/:id/buildings', async (req, res) => {
   }
 });
 
-/**
- * PATCH /api/scheduling/ceremony/:id/buildings/:buildingId
- * Update station_count for a building (adds or removes stations + slots).
- */
 router.patch('/ceremony/:id/buildings/:buildingId', async (req, res) => {
   try {
     const ceremonyId = parseInt(req.params.id);
@@ -435,7 +434,6 @@ router.patch('/ceremony/:id/buildings/:buildingId', async (req, res) => {
 
     if (!station_count || station_count < 1) return res.status(400).json({ error: 'station_count must be >= 1' });
 
-    // Get ceremony time config
     const cermRes = await pool.query(
       `SELECT ceremony_date, start_time, end_time, slot_duration_minutes, break_duration_minutes
        FROM signing_ceremonies WHERE id=$1`,
@@ -444,7 +442,6 @@ router.patch('/ceremony/:id/buildings/:buildingId', async (req, res) => {
     if (!cermRes.rows.length) return res.status(404).json({ error: 'Ceremony not found' });
     const { ceremony_date, start_time, end_time, slot_duration_minutes, break_duration_minutes } = cermRes.rows[0];
 
-    // Current stations
     const currentRes = await pool.query(
       `SELECT id, station_number FROM ceremony_stations WHERE building_id=$1 AND is_active=true ORDER BY station_number`,
       [buildingId]
@@ -452,7 +449,6 @@ router.patch('/ceremony/:id/buildings/:buildingId', async (req, res) => {
     const currentCount = currentRes.rows.length;
 
     if (station_count > currentCount) {
-      // Add stations
       for (let n = currentCount + 1; n <= station_count; n++) {
         const stRes = await pool.query(
           `INSERT INTO ceremony_stations (building_id, station_number, representative_name, representative_role, is_active)
@@ -466,7 +462,6 @@ router.patch('/ceremony/:id/buildings/:buildingId', async (req, res) => {
         );
       }
     } else if (station_count < currentCount) {
-      // Deactivate excess stations (only if no confirmed slots)
       const toDeactivate = currentRes.rows.slice(station_count);
       for (const st of toDeactivate) {
         const hasConfirmed = await pool.query(
@@ -485,7 +480,6 @@ router.patch('/ceremony/:id/buildings/:buildingId', async (req, res) => {
   }
 });
 
-// ── CEREMONY SLOT GRID (admin) ────────────────────────────────
 router.get('/ceremony/:id/slots', async (req, res) => {
   try {
     const result = await pool.query(
@@ -510,12 +504,18 @@ router.get('/ceremony/:id/slots', async (req, res) => {
 router.get('/campaign/:campaignId/stats', async (req, res) => {
   try {
     const { campaignId } = req.params;
-    const [botStats, reminderStats, slotStats] = await Promise.all([
+    const [botStats, reminderStats, slotStats, optimStats] = await Promise.all([
       pool.query(`SELECT state, COUNT(*) FROM bot_sessions WHERE zoho_campaign_id=$1 GROUP BY state`, [campaignId]),
       pool.query(`SELECT reminder_type, status, COUNT(*) FROM reminder_queue WHERE zoho_campaign_id=$1 GROUP BY reminder_type, status`, [campaignId]),
-      pool.query(`SELECT status, COUNT(*) FROM meeting_slots WHERE campaign_id=$1 GROUP BY status`, [campaignId])
+      pool.query(`SELECT status, COUNT(*) FROM meeting_slots WHERE campaign_id=$1 GROUP BY status`, [campaignId]),
+      pool.query(`SELECT status, COUNT(*), AVG(gap_saved_minutes) AS avg_gap FROM reschedule_requests WHERE campaign_id=$1 GROUP BY status`, [campaignId])
     ]);
-    res.json({ botSessions: botStats.rows, reminders: reminderStats.rows, meetingSlots: slotStats.rows });
+    res.json({
+      botSessions: botStats.rows,
+      reminders: reminderStats.rows,
+      meetingSlots: slotStats.rows,
+      optimization: optimStats.rows
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -583,6 +583,18 @@ router.get('/campaign/:campaignId/report', async (req, res) => {
       [campaignId]
     );
 
+    // Optimization stats
+    const optimRes = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status='accepted') AS swapped,
+         COUNT(*) FILTER (WHERE status='declined') AS declined,
+         COUNT(*) FILTER (WHERE status='pending') AS pending,
+         ROUND(AVG(gap_saved_minutes) FILTER (WHERE status='accepted')) AS avg_gap_saved
+       FROM reschedule_requests WHERE campaign_id=$1`,
+      [campaignId]
+    );
+    const optim = optimRes.rows[0] || {};
+
     const sessions = sessionsRes.rows;
     const totalSent = sessions.reduce((a, b) => a + parseInt(b.total), 0);
     const totalAnswered = sessions.filter(s => s.state !== 'confirm_identity').reduce((a, b) => a + parseInt(b.total), 0);
@@ -603,6 +615,7 @@ router.get('/campaign/:campaignId/report', async (req, res) => {
         totalSlots: parseInt(slots.total_slots || 0),
         openSlots: parseInt(slots.open || 0)
       },
+      optimization: optim,
       funnel: sessions, confirmedMeetings: confirmedRes.rows,
       timeline: timelineRes.rows, reps: repsRes.rows
     };
@@ -645,6 +658,10 @@ h1{font-size:22px;color:#f1f5f9;font-weight:700}
 .kpi-label{font-size:11px;color:#64748b;margin-top:4px}
 .section{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:20px;margin:16px 0}
 .section h2{font-size:14px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px;border-bottom:1px solid #1e293b;padding-bottom:10px}
+.optim-box{background:#0f2e1e;border:1px solid #065f46;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;gap:20px;flex-wrap:wrap}
+.optim-stat{text-align:center;flex:1}
+.optim-val{font-size:22px;font-weight:800;color:#34d399}
+.optim-label{font-size:11px;color:#6ee7b7;margin-top:2px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:right;padding:8px 10px;color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:1px;background:#0f172a}
 td{padding:9px 10px;border-bottom:1px solid #1e293b}
@@ -671,6 +688,16 @@ tr:hover td{background:#1e293b44}
   <div class="kpi"><div class="kpi-val blue">${data.summary.openSlots}</div><div class="kpi-label">פנויים</div></div>
   <div class="kpi"><div class="kpi-val ${data.summary.slotUtil >= 70 ? 'green' : 'yellow'}">${data.summary.slotUtil}%</div><div class="kpi-label">תפיסה</div></div>
 </div>
+${parseInt(optim.swapped) > 0 || parseInt(optim.pending) > 0 ? `
+<div class="section">
+  <h2>🔄 אופטימיזציית לו"ז</h2>
+  <div class="optim-box">
+    <div class="optim-stat"><div class="optim-val">${optim.swapped || 0}</div><div class="optim-label">הוחלפו</div></div>
+    <div class="optim-stat"><div class="optim-val">${optim.declined || 0}</div><div class="optim-label">סירבו</div></div>
+    <div class="optim-stat"><div class="optim-val">${optim.pending || 0}</div><div class="optim-label">ממתינים</div></div>
+    <div class="optim-stat"><div class="optim-val">${optim.avg_gap_saved || 0} דק'</div><div class="optim-label">חיסכון ממוצע</div></div>
+  </div>
+</div>` : ''}
 ${timelineRes.rows.length ? `<div class="section"><h2>📈 פגישות לפי יום</h2>${timelineBars}</div>` : ''}
 <div class="section">
   <h2>✅ פגישות שנקבעו (${data.summary.totalConfirmed})</h2>
