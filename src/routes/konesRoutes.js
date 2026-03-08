@@ -1,14 +1,9 @@
 /**
  * KonesIsrael Routes - Receivership Property Data API
- * Phase 4.10: Triple-source (Claude + Perplexity + Live Scraper with CAPTCHA bypass)
- * 
- * Architecture:
- * - GET /listings reads from DB (kones_listings table)
- * - POST /import adds data manually or from Claude web search
- * - POST /scan-complexes uses Perplexity AI to find receiverships near complexes
- * - POST /scan-city searches specific city via Perplexity
- * - POST /live-scrape bypasses SiteGround CAPTCHA + WP login for direct scraping
- * - POST /captcha-test tests CAPTCHA bypass without scraping
+ * Sources:
+ *   - konesonline.co.il: LIVE scraping (daily 07:15, no auth needed)
+ *   - konesisrael.co.il: Manual import (CAPTCHA blocks Railway IPs)
+ *   - Perplexity AI scan: POST /scan-complexes
  */
 
 const express = require('express');
@@ -38,9 +33,9 @@ router.get('/listings', async (req, res) => {
     const forceRefresh = req.query.refresh === 'true';
     const limit = parseInt(req.query.limit) || 100;
     const offset = parseInt(req.query.offset) || 0;
-    
+
     const listings = await konesIsraelService.fetchListings(forceRefresh);
-    
+
     res.json({
       success: true,
       total: listings.length,
@@ -56,11 +51,12 @@ router.get('/listings', async (req, res) => {
 
 /**
  * POST /api/kones/import
+ * Manual import of listings from external source / Claude web search
  */
 router.post('/import', async (req, res) => {
   try {
     const { listings } = req.body;
-    
+
     if (!listings || !Array.isArray(listings) || listings.length === 0) {
       return res.status(400).json({
         success: false,
@@ -82,16 +78,42 @@ router.post('/import', async (req, res) => {
     }
 
     const result = await konesIsraelService.importListings(listings);
-    
     logger.info(`KonesIsrael: Imported ${result.imported} listings (${result.skipped} skipped)`);
-    
-    res.json({
-      success: true,
-      message: `Imported ${result.imported} listings`,
-      ...result
-    });
+
+    res.json({ success: true, message: `Imported ${result.imported} listings`, ...result });
   } catch (error) {
     logger.error(`KonesIsrael import error: ${error.message}`);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/kones/scrape-konesonline
+ * Trigger live scraping of konesonline.co.il (no auth required)
+ * Returns newly imported listings count
+ */
+router.post('/scrape-konesonline', async (req, res) => {
+  try {
+    logger.info('[KonesonlineScraper] Manual trigger via API');
+    const result = await konesIsraelService.runKonesonlineScrape();
+
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
+
+    // Return updated listings from DB
+    const listings = await konesIsraelService.fetchListings(true);
+    const konesonlineListings = listings.filter(l => l.source === 'konesonline');
+
+    res.json({
+      success: true,
+      scrape: result,
+      konesonlineTotalInDB: konesonlineListings.length,
+      allKonesTotalInDB: listings.length,
+      message: `נסרקו ${result.total} מכרזים, ${result.imported} חדשים נוספו למסד הנתונים`
+    });
+  } catch (error) {
+    logger.error(`KonesonlineScrape error: ${error.message}`);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -102,18 +124,14 @@ router.post('/import', async (req, res) => {
 router.delete('/listings/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    
     const result = await pool.query(
       'UPDATE kones_listings SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING id',
       [id]
     );
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Listing not found' });
     }
-    
     konesIsraelService.listingsCache.data = null;
-    
     res.json({ success: true, message: `Listing ${id} deactivated` });
   } catch (error) {
     logger.error(`KonesIsrael delete error: ${error.message}`);
@@ -210,7 +228,7 @@ router.get('/match-complexes', async (req, res) => {
       matchedComplexes: matches.length,
       matches: matches.slice(0, 50),
       summary: {
-        message: matches.length > 0 
+        message: matches.length > 0
           ? `Found ${matches.length} complexes with potential receivership properties`
           : 'No matches found between complexes and receivership listings',
         ssiImplication: 'Matched properties should have their SSI boosted by 30 points'
@@ -293,7 +311,7 @@ router.get('/urgent', async (req, res) => {
     const stats = await konesIsraelService.getStatistics();
     res.json({
       success: true, count: stats.urgentDeadlines.length, data: stats.urgentDeadlines,
-      message: stats.urgentDeadlines.length > 0 
+      message: stats.urgentDeadlines.length > 0
         ? `${stats.urgentDeadlines.length} receivership auctions closing within 7 days`
         : 'No urgent deadlines'
     });
@@ -340,10 +358,9 @@ router.post('/scan-city', async (req, res) => {
 router.get('/scan-status', async (req, res) => {
   try {
     const perplexityKey = !!process.env.PERPLEXITY_API_KEY;
-    const konesEmail = !!process.env.KONES_EMAIL;
     const dbCount = await pool.query('SELECT COUNT(*) as count FROM kones_listings WHERE is_active = true');
     const byScanSource = await pool.query(`
-      SELECT COALESCE(scan_source, source, 'unknown') as src, COUNT(*) as count 
+      SELECT COALESCE(source, 'unknown') as src, COUNT(*) as count
       FROM kones_listings WHERE is_active = true GROUP BY src ORDER BY count DESC
     `).catch(() => ({ rows: [] }));
     const complexCount = await pool.query('SELECT COUNT(*) as count FROM complexes WHERE city IS NOT NULL');
@@ -351,128 +368,25 @@ router.get('/scan-status', async (req, res) => {
       'SELECT COUNT(*) as count FROM complexes WHERE is_receivership = TRUE'
     ).catch(() => ({ rows: [{ count: 0 }] }));
 
-    // Get live scraper status if available
-    let liveScraperStatus = null;
-    try {
-      const konesLiveScraper = require('../services/konesLiveScraper');
-      liveScraperStatus = konesLiveScraper.getStatus();
-    } catch (e) { /* not available */ }
-
     res.json({
       success: true,
       architecture: {
-        description: 'Triple-source: Claude + Perplexity + Live Scraper (CAPTCHA bypass)',
+        description: 'Multi-source: konesonline (live) + konesisrael (manual) + Perplexity AI',
         sources: {
-          claude: { method: 'Web search + POST /api/kones/import', status: 'always_available' },
+          konesonline: { method: 'POST /api/kones/scrape-konesonline', status: 'active_daily_07:15', note: 'No auth required' },
           perplexity: { method: 'POST /api/kones/scan-complexes', status: perplexityKey ? 'configured' : 'missing_api_key' },
-          liveScraper: { 
-            method: 'POST /api/kones/live-scrape (SG CAPTCHA bypass + WP login)', 
-            status: konesEmail ? 'configured_but_ip_blocked' : 'no_credentials',
-            note: 'SiteGround WAF blocks datacenter IPs (403). Works from residential IPs only.',
-            details: liveScraperStatus
-          },
+          konesisrael: { method: 'POST /api/kones/import', status: 'manual_import', note: 'SiteGround blocks Railway IPs' },
           manual_import: { method: 'POST /api/kones/import', status: 'always_available' }
         }
       },
       database: {
         totalListings: parseInt(dbCount.rows[0].count),
-        byScanSource: byScanSource.rows.reduce((acc, r) => { acc[r.src] = parseInt(r.count); return acc; }, {}),
+        bySource: byScanSource.rows.reduce((acc, r) => { acc[r.src] = parseInt(r.count); return acc; }, {}),
         totalComplexes: parseInt(complexCount.rows[0].count),
         receivershipComplexes: parseInt(rcCount.rows[0].count)
       }
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// =====================================================
-// LIVE SCRAPER - SiteGround CAPTCHA bypass + WP login
-// Note: SiteGround WAF blocks Railway datacenter IPs (403)
-// CAPTCHA bypass works from residential IPs only
-// =====================================================
-
-let konesLiveScraper;
-try {
-  konesLiveScraper = require('../services/konesLiveScraper');
-} catch (e) {
-  // Gracefully handle if scraper not available
-}
-
-/**
- * POST /api/kones/live-scrape
- * Trigger live scraping of konesisrael.co.il
- * Bypasses SiteGround CAPTCHA, logs in, scrapes listings
- */
-router.post('/live-scrape', async (req, res) => {
-  try {
-    if (!konesLiveScraper) {
-      return res.status(500).json({ success: false, error: 'Live scraper not available' });
-    }
-    
-    logger.info('Starting live scrape of konesisrael.co.il...');
-    const result = await konesLiveScraper.scrapeAll();
-    
-    res.json({
-      success: result.success !== false,
-      ...result
-    });
-  } catch (error) {
-    logger.error(`Live scrape error: ${error.message}`);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
- * GET /api/kones/live-status
- * Check live scraper status
- */
-router.get('/live-status', (req, res) => {
-  if (!konesLiveScraper) {
-    return res.json({ success: false, error: 'Live scraper not available' });
-  }
-  
-  res.json({
-    success: true,
-    scraper: konesLiveScraper.getStatus()
-  });
-});
-
-/**
- * POST /api/kones/captcha-test
- * Test CAPTCHA bypass without full scraping
- */
-router.post('/captcha-test', async (req, res) => {
-  try {
-    const sgCaptcha = require('../services/sgCaptchaSolver');
-    
-    logger.info('Testing SiteGround CAPTCHA bypass...');
-    const start = Date.now();
-    const bypassed = await sgCaptcha.bypassCaptcha('https://konesisrael.co.il');
-    const elapsed = Date.now() - start;
-    
-    if (bypassed) {
-      const testPage = await sgCaptcha.fetchPage('https://konesisrael.co.il/');
-      const hasContent = testPage && testPage.body && testPage.body.length > 1000;
-      
-      res.json({
-        success: true,
-        captchaBypassed: true,
-        elapsed: `${elapsed}ms`,
-        sessionStatus: sgCaptcha.getStatus(),
-        testPageLoaded: hasContent,
-        testPageSize: testPage ? testPage.body.length : 0
-      });
-    } else {
-      res.json({
-        success: false,
-        captchaBypassed: false,
-        elapsed: `${elapsed}ms`,
-        sessionStatus: sgCaptcha.getStatus()
-      });
-    }
-  } catch (error) {
-    logger.error(`CAPTCHA test error: ${error.message}`);
     res.status(500).json({ success: false, error: error.message });
   }
 });
