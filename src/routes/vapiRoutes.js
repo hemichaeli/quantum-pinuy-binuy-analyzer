@@ -1,16 +1,6 @@
 /**
  * QUANTUM Voice AI - Vapi Integration Routes
- * v1.1.0 - Google Service Account auth (permanent, no token expiry)
- *
- * Endpoints:
- *   GET  /api/vapi/caller-context/:phone   - context lookup for inbound call
- *   POST /api/vapi/webhook                 - Vapi event webhook (call started/ended/transcript)
- *   POST /api/vapi/outbound                - trigger single outbound call
- *   POST /api/vapi/outbound/batch          - trigger batch outbound calls
- *   GET  /api/vapi/calls                   - list logged calls
- *   GET  /api/vapi/calls/:id               - single call log
- *   GET  /api/vapi/agents                  - list agent configs (read-only)
- *   POST /api/vapi/schedule-lead           - schedule lead call + create Google Calendar event
+ * v1.2.0 - Nova-3 Hebrew transcriber upgrade
  */
 
 const express = require('express');
@@ -29,24 +19,18 @@ let _googleAuthClient = null;
 
 function getGoogleAuthClient() {
   if (_googleAuthClient) return _googleAuthClient;
-
   const email = process.env.GOOGLE_SA_EMAIL;
   const rawKey = process.env.GOOGLE_SA_PRIVATE_KEY;
-
   if (!email || !rawKey) {
-    logger.warn('[VAPI] Google Service Account credentials not set (GOOGLE_SA_EMAIL / GOOGLE_SA_PRIVATE_KEY)');
+    logger.warn('[VAPI] Google Service Account credentials not set');
     return null;
   }
-
-  // Railway stores private key with literal \n — convert to real newlines
   const key = rawKey.replace(/\\n/g, '\n');
-
   _googleAuthClient = new JWT({
     email,
     key,
     scopes: ['https://www.googleapis.com/auth/calendar'],
   });
-
   return _googleAuthClient;
 }
 
@@ -61,6 +45,33 @@ async function getGoogleAccessToken() {
     return null;
   }
 }
+
+// ─── Nova-3 Hebrew Transcriber Config ────────────────────────────────────────
+
+const NOVA3_TRANSCRIBER = {
+  provider: 'deepgram',
+  model: 'nova-3',
+  language: 'he',
+  keywords: [
+    'פינוי-בינוי',
+    'ועדה מקומית',
+    'כינוס נכסים',
+    'פרמיה',
+    'יזם',
+    'דיירים',
+    'חתימות',
+    'הסכם פינוי',
+    'תמא 38',
+    'טאבו',
+    'QUANTUM',
+    'נדלן',
+    'משכנתא',
+    'רוכש',
+    'מוכר',
+    'מתחם',
+    'קבלן',
+  ],
+};
 
 // ─── Agent Configurations ────────────────────────────────────────────────────
 
@@ -156,21 +167,6 @@ const AGENTS = {
 אל תזכיר טכנולוגיה.`,
   },
 
-  quantum_appointment_scheduler: {
-    id: 'quantum_appointment_scheduler',
-    name: 'בוט תיאום פגישות',
-    description: 'שיחת Vapi fallback לתיאום פגישה — מופעל אחרי שעה ללא תגובה ל-WhatsApp',
-    assistantId: process.env.VAPI_ASSISTANT_APPOINTMENT || null,
-    systemPrompt: `אתה נציג תיאום פגישות של QUANTUM - חברת פינוי-בינוי.
-שמך "מיכל מ-QUANTUM".
-המטרה: לתאם מועד ל-{{campaign_type}} עם הדייר.
-מועדים פנויים: {{available_slots}}
-פתיחה: "שלום, אני מיכל מ-QUANTUM. שלחנו לך הודעה לתיאום {{campaign_type}} - רצינו לוודא שקיבלת. יש לך כמה דקות?"
-אם כן - הצג מועדים ובקש לבחור.
-אם לא - "אין בעיה, מתי נוח לך שנחזור אליך?" - תאם מחדש.
-שפה: עברית. חמים, קצר, לא לחצני.`,
-  },
-
   inbound_handler: {
     id: 'inbound_handler',
     name: 'מענה נכנס',
@@ -198,6 +194,15 @@ const AGENTS = {
 שפה: עברית. חמים, מקצועי, קצר.`,
   },
 };
+
+// Assistant IDs list for bulk operations
+const ASSISTANT_IDS = [
+  { id: process.env.VAPI_ASSISTANT_SELLER, name: 'seller_followup' },
+  { id: process.env.VAPI_ASSISTANT_BUYER, name: 'buyer_qualification' },
+  { id: process.env.VAPI_ASSISTANT_REMINDER, name: 'meeting_reminder' },
+  { id: process.env.VAPI_ASSISTANT_COLD, name: 'cold_prospecting' },
+  { id: process.env.VAPI_ASSISTANT_INBOUND, name: 'inbound_handler' },
+];
 
 // ─── Helper: build caller context ────────────────────────────────────────────
 
@@ -291,6 +296,33 @@ router.get('/agents', (req, res) => {
   res.json({ success: true, agents: safe });
 });
 
+// ─── Admin: Upgrade all assistants to Nova-3 Hebrew ──────────────────────────
+
+router.post('/admin/upgrade-nova3', async (req, res) => {
+  if (!VAPI_API_KEY) return res.status(503).json({ success: false, error: 'VAPI_API_KEY not set' });
+
+  const results = [];
+  for (const a of ASSISTANT_IDS) {
+    if (!a.id) { results.push({ name: a.name, success: false, error: 'no assistantId' }); continue; }
+    try {
+      const response = await axios.patch(
+        `${VAPI_BASE_URL}/assistant/${a.id}`,
+        { transcriber: NOVA3_TRANSCRIBER },
+        { headers: { Authorization: `Bearer ${VAPI_API_KEY}`, 'Content-Type': 'application/json' } }
+      );
+      const t = response.data.transcriber;
+      results.push({ name: a.name, success: true, model: t?.model, language: t?.language });
+      logger.info(`[VAPI] Nova-3 upgrade: ${a.name} -> ${t?.model}/${t?.language}`);
+    } catch (err) {
+      results.push({ name: a.name, success: false, error: err.response?.data?.message || err.message });
+      logger.error(`[VAPI] Nova-3 upgrade failed for ${a.name}:`, err.message);
+    }
+  }
+
+  const ok = results.filter(r => r.success).length;
+  res.json({ success: ok === results.length, upgraded: ok, total: results.length, results });
+});
+
 router.post('/outbound', async (req, res) => {
   try {
     const { phone, agent_type = 'seller_followup', lead_id, complex_id, metadata = {} } = req.body;
@@ -301,7 +333,7 @@ router.post('/outbound', async (req, res) => {
 
     const agent = AGENTS[agent_type];
     if (!agent.assistantId) {
-      return res.status(503).json({ success: false, error: `Assistant ID not configured for ${agent_type}. Set VAPI_ASSISTANT_${agent_type.toUpperCase()} env var.` });
+      return res.status(503).json({ success: false, error: `Assistant ID not configured for ${agent_type}` });
     }
 
     const context = await buildCallerContext(phone);
@@ -337,10 +369,7 @@ router.post('/outbound', async (req, res) => {
 
     const vapiRes = await fetch(`https://api.vapi.ai/call/phone`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${VAPI_API_KEY}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${VAPI_API_KEY}` },
       body: JSON.stringify(payload),
     });
 
@@ -373,12 +402,8 @@ router.post('/outbound', async (req, res) => {
 router.post('/outbound/batch', async (req, res) => {
   try {
     const { calls = [] } = req.body;
-    if (!Array.isArray(calls) || calls.length === 0) {
-      return res.status(400).json({ success: false, error: 'calls array required' });
-    }
-    if (calls.length > 50) {
-      return res.status(400).json({ success: false, error: 'Max 50 calls per batch' });
-    }
+    if (!Array.isArray(calls) || calls.length === 0) return res.status(400).json({ success: false, error: 'calls array required' });
+    if (calls.length > 50) return res.status(400).json({ success: false, error: 'Max 50 calls per batch' });
 
     const results = [];
     const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -430,7 +455,6 @@ router.post('/outbound/batch', async (req, res) => {
         } else {
           results.push({ phone, success: false, error: vapiData.message });
         }
-
         await delay(500);
       } catch (err) {
         results.push({ phone: call.phone, success: false, error: err.message });
@@ -475,35 +499,20 @@ router.post('/webhook', async (req, res) => {
         `INSERT INTO vapi_calls (call_id, phone, agent_type, status, duration_seconds, summary, intent, transcript, metadata, created_at, updated_at)
          VALUES ($1, $2, $3, 'completed', $4, $5, $6, $7, $8, NOW(), NOW())
          ON CONFLICT (call_id) DO UPDATE SET
-           status = 'completed',
-           duration_seconds = $4,
-           summary = $5,
-           intent = $6,
-           transcript = $7,
-           metadata = COALESCE(vapi_calls.metadata, '{}') || $8::jsonb,
-           updated_at = NOW()`,
+           status = 'completed', duration_seconds = $4, summary = $5, intent = $6, transcript = $7,
+           metadata = COALESCE(vapi_calls.metadata, '{}') || $8::jsonb, updated_at = NOW()`,
         [
-          call.id,
-          call.customer?.number || 'unknown',
-          call.metadata?.agent_type || 'unknown',
-          duration,
-          call.summary || '',
-          intent,
+          call.id, call.customer?.number || 'unknown', call.metadata?.agent_type || 'unknown',
+          duration, call.summary || '', intent,
           JSON.stringify(call.transcript || []),
-          JSON.stringify({
-            cost: call.cost,
-            endedReason: call.endedReason,
-            lead_id: call.metadata?.lead_id,
-            complex_id: call.metadata?.complex_id,
-          }),
+          JSON.stringify({ cost: call.cost, endedReason: call.endedReason, lead_id: call.metadata?.lead_id, complex_id: call.metadata?.complex_id }),
         ]
       ).catch((e) => logger.warn('[VAPI] DB update error:', e.message));
 
       if (intent === 'meeting_set' && call.metadata?.lead_id) {
         await pool.query(
           `UPDATE leads SET status = 'meeting_scheduled',
-           notes = COALESCE(notes || ' | ', '') || $2,
-           updated_at = NOW() WHERE id = $1`,
+           notes = COALESCE(notes || ' | ', '') || $2, updated_at = NOW() WHERE id = $1`,
           [call.metadata.lead_id, `פגישה נקבעה בשיחת QUANTUM Voice - ${new Date().toLocaleDateString('he-IL')}`]
         ).catch(() => {});
       }
@@ -516,11 +525,7 @@ router.post('/webhook', async (req, res) => {
 });
 
 function extractCallIntent(call) {
-  const text = [
-    call.summary || '',
-    ...(call.transcript || []).map((t) => t.text || ''),
-  ].join(' ').toLowerCase();
-
+  const text = [call.summary || '', ...(call.transcript || []).map((t) => t.text || '')].join(' ').toLowerCase();
   if (text.includes('פגישה') && (text.includes('נקבע') || text.includes('מסכים') || text.includes('אשריד'))) return 'meeting_set';
   if (text.includes('מעוניין') || text.includes('רוצה') || text.includes('שלח')) return 'interested';
   if (text.includes('לא מעוניין') || text.includes('לא רוצה') || text.includes('הורד')) return 'not_interested';
@@ -531,23 +536,13 @@ function extractCallIntent(call) {
 router.get('/calls', async (req, res) => {
   try {
     const { agent_type, status, limit = 50, offset = 0, lead_id } = req.query;
-
-    let where = [];
-    let params = [];
-    let p = 1;
-
+    let where = [], params = [], p = 1;
     if (agent_type) { where.push(`agent_type = $${p++}`); params.push(agent_type); }
     if (status) { where.push(`status = $${p++}`); params.push(status); }
     if (lead_id) { where.push(`lead_id = $${p++}`); params.push(lead_id); }
-
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-
-    const result = await pool.query(
-      `SELECT * FROM vapi_calls ${whereClause} ORDER BY created_at DESC LIMIT $${p++} OFFSET $${p++}`,
-      [...params, parseInt(limit), parseInt(offset)]
-    );
+    const result = await pool.query(`SELECT * FROM vapi_calls ${whereClause} ORDER BY created_at DESC LIMIT $${p++} OFFSET $${p++}`, [...params, parseInt(limit), parseInt(offset)]);
     const countResult = await pool.query(`SELECT COUNT(*) FROM vapi_calls ${whereClause}`, params);
-
     res.json({ success: true, total: parseInt(countResult.rows[0].count), calls: result.rows });
   } catch (err) {
     logger.error('[VAPI] GET /calls error:', err.message);
@@ -557,10 +552,7 @@ router.get('/calls', async (req, res) => {
 
 router.get('/calls/:id', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM vapi_calls WHERE call_id = $1 OR id::text = $1 LIMIT 1',
-      [req.params.id]
-    );
+    const result = await pool.query('SELECT * FROM vapi_calls WHERE call_id = $1 OR id::text = $1 LIMIT 1', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ success: false, error: 'Call not found' });
     res.json({ success: true, call: result.rows[0] });
   } catch (err) {
@@ -571,18 +563,14 @@ router.get('/calls/:id', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT
-        agent_type,
-        COUNT(*) as total,
+      SELECT agent_type, COUNT(*) as total,
         COUNT(*) FILTER (WHERE status = 'completed') as completed,
         COUNT(*) FILTER (WHERE intent = 'meeting_set') as meetings_set,
         COUNT(*) FILTER (WHERE intent = 'interested') as interested,
         COUNT(*) FILTER (WHERE intent = 'not_interested') as not_interested,
         ROUND(AVG(duration_seconds) FILTER (WHERE duration_seconds IS NOT NULL)) as avg_duration_seconds
-      FROM vapi_calls
-      WHERE created_at > NOW() - INTERVAL '30 days'
-      GROUP BY agent_type
-      ORDER BY total DESC
+      FROM vapi_calls WHERE created_at > NOW() - INTERVAL '30 days'
+      GROUP BY agent_type ORDER BY total DESC
     `);
     res.json({ success: true, stats: result.rows });
   } catch (err) {
@@ -590,22 +578,17 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// ─── Schedule Lead + Google Calendar Integration ─────────────────────────────
-// Called by Vapi tool "schedule_lead_call" when a call time is agreed
-// Creates a Google Calendar event using Service Account (permanent auth)
+// ─── Schedule Lead + Google Calendar ─────────────────────────────────────────
 
 const QUANTUM_CALENDAR_ID = process.env.QUANTUM_CALENDAR_ID ||
   'cf4cd8ef53ef4cbdca7f172bdef3f6862509b4026a5e04b648ce09144ab5aa21@group.calendar.google.com';
 
 async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime, phoneNumber, leadSource }) {
   const accessToken = await getGoogleAccessToken();
-  if (!accessToken) {
-    logger.warn('[VAPI] No Google access token available - skipping calendar creation');
-    return null;
-  }
+  if (!accessToken) { logger.warn('[VAPI] No Google access token - skipping calendar'); return null; }
 
   const startTime = new Date(scheduledTime);
-  const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // 30 min
+  const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
 
   const event = {
     summary: `\u{1F3E0} \u05e9\u05d9\u05d7\u05d4 \u05e2\u05dd ${leadName}`,
@@ -620,13 +603,7 @@ async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime,
     location: leadAddress,
     start: { dateTime: startTime.toISOString(), timeZone: 'Asia/Jerusalem' },
     end: { dateTime: endTime.toISOString(), timeZone: 'Asia/Jerusalem' },
-    reminders: {
-      useDefault: false,
-      overrides: [
-        { method: 'popup', minutes: 60 },
-        { method: 'popup', minutes: 15 },
-      ],
-    },
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 60 }, { method: 'popup', minutes: 15 }] },
     colorId: '11',
   };
 
@@ -634,12 +611,7 @@ async function createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime,
     const response = await axios.post(
       `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(QUANTUM_CALENDAR_ID)}/events`,
       event,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }
+      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
     );
     logger.info(`[VAPI] Calendar event created: ${response.data.id} for ${leadName}`);
     return response.data;
@@ -656,123 +628,60 @@ router.post('/schedule-lead', async (req, res) => {
 
     let leadName, leadAddress, scheduledTime, phoneNumber, leadSource;
 
-    // Format 1: Direct Vapi function call
     if (body.message?.toolCalls) {
       const toolCall = body.message.toolCalls.find(t => t.function?.name === 'schedule_lead_call');
       if (toolCall) {
-        const args = typeof toolCall.function.arguments === 'string'
-          ? JSON.parse(toolCall.function.arguments)
-          : toolCall.function.arguments;
-        leadName = args.lead_name;
-        leadAddress = args.lead_address;
-        scheduledTime = args.scheduled_time;
-        phoneNumber = args.phone_number || body.message?.call?.customer?.number;
-        leadSource = args.lead_source;
+        const args = typeof toolCall.function.arguments === 'string' ? JSON.parse(toolCall.function.arguments) : toolCall.function.arguments;
+        leadName = args.lead_name; leadAddress = args.lead_address; scheduledTime = args.scheduled_time;
+        phoneNumber = args.phone_number || body.message?.call?.customer?.number; leadSource = args.lead_source;
       }
-    }
-    // Format 2: Direct parameters
-    else if (body.lead_name || body.leadName) {
-      leadName = body.lead_name || body.leadName;
-      leadAddress = body.lead_address || body.leadAddress;
-      scheduledTime = body.scheduled_time || body.scheduledTime;
-      phoneNumber = body.phone_number || body.phoneNumber;
+    } else if (body.lead_name || body.leadName) {
+      leadName = body.lead_name || body.leadName; leadAddress = body.lead_address || body.leadAddress;
+      scheduledTime = body.scheduled_time || body.scheduledTime; phoneNumber = body.phone_number || body.phoneNumber;
       leadSource = body.lead_source || body.leadSource;
-    }
-    // Format 3: Vapi server-side tool call format
-    else if (body.toolCallId) {
-      leadName = body.parameters?.lead_name;
-      leadAddress = body.parameters?.lead_address;
-      scheduledTime = body.parameters?.scheduled_time;
-      phoneNumber = body.parameters?.phone_number;
+    } else if (body.toolCallId) {
+      leadName = body.parameters?.lead_name; leadAddress = body.parameters?.lead_address;
+      scheduledTime = body.parameters?.scheduled_time; phoneNumber = body.parameters?.phone_number;
       leadSource = body.parameters?.lead_source;
     }
 
     if (!leadName || !leadAddress || !scheduledTime) {
       logger.warn('[VAPI] schedule-lead: missing required fields', { leadName, leadAddress, scheduledTime });
-      return res.json({
-        result: 'השיחה נרשמה. נציג יחזור אליך בקרוב.',
-        success: false,
-        error: 'Missing required fields'
-      });
+      return res.json({ result: 'השיחה נרשמה. נציג יחזור אליך בקרוב.', success: false, error: 'Missing required fields' });
     }
 
-    // Create Google Calendar event via Service Account
-    const calendarEvent = await createGoogleCalendarEvent({
-      leadName,
-      leadAddress,
-      scheduledTime,
-      phoneNumber,
-      leadSource,
-    });
+    const calendarEvent = await createGoogleCalendarEvent({ leadName, leadAddress, scheduledTime, phoneNumber, leadSource });
 
-    // Log to DB - save calendar_event_id for future updates/cancellations
     try {
       await pool.query(
-        `INSERT INTO vapi_leads (name, address, phone, scheduled_time, lead_source, calendar_event_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())
-         ON CONFLICT DO NOTHING`,
+        `INSERT INTO vapi_leads (name, address, phone, scheduled_time, lead_source, calendar_event_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) ON CONFLICT DO NOTHING`,
         [leadName, leadAddress, phoneNumber || null, scheduledTime, leadSource || null, calendarEvent?.id || null]
       );
     } catch (dbErr) {
-      logger.warn('[VAPI] DB insert for lead failed (table may not exist):', dbErr.message);
+      logger.warn('[VAPI] DB insert for lead failed:', dbErr.message);
     }
+
+    if (!calendarEvent) logger.error(`[VAPI] ALERT: Calendar event failed for lead ${leadName}`);
 
     const successMsg = calendarEvent
       ? `מעולה! קבעתי שיחה עם ${leadName} ב-${new Date(scheduledTime).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })} ונוצר אירוע ביומן QUANTUM.`
       : `נרשמה שיחה עם ${leadName}. נציג יצור קשר בזמן שנקבע.`;
 
-    // Alert on calendar failure
-    if (!calendarEvent) {
-      logger.error(`[VAPI] ALERT: Calendar event failed for lead ${leadName} - check GOOGLE_SA_EMAIL / GOOGLE_SA_PRIVATE_KEY`);
-    }
-
-    logger.info(`[VAPI] Lead scheduled: ${leadName} | ${leadAddress} | ${scheduledTime} | calendar=${!!calendarEvent}`);
-
-    res.json({
-      result: successMsg,
-      success: true,
-      calendarEventId: calendarEvent?.id || null,
-      leadSource,
-      leadName,
-      leadAddress,
-      scheduledTime,
-    });
+    logger.info(`[VAPI] Lead scheduled: ${leadName} | ${scheduledTime} | calendar=${!!calendarEvent}`);
+    res.json({ result: successMsg, success: true, calendarEventId: calendarEvent?.id || null, leadSource, leadName, leadAddress, scheduledTime });
   } catch (err) {
     logger.error('[VAPI] schedule-lead error:', err.message);
-    res.json({
-      result: 'השיחה נרשמה. נציג יחזור אליך בקרוב.',
-      success: false,
-      error: err.message
-    });
+    res.json({ result: 'השיחה נרשמה. נציג יחזור אליך בקרוב.', success: false, error: err.message });
   }
 });
-
-// ─── Google Auth Status ───────────────────────────────────────────────────────
-// GET /api/vapi/google-auth-status - verify Service Account is working
 
 router.get('/google-auth-status', async (req, res) => {
   try {
     const email = process.env.GOOGLE_SA_EMAIL;
     const hasKey = !!process.env.GOOGLE_SA_PRIVATE_KEY;
-
-    if (!email || !hasKey) {
-      return res.json({
-        success: false,
-        configured: false,
-        message: 'GOOGLE_SA_EMAIL or GOOGLE_SA_PRIVATE_KEY not set'
-      });
-    }
-
+    if (!email || !hasKey) return res.json({ success: false, configured: false, message: 'GOOGLE_SA_EMAIL or GOOGLE_SA_PRIVATE_KEY not set' });
     const token = await getGoogleAccessToken();
-    res.json({
-      success: !!token,
-      configured: true,
-      serviceAccountEmail: email,
-      tokenObtained: !!token,
-      message: token
-        ? 'Service Account auth working - token obtained successfully'
-        : 'Service Account configured but token request failed'
-    });
+    res.json({ success: !!token, configured: true, serviceAccountEmail: email, tokenObtained: !!token, message: token ? 'Service Account auth working' : 'Token request failed' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
