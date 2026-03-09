@@ -14,8 +14,8 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.82.0';
-const BUILD = '2026-03-09-v4.82.0-vapi-reschedule-webhook';
+const VERSION = '4.83.0';
+const BUILD = '2026-03-09-v4.83.0-campaign-admin-panel';
 
 async function runAutoMigrations() {
   try {
@@ -277,6 +277,7 @@ app.get('/api/debug', async (req, res) => {
   } catch (e) { zcalStatus = 'service error'; }
   res.json({
     version: VERSION, build: BUILD, timestamp: new Date().toISOString(),
+    campaign_admin_panel: 'active at GET /api/scheduling/admin',
     schedule_optimization: `active - cron 20:00 Sun-Thu + 22:30 expire | ${JSON.stringify(optimizationStats)}`,
     optimization_test: 'active at POST /api/test/optimization/setup',
     smart_slot_clustering: 'active - address-based proximity scoring (v4.75.0)',
