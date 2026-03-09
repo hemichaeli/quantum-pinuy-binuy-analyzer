@@ -6,8 +6,8 @@ const { logger } = require('../services/logger');
 
 // ===================== ZOHO OAUTH =====================
 
-// Full scopes: CRM + Calendar
-const ZOHO_SCOPES = 'ZohoCRM.modules.ALL,ZohoCRM.settings.ALL,ZohoCalendar.calendars.ALL,ZohoCalendar.events.ALL';
+// Correct scope names (singular - without trailing 's')
+const ZOHO_SCOPES = 'ZohoCRM.modules.ALL,ZohoCRM.settings.ALL,ZohoCalendar.calendar.ALL,ZohoCalendar.event.ALL';
 
 router.get('/oauth/callback', async (req, res) => {
   const { code, error } = req.query;
@@ -90,8 +90,8 @@ router.get('/oauth/callback', async (req, res) => {
           <div style="margin-bottom:16px">
             <span class="scope-badge">ZohoCRM.modules.ALL</span>
             <span class="scope-badge">ZohoCRM.settings.ALL</span>
-            <span class="scope-badge">ZohoCalendar.calendars.ALL</span>
-            <span class="scope-badge">ZohoCalendar.events.ALL</span>
+            <span class="scope-badge">ZohoCalendar.calendar.ALL</span>
+            <span class="scope-badge">ZohoCalendar.event.ALL</span>
           </div>
           <div class="token-box">
             <div class="token-label">🔑 Refresh Token החדש</div>
