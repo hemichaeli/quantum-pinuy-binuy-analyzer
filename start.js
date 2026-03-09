@@ -128,6 +128,32 @@ if (routesRestored > 0) {
 console.log('[START] fix-escapes: Skipped (legacy mode disabled)');
 
 // ============================================================
+// Phase 2.5: Fix literal newlines in dashboardRoute.js (SyntaxError patch)
+// ============================================================
+(function fixDashboardRouteSyntax() {
+  const fs = require('fs');
+  const path = require('path');
+  const dashFile = path.join(__dirname, 'src/routes/dashboardRoute.js');
+  if (!fs.existsSync(dashFile)) return;
+  const content = fs.readFileSync(dashFile, 'utf8');
+  const alertMarker = "alert('\u2705 Auto Contact \u05d4\u05d5\u05e4\u05e2\u05dc!";
+  const alertIdx = content.indexOf(alertMarker);
+  if (alertIdx < 0) return;
+  const alertEnd = content.indexOf(');', alertIdx) + 2;
+  const alertCode = content.substring(alertIdx, alertEnd);
+  if (!alertCode.includes('\n')) return; // already has literal newlines? check
+  // Check if there are literal newlines (char code 10)
+  let hasLiteralNewline = false;
+  for (let i = 0; i < alertCode.length; i++) {
+    if (alertCode.charCodeAt(i) === 10) { hasLiteralNewline = true; break; }
+  }
+  if (!hasLiteralNewline) return;
+  const fixedAlert = alertCode.split('\n').join('\\n');
+  const fixedContent = content.substring(0, alertIdx) + fixedAlert + content.substring(alertEnd);
+  fs.writeFileSync(dashFile, fixedContent, 'utf8');
+  console.log('[START] Phase 2.5: Fixed literal newlines in dashboardRoute.js ✅');
+})();
+// ============================================================
 // Phase 3: Start server
 // ============================================================
 console.log('[START] Starting server...');
