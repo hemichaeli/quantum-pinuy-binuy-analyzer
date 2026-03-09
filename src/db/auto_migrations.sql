@@ -145,7 +145,6 @@ ALTER TABLE campaign_schedule_config
   ADD COLUMN IF NOT EXISTS default_end_time TIME DEFAULT '18:00:00';
 
 -- Ensure available_windows has a proper default (Sun-Thu 09:00-18:00)
--- Existing empty arrays will be treated as "use defaults" by the bot engine
 UPDATE campaign_schedule_config
   SET available_windows = '[
     {"day":0,"start":"09:00","end":"18:00"},
@@ -155,3 +154,17 @@ UPDATE campaign_schedule_config
     {"day":4,"start":"09:00","end":"18:00"}
   ]'::jsonb
   WHERE available_windows = '[]'::jsonb OR available_windows IS NULL;
+
+-- ========================================================
+-- QUANTUM v4.81+ - Zoho Calendar event IDs
+-- ========================================================
+
+-- Store Zoho Calendar event UID alongside Google event ID
+ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS zoho_event_id TEXT;
+ALTER TABLE ceremony_slots ADD COLUMN IF NOT EXISTS zoho_event_id TEXT;
+
+-- Store Zoho Calendar ID per project (for event creation)
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS zoho_calendar_id TEXT;
+
+-- Store Zoho Calendar ID per ceremony station (for per-lawyer calendars)
+ALTER TABLE ceremony_stations ADD COLUMN IF NOT EXISTS zoho_calendar_id TEXT;
