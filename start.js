@@ -91,8 +91,20 @@ function decompressGzB64Routes(dir) {
       const b64Content = fs.readFileSync(b64Path, 'utf8').trim();
       const gzBuffer = Buffer.from(b64Content, 'base64');
       const jsContent = zlib.gunzipSync(gzBuffer).toString('utf8');
-      fs.writeFileSync(jsPath, jsContent, 'utf8');
-      console.log(`[START] Decompressed ${file} -> ${path.basename(jsPath)} (${jsContent.length} bytes)`);
+      // Phase 1.6b: Fix literal newlines in alert strings (SyntaxError patch)
+      let fixedContent = jsContent;
+      if (file.includes('dashboardRoute.js.gz.b64')) {
+        const before = fixedContent.length;
+        // Fix literal newlines inside alert() string literals
+        fixedContent = fixedContent.replace(/alert\('([^']*?)\n([^']*?)'/g, (m, a, b) => `alert('${a}\\n${b}'`);
+        // More robust: fix all literal newlines inside single-quoted strings in alert calls
+        fixedContent = fixedContent.replace(/alert\('((?:[^'\\]|\\.)*)'/gs, (match, inner) => {
+          return `alert('${inner.replace(/\n/g, '\\n')}')`;
+        });
+        if (fixedContent.length !== before) console.log('[START] Applied SyntaxError patch to dashboardRoute.js');
+      }
+      fs.writeFileSync(jsPath, fixedContent, 'utf8');
+      console.log(`[START] Decompressed ${file} -> ${path.basename(jsPath)} (${fixedContent.length} bytes)`);
       restored++;
     } catch (err) {
       console.log(`[START] ERROR decompressing ${file}: ${err.message}`);
