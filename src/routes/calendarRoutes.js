@@ -12,9 +12,12 @@
  * GET  /api/scheduling/calendar/zoho/list           - List available Zoho calendars
  * POST /api/scheduling/calendar/zoho/set-project    - Set zoho_calendar_id on project
  * GET  /api/scheduling/calendar/zoho/test?calendarId= - Test Zoho Calendar access
+ * POST /api/scheduling/calendar/zoho/test-event     - Create test event
  *
- * Shared:
- * GET  /api/scheduling/calendar/projects            - List projects + both calendar IDs
+ * Scheduling Projects (projects table):
+ * GET  /api/scheduling/calendar/projects            - List all projects
+ * POST /api/scheduling/calendar/projects            - Create a new project { name }
+ * DELETE /api/scheduling/calendar/projects/:id      - Delete project (only if no campaigns linked)
  */
 
 const express = require('express');
@@ -271,21 +274,87 @@ router.post('/zoho/test-event', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// SHARED
+// SCHEDULING PROJECTS MANAGEMENT
 // ════════════════════════════════════════════════════════════
 
+// GET /projects - list all scheduling projects
 router.get('/projects', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, name, google_calendar_id, zoho_calendar_id
-       FROM projects ORDER BY name`
+      `SELECT p.id, p.name, p.google_calendar_id, p.zoho_calendar_id,
+              COUNT(csc.id) AS campaign_count
+       FROM projects p
+       LEFT JOIN campaign_schedule_config csc ON csc.project_id = p.id
+       GROUP BY p.id, p.name, p.google_calendar_id, p.zoho_calendar_id
+       ORDER BY p.name`
     );
     res.json({
       projects: r.rows,
+      total: r.rows.length,
       google_service_account: process.env.GOOGLE_SA_EMAIL || process.env.GOOGLE_CLIENT_EMAIL || 'not configured',
       zoho_configured: zcalService?.isConfigured() || false,
-      hint: 'Google: share calendar with service_account email. Zoho: POST /zoho/set-project {projectId, calendarId}'
+      hint: 'POST /projects { name } to create. Google: share calendar with service_account. Zoho: POST /zoho/set-project {projectId, calendarId}'
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /projects - create a new scheduling project
+// Body: { name: "שם הפרויקט" }
+router.post('/projects', async (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'name required' });
+  }
+
+  try {
+    const r = await pool.query(
+      `INSERT INTO projects (name) VALUES ($1) RETURNING id, name, google_calendar_id, zoho_calendar_id`,
+      [name.trim()]
+    );
+    res.json({
+      success: true,
+      project: r.rows[0],
+      next_steps: [
+        `Link Google Calendar: POST /api/scheduling/calendar/set-project { projectId: ${r.rows[0].id}, calendarId: "YOUR_GCAL_ID" }`,
+        `Link Zoho Calendar: POST /api/scheduling/calendar/zoho/set-project { projectId: ${r.rows[0].id}, calendarId: "YOUR_ZOHO_CAL_ID" }`
+      ]
+    });
+  } catch (err) {
+    // duplicate name check
+    if (err.code === '23505') {
+      return res.status(409).json({ error: `Project with name "${name.trim()}" already exists` });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /projects/:id - delete a scheduling project (only if no campaigns)
+router.delete('/projects/:id', async (req, res) => {
+  const projectId = parseInt(req.params.id);
+  if (isNaN(projectId)) return res.status(400).json({ error: 'Invalid project id' });
+
+  try {
+    // Safety check: don't delete if campaigns are linked
+    const campaigns = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM campaign_schedule_config WHERE project_id = $1`,
+      [projectId]
+    );
+    if (parseInt(campaigns.rows[0].cnt) > 0) {
+      return res.status(409).json({
+        error: `Cannot delete: project has ${campaigns.rows[0].cnt} campaign(s) linked. Unlink campaigns first.`
+      });
+    }
+
+    const result = await pool.query(
+      `DELETE FROM projects WHERE id = $1 RETURNING id, name`,
+      [projectId]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
