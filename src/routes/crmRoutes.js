@@ -6,11 +6,6 @@ const { logger } = require('../services/logger');
 
 // ===================== ZOHO OAUTH =====================
 
-/**
- * GET /api/crm/oauth/callback
- * Zoho redirects here with ?code=... after user authorizes
- * Exchanges the code for a refresh token and displays it
- */
 router.get('/oauth/callback', async (req, res) => {
   const { code, error } = req.query;
 
@@ -43,16 +38,10 @@ router.get('/oauth/callback', async (req, res) => {
     const redirectUri = `https://pinuy-binuy-analyzer-production.up.railway.app/api/crm/oauth/callback`;
 
     const tokenRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
-      params: {
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code'
-      }
+      params: { code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' }
     });
 
-    const { refresh_token, access_token, error: tokenError } = tokenRes.data;
+    const { refresh_token, error: tokenError } = tokenRes.data;
 
     if (tokenError || !refresh_token) {
       logger.error('[Zoho OAuth] Token exchange failed:', tokenRes.data);
@@ -93,36 +82,27 @@ router.get('/oauth/callback', async (req, res) => {
         <div class="card">
           <h1>✅ Zoho OAuth הצלחה!</h1>
           <div class="sub">ה-Refresh Token נוצר בהצלחה. עקוב אחר השלבים הבאים:</div>
-
           <div class="token-box">
             <div class="token-label">🔑 Refresh Token (שמור אותו!)</div>
             <div class="token-val">${refresh_token}</div>
           </div>
-
           <div class="step">
             <div class="step-num">שלב 1: הגדר ב-Railway</div>
             <div style="margin-top:8px;font-size:13px;color:#94a3b8">
-              העתק את ה-Refresh Token למעלה והגדר ב-Railway:<br>
               <code>ZOHO_REFRESH_TOKEN = ${refresh_token.substring(0, 20)}...</code>
             </div>
           </div>
-
           <div class="step">
             <div class="step-num">שלב 2: בדיקה</div>
             <div style="margin-top:8px;font-size:13px;color:#94a3b8">
-              לאחר הגדרת המשתנה, בדוק עם:<br>
               <code>GET /api/crm/zoho/status</code>
             </div>
           </div>
-
-          <div class="warn">
-            ⚠️ אל תסגור את החלון הזה עד שתעתיק את ה-Refresh Token!
-          </div>
+          <div class="warn">⚠️ אל תסגור את החלון הזה עד שתעתיק את ה-Refresh Token!</div>
         </div>
       </body>
       </html>
     `);
-
   } catch (err) {
     logger.error('[Zoho OAuth] Callback error:', err.message);
     res.status(500).type('text/html').send(`
@@ -132,25 +112,15 @@ router.get('/oauth/callback', async (req, res) => {
   }
 });
 
-/**
- * GET /api/crm/zoho/auth-url
- * Returns the Zoho OAuth authorization URL
- */
 router.get('/zoho/auth-url', (req, res) => {
   const clientId = process.env.ZOHO_CLIENT_ID;
   if (!clientId) return res.status(503).json({ error: 'ZOHO_CLIENT_ID not set' });
-
   const redirectUri = encodeURIComponent(`https://pinuy-binuy-analyzer-production.up.railway.app/api/crm/oauth/callback`);
   const scope = encodeURIComponent('ZohoCRM.modules.ALL,ZohoCRM.settings.ALL');
   const url = `https://accounts.zoho.com/oauth/v2/auth?scope=${scope}&client_id=${clientId}&response_type=code&access_type=offline&redirect_uri=${redirectUri}`;
-
   res.json({ url, instruction: 'Open this URL in your browser to authorize Zoho CRM access' });
 });
 
-/**
- * GET /api/crm/zoho/status
- * Check Zoho CRM connection status
- */
 router.get('/zoho/status', async (req, res) => {
   const clientId = process.env.ZOHO_CLIENT_ID;
   const clientSecret = process.env.ZOHO_CLIENT_SECRET;
@@ -161,53 +131,53 @@ router.get('/zoho/status', async (req, res) => {
   }
 
   if (!refreshToken) {
-    const authUrlRes = await new Promise(r => {
-      const clientId = process.env.ZOHO_CLIENT_ID;
-      const redirectUri = encodeURIComponent(`https://pinuy-binuy-analyzer-production.up.railway.app/api/crm/oauth/callback`);
-      const scope = encodeURIComponent('ZohoCRM.modules.ALL,ZohoCRM.settings.ALL');
-      r(`https://accounts.zoho.com/oauth/v2/auth?scope=${scope}&client_id=${clientId}&response_type=code&access_type=offline&redirect_uri=${redirectUri}`);
-    });
+    const redirectUri = encodeURIComponent(`https://pinuy-binuy-analyzer-production.up.railway.app/api/crm/oauth/callback`);
+    const scope = encodeURIComponent('ZohoCRM.modules.ALL,ZohoCRM.settings.ALL');
     return res.json({
       configured: false,
       missing: ['ZOHO_REFRESH_TOKEN'],
       action: 'Visit auth_url to authorize',
-      auth_url: authUrlRes
+      auth_url: `https://accounts.zoho.com/oauth/v2/auth?scope=${scope}&client_id=${clientId}&response_type=code&access_type=offline&redirect_uri=${redirectUri}`
     });
   }
 
-  // Test the refresh token
   try {
+    // Get access token
     const tokenRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
-      params: {
-        refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: 'refresh_token'
-      }
+      params: { refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: 'refresh_token' }
     });
 
-    if (tokenRes.data.access_token) {
-      // Test CRM access
-      const crmRes = await axios.get('https://www.zohoapis.com/crm/v3/org', {
-        headers: { Authorization: `Zoho-oauthtoken ${tokenRes.data.access_token}` }
-      });
-      res.json({
-        configured: true,
-        ok: true,
-        org: crmRes.data?.org?.[0]?.company_name || 'connected',
-        token_valid: true
-      });
-    } else {
-      res.json({ configured: true, ok: false, error: tokenRes.data });
+    if (!tokenRes.data.access_token) {
+      return res.json({ configured: true, ok: false, error: tokenRes.data });
     }
+
+    const accessToken = tokenRes.data.access_token;
+
+    // Test with Contacts endpoint (within ZohoCRM.modules.ALL scope)
+    const crmRes = await axios.get('https://www.zohoapis.com/crm/v3/Contacts?fields=First_Name&per_page=1', {
+      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` }
+    });
+
+    res.json({
+      configured: true,
+      ok: true,
+      token_valid: true,
+      message: 'Zoho CRM connected successfully',
+      contacts_accessible: true,
+      sample_count: crmRes.data?.data?.length || 0
+    });
   } catch (err) {
-    res.json({ configured: true, ok: false, error: err.response?.data || err.message });
+    const errData = err.response?.data || err.message;
+    // "no data" means connected but empty - still OK
+    if (err.response?.status === 204 || JSON.stringify(errData).includes('no_data') || JSON.stringify(errData).includes('EMPTY_DATA')) {
+      return res.json({ configured: true, ok: true, token_valid: true, message: 'Zoho CRM connected (no contacts yet)', contacts_accessible: true });
+    }
+    res.json({ configured: true, ok: false, error: errData });
   }
 });
 
 // ===================== CALLS =====================
 
-// GET /api/crm/calls
 router.get('/calls', async (req, res) => {
   try {
     const { lead_id, limit = 50, offset = 0 } = req.query;
@@ -225,7 +195,6 @@ router.get('/calls', async (req, res) => {
   }
 });
 
-// POST /api/crm/calls
 router.post('/calls', async (req, res) => {
   try {
     const { lead_id, duration_seconds, notes, outcome, called_by } = req.body;
@@ -243,7 +212,6 @@ router.post('/calls', async (req, res) => {
 
 // ===================== REMINDERS =====================
 
-// GET /api/crm/reminders
 router.get('/reminders', async (req, res) => {
   try {
     const { status = 'pending', lead_id } = req.query;
@@ -260,7 +228,6 @@ router.get('/reminders', async (req, res) => {
   }
 });
 
-// POST /api/crm/reminders
 router.post('/reminders', async (req, res) => {
   try {
     const { lead_id, title, notes, due_at, reminder_type } = req.body;
@@ -275,7 +242,6 @@ router.post('/reminders', async (req, res) => {
   }
 });
 
-// PUT /api/crm/reminders/:id
 router.put('/reminders/:id', async (req, res) => {
   try {
     const { status, notes } = req.body;
@@ -291,7 +257,6 @@ router.put('/reminders/:id', async (req, res) => {
 
 // ===================== DEALS / PIPELINE =====================
 
-// GET /api/crm/deals
 router.get('/deals', async (req, res) => {
   try {
     const { stage, limit = 100 } = req.query;
@@ -307,7 +272,6 @@ router.get('/deals', async (req, res) => {
   }
 });
 
-// POST /api/crm/deals
 router.post('/deals', async (req, res) => {
   try {
     const { lead_id, complex_id, title, value, stage, notes, expected_close } = req.body;
@@ -322,7 +286,6 @@ router.post('/deals', async (req, res) => {
   }
 });
 
-// PUT /api/crm/deals/:id/stage
 router.put('/deals/:id/stage', async (req, res) => {
   try {
     const { stage, notes } = req.body;
@@ -340,7 +303,6 @@ router.put('/deals/:id/stage', async (req, res) => {
   }
 });
 
-// DELETE /api/crm/deals/:id
 router.delete('/deals/:id', async (req, res) => {
   try {
     await pool.query(`DELETE FROM deals WHERE id = $1`, [req.params.id]);
@@ -350,7 +312,6 @@ router.delete('/deals/:id', async (req, res) => {
   }
 });
 
-// GET /api/crm/pipeline
 router.get('/pipeline', async (req, res) => {
   try {
     const stages = ['prospect', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
@@ -377,7 +338,6 @@ router.get('/pipeline', async (req, res) => {
   }
 });
 
-// GET /api/crm/stats
 router.get('/stats', async (req, res) => {
   try {
     const [calls, reminders, deals, leads] = await Promise.all([
