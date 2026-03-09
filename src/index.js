@@ -14,8 +14,8 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.63.0';
-const BUILD = '2026-03-09-v4.63.0-vapi-keyterms-checker';
+const VERSION = '4.82.0';
+const BUILD = '2026-03-09-v4.82.0-vapi-reschedule-webhook';
 
 async function runAutoMigrations() {
   try {
@@ -181,9 +181,6 @@ function loadAutoContactRoutes() {
 }
 
 // ─── Vapi Keyterms Support Checker ───────────────────────────────────────────
-// Runs every 3 days at 09:00. Tests if Vapi now supports the 'keyterms' field
-// on the transcriber object. When supported, applies keyterms to all 5 agents
-// and sends a WhatsApp alert.
 
 const VAPI_QUANTUM_KEYTERMS = [
   'פינוי-בינוי', 'ועדה מקומית', 'כינוס נכסים', 'פרמיה',
@@ -202,79 +199,32 @@ const VAPI_AGENT_IDS = [
 
 async function checkVapiKeytermsSupport() {
   const apiKey = process.env.VAPI_API_KEY;
-  const testId = process.env.VAPI_ASSISTANT_COLD; // test on one agent only
+  const testId = process.env.VAPI_ASSISTANT_COLD;
   if (!apiKey || !testId) return;
 
   logger.info('[VapiKeyterms] Checking if Vapi supports keyterms...');
 
   try {
     const axios = require('axios');
-
-    // Test with keyterms field
-    const testBody = {
-      transcriber: {
-        provider: 'deepgram',
-        model: 'nova-3',
-        language: 'he',
-        keyterms: ['פינוי-בינוי', 'QUANTUM'],
-      },
-    };
-
-    const resp = await axios.patch(
-      `https://api.vapi.ai/assistant/${testId}`,
-      testBody,
-      { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
-    );
-
+    const testBody = { transcriber: { provider: 'deepgram', model: 'nova-3', language: 'he', keyterms: ['פינוי-בינוי', 'QUANTUM'] } };
+    const resp = await axios.patch(`https://api.vapi.ai/assistant/${testId}`, testBody, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
     const returned = resp.data?.transcriber?.keyterms;
     if (Array.isArray(returned) && returned.length > 0) {
       logger.info('[VapiKeyterms] SUPPORTED! Applying keyterms to all 5 agents...');
-
-      // Apply to all agents
-      const fullBody = {
-        transcriber: {
-          provider: 'deepgram',
-          model: 'nova-3',
-          language: 'he',
-          keyterms: VAPI_QUANTUM_KEYTERMS,
-        },
-      };
-
+      const fullBody = { transcriber: { provider: 'deepgram', model: 'nova-3', language: 'he', keyterms: VAPI_QUANTUM_KEYTERMS } };
       let success = 0;
       for (const agentId of VAPI_AGENT_IDS) {
         if (!agentId) continue;
-        try {
-          await axios.patch(`https://api.vapi.ai/assistant/${agentId}`, fullBody, {
-            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          });
-          success++;
-        } catch (e) {
-          logger.warn(`[VapiKeyterms] Failed to update agent ${agentId}:`, e.message);
-        }
+        try { await axios.patch(`https://api.vapi.ai/assistant/${agentId}`, fullBody, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }); success++; } catch (e) { logger.warn(`[VapiKeyterms] Failed to update agent ${agentId}:`, e.message); }
       }
-
-      // Send WhatsApp alert
       try {
-        await axios.post('https://capi.inforu.co.il/api/v2/WhatsApp/SendWhatsAppChat', {
-          Data: {
-            Message: `✅ *QUANTUM Voice AI - עדכון חשוב*\n\nVapi תומך עכשיו ב-Keyterms עבור Deepgram Nova-3!\n\nהוחלו ${success}/5 נציגים עם מונחי מקצוע נדל"ן:\nפינוי-בינוי, ועדה מקומית, כינוס נכסים ועוד ${VAPI_QUANTUM_KEYTERMS.length - 3} מונחים.\n\nהדיוק בזיהוי מונחים מקצועיים עלה משמעותית.`,
-            PhoneNumber: '972546550815',
-          },
-          AuthInfo: {
-            Username: process.env.INFORU_USERNAME || 'hemichaeli',
-            ApiToken: process.env.INFORU_PASSWORD || process.env.INFORU_API_TOKEN,
-          },
-        });
+        await axios.post('https://capi.inforu.co.il/api/v2/WhatsApp/SendWhatsAppChat', { Data: { Message: `✅ *QUANTUM Voice AI - עדכון חשוב*\n\nVapi תומך עכשיו ב-Keyterms עבור Deepgram Nova-3!\n\nהוחלו ${success}/5 נציגים עם מונחי מקצוע נדל"ן:\nפינוי-בינוי, ועדה מקומית, כינוס נכסים ועוד ${VAPI_QUANTUM_KEYTERMS.length - 3} מונחים.\n\nהדיוק בזיהוי מונחים מקצועיים עלה משמעותית.`, PhoneNumber: '972546550815' }, AuthInfo: { Username: process.env.INFORU_USERNAME || 'hemichaeli', ApiToken: process.env.INFORU_PASSWORD || process.env.INFORU_API_TOKEN } });
         logger.info('[VapiKeyterms] WhatsApp alert sent');
-      } catch (waErr) {
-        logger.warn('[VapiKeyterms] WhatsApp alert failed:', waErr.message);
-      }
-
+      } catch (waErr) { logger.warn('[VapiKeyterms] WhatsApp alert failed:', waErr.message); }
     } else {
       logger.info('[VapiKeyterms] Not yet supported - will check again in 3 days');
     }
   } catch (err) {
-    // 400 error with "keyterms should not exist" = still not supported
     const msg = err.response?.data?.message || err.message;
     if (typeof msg === 'string' && msg.includes('keyterms')) {
       logger.info('[VapiKeyterms] Not yet supported (400 error) - will check again in 3 days');
@@ -333,6 +283,7 @@ app.get('/api/debug', async (req, res) => {
     google_calendar: gcalStatus,
     zoho_calendar: zcalStatus,
     incoming_whatsapp_poll: 'active - every 60s via INFORU PullData',
+    vapi_reschedule_webhook: 'active - outcome handler in /api/vapi/webhook (v4.82)',
     notifications_sse: `active (${notificationStats.connected_clients || 0} clients)`,
     vapi_keyterms_checker: 'active - runs every 3 days at 09:00',
     routes: { loaded: loaded.map(r => r.path + ' (' + r.file + ')'), failed: failed.map(r => ({ path: r.path, error: r.error })) }
