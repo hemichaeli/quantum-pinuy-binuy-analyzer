@@ -6,6 +6,9 @@ const { logger } = require('../services/logger');
 
 // ===================== ZOHO OAUTH =====================
 
+// Full scopes: CRM + Calendar
+const ZOHO_SCOPES = 'ZohoCRM.modules.ALL,ZohoCRM.settings.ALL,ZohoCalendar.calendars.ALL,ZohoCalendar.events.ALL';
+
 router.get('/oauth/callback', async (req, res) => {
   const { code, error } = req.query;
 
@@ -56,7 +59,7 @@ router.get('/oauth/callback', async (req, res) => {
       `);
     }
 
-    logger.info('[Zoho OAuth] Refresh token obtained successfully');
+    logger.info('[Zoho OAuth] Refresh token obtained successfully (CRM + Calendar scopes)');
 
     res.type('text/html').send(`
       <html dir="rtl" lang="he">
@@ -72,33 +75,36 @@ router.get('/oauth/callback', async (req, res) => {
           .token-box{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:16px;margin:16px 0}
           .token-label{font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
           .token-val{font-family:monospace;font-size:13px;color:#60a5fa;word-break:break-all;background:#0a0a0f;padding:10px;border-radius:6px}
+          .copy-btn{display:inline-block;margin-top:8px;padding:6px 14px;background:#1e40af;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px}
           .step{background:#1e3a5f22;border:1px solid #1e3a5f;border-radius:8px;padding:14px;margin:10px 0}
           .step-num{color:#60a5fa;font-weight:bold;font-size:13px}
           code{background:#1e293b;padding:3px 8px;border-radius:4px;font-family:monospace;font-size:12px;color:#fbbf24}
           .warn{background:#291500;border:1px solid #7c2d12;border-radius:8px;padding:12px;margin-top:16px;font-size:13px;color:#fca5a5}
+          .scope-badge{display:inline-block;background:#064e3b;color:#34d399;padding:2px 8px;border-radius:6px;font-size:11px;margin:2px}
         </style>
       </head>
       <body>
         <div class="card">
           <h1>✅ Zoho OAuth הצלחה!</h1>
-          <div class="sub">ה-Refresh Token נוצר בהצלחה. עקוב אחר השלבים הבאים:</div>
+          <div class="sub">ה-Refresh Token נוצר בהצלחה עם scopes מלאים:</div>
+          <div style="margin-bottom:16px">
+            <span class="scope-badge">ZohoCRM.modules.ALL</span>
+            <span class="scope-badge">ZohoCRM.settings.ALL</span>
+            <span class="scope-badge">ZohoCalendar.calendars.ALL</span>
+            <span class="scope-badge">ZohoCalendar.events.ALL</span>
+          </div>
           <div class="token-box">
-            <div class="token-label">🔑 Refresh Token (שמור אותו!)</div>
-            <div class="token-val">${refresh_token}</div>
+            <div class="token-label">🔑 Refresh Token החדש</div>
+            <div class="token-val" id="rt">${refresh_token}</div>
+            <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('rt').textContent);this.textContent='✅ הועתק!'">📋 העתק</button>
           </div>
           <div class="step">
-            <div class="step-num">שלב 1: הגדר ב-Railway</div>
+            <div class="step-num">עדכן ב-Railway:</div>
             <div style="margin-top:8px;font-size:13px;color:#94a3b8">
-              <code>ZOHO_REFRESH_TOKEN = ${refresh_token.substring(0, 20)}...</code>
+              <code>ZOHO_REFRESH_TOKEN = ${refresh_token}</code>
             </div>
           </div>
-          <div class="step">
-            <div class="step-num">שלב 2: בדיקה</div>
-            <div style="margin-top:8px;font-size:13px;color:#94a3b8">
-              <code>GET /api/crm/zoho/status</code>
-            </div>
-          </div>
-          <div class="warn">⚠️ אל תסגור את החלון הזה עד שתעתיק את ה-Refresh Token!</div>
+          <div class="warn">⚠️ אל תסגור את החלון הזה עד שתעדכן את Railway!</div>
         </div>
       </body>
       </html>
@@ -116,9 +122,9 @@ router.get('/zoho/auth-url', (req, res) => {
   const clientId = process.env.ZOHO_CLIENT_ID;
   if (!clientId) return res.status(503).json({ error: 'ZOHO_CLIENT_ID not set' });
   const redirectUri = encodeURIComponent(`https://pinuy-binuy-analyzer-production.up.railway.app/api/crm/oauth/callback`);
-  const scope = encodeURIComponent('ZohoCRM.modules.ALL,ZohoCRM.settings.ALL');
+  const scope = encodeURIComponent(ZOHO_SCOPES);
   const url = `https://accounts.zoho.com/oauth/v2/auth?scope=${scope}&client_id=${clientId}&response_type=code&access_type=offline&redirect_uri=${redirectUri}`;
-  res.json({ url, instruction: 'Open this URL in your browser to authorize Zoho CRM access' });
+  res.json({ url, scopes: ZOHO_SCOPES, instruction: 'Open this URL in your browser to authorize Zoho CRM + Calendar access' });
 });
 
 router.get('/zoho/status', async (req, res) => {
@@ -132,7 +138,7 @@ router.get('/zoho/status', async (req, res) => {
 
   if (!refreshToken) {
     const redirectUri = encodeURIComponent(`https://pinuy-binuy-analyzer-production.up.railway.app/api/crm/oauth/callback`);
-    const scope = encodeURIComponent('ZohoCRM.modules.ALL,ZohoCRM.settings.ALL');
+    const scope = encodeURIComponent(ZOHO_SCOPES);
     return res.json({
       configured: false,
       missing: ['ZOHO_REFRESH_TOKEN'],
@@ -142,7 +148,6 @@ router.get('/zoho/status', async (req, res) => {
   }
 
   try {
-    // Get access token
     const tokenRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
       params: { refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: 'refresh_token' }
     });
@@ -153,7 +158,6 @@ router.get('/zoho/status', async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    // Test with Contacts endpoint (within ZohoCRM.modules.ALL scope)
     const crmRes = await axios.get('https://www.zohoapis.com/crm/v3/Contacts?fields=First_Name&per_page=1', {
       headers: { Authorization: `Zoho-oauthtoken ${accessToken}` }
     });
@@ -168,7 +172,6 @@ router.get('/zoho/status', async (req, res) => {
     });
   } catch (err) {
     const errData = err.response?.data || err.message;
-    // "no data" means connected but empty - still OK
     if (err.response?.status === 204 || JSON.stringify(errData).includes('no_data') || JSON.stringify(errData).includes('EMPTY_DATA')) {
       return res.json({ configured: true, ok: true, token_valid: true, message: 'Zoho CRM connected (no contacts yet)', contacts_accessible: true });
     }
