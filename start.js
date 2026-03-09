@@ -93,15 +93,17 @@ function decompressGzB64Routes(dir) {
       const jsContent = zlib.gunzipSync(gzBuffer).toString('utf8');
       // Phase 1.6b: Fix literal newlines in alert strings (SyntaxError patch)
       let fixedContent = jsContent;
-      if (file.includes('dashboardRoute.js.gz.b64')) {
-        const before = fixedContent.length;
-        // Fix literal newlines inside alert() string literals
-        fixedContent = fixedContent.replace(/alert\('([^']*?)\n([^']*?)'/g, (m, a, b) => `alert('${a}\\n${b}'`);
-        // More robust: fix all literal newlines inside single-quoted strings in alert calls
-        fixedContent = fixedContent.replace(/alert\('((?:[^'\\]|\\.)*)'/gs, (match, inner) => {
-          return `alert('${inner.replace(/\n/g, '\\n')}')`;
-        });
-        if (fixedContent.length !== before) console.log('[START] Applied SyntaxError patch to dashboardRoute.js');
+      if (file.includes('dashboardRoute')) {
+        // Fix: find the specific broken alert and replace literal newlines with \n
+        const alertMarker = "alert('\u2705 Auto Contact \u05d4\u05d5\u05e4\u05e2\u05dc!";
+        const alertIdx = fixedContent.indexOf(alertMarker);
+        if (alertIdx >= 0) {
+          const alertEnd = fixedContent.indexOf(');', alertIdx) + 2;
+          const alertCode = fixedContent.substring(alertIdx, alertEnd);
+          const fixedAlert = alertCode.split('\n').join('\\n');
+          fixedContent = fixedContent.substring(0, alertIdx) + fixedAlert + fixedContent.substring(alertEnd);
+          console.log('[START] Applied SyntaxError patch to dashboardRoute.js (fixed literal newlines in alert)');
+        }
       }
       fs.writeFileSync(jsPath, fixedContent, 'utf8');
       console.log(`[START] Decompressed ${file} -> ${path.basename(jsPath)} (${fixedContent.length} bytes)`);
