@@ -54,22 +54,41 @@ QUANTUM`,
   }
 };
 
+// --- WhatsApp Templates (QUANTUM account - capi.inforu.co.il) ---
+// Updated 2026-03-10: mapped to actual template IDs in QUANTUM account
 const WA_TEMPLATES = {
-  file_link_updated: { templateId: '214803', name: 'קישור לתיקייה ציבורית של דירה מעודכן', params: ['name'], hasButtons: true, buttonType: 'URL' },
-  file_link_basic: { templateId: '213960', name: 'קישור לתיקייה ציבורית של דירה', params: ['name'], hasButtons: false },
-  project_attendance: { templateId: '212543', name: 'אישור השתתפות לפרויקט', params: ['name', 'project_name'], hasButtons: true, buttonType: 'QUICK_REPLY' },
-  meeting_attendance: { templateId: '211339', name: 'אישור השתתפות', params: ['name', 'meeting_type', 'date', 'address', 'time', 'attendees'], hasButtons: true, buttonType: 'QUICK_REPLY' },
-  institutional_message: { templateId: '200763', name: 'מוסד 2', params: [], hasButtons: false },
-  institutional_original: { templateId: '200683', name: 'מוסד', params: [], hasButtons: false },
-  representative_intro: { templateId: '180735', name: 'היכרות לנציגות מתחם 1 עם דן קושניר', params: [], hasButtons: true, buttonType: 'QUICK_REPLY' }
+  // ---- scheduling / bot templates ----
+  meeting_invite:         { templateId: '141183', name: 'הזמנה למפגש נציגות',                                    params: [], hasButtons: false },
+  meeting_reminder:       { templateId: '141181', name: 'תזכורת לאישור הגעה למפגש נציגות',                       params: [], hasButtons: false },
+  zoom_link:              { templateId: '141453', name: 'לינק למפגש זום',                                         params: [], hasButtons: false },
+  zoom_confirm:           { templateId: '141199', name: 'תזכורת לאישור השתתפות במפגש זום',                        params: [], hasButtons: false },
+  zoom_confirm_reply:     { templateId: '141203', name: 'תזכורת לאישור השתתפות במפגש זום (אישור בהודעה חוזרת)',   params: [], hasButtons: false },
+  // ---- ceremony templates ----
+  ceremony_42:            { templateId: '158832', name: 'כנס ראשון - 42',                                         params: [], hasButtons: false },
+  ceremony_44:            { templateId: '158833', name: 'כנס ראשון - 44',                                         params: [], hasButtons: false },
+  ceremony_42_g:          { templateId: '159311', name: 'G - כנס ראשון - 42',                                     params: [], hasButtons: false },
+  ceremony_44_g:          { templateId: '159307', name: 'G - כנס ראשון - 44',                                     params: [], hasButtons: false },
+  reminder_42:            { templateId: '159175', name: 'G - תזכורת להשיב להזמנה (42)',                            params: [], hasButtons: false },
+  reminder_44:            { templateId: '159176', name: 'G - תזכורת להשיב להזמנה (44)',                            params: [], hasButtons: false },
+  // ---- test / generic ----
+  test_message:           { templateId: '157823', name: 'תבנית בדיקה גינדי (2)',                                   params: [], hasButtons: false },
+  test_message_basic:     { templateId: '156872', name: 'תבנית בדיקה גינדי',                                       params: [], hasButtons: false },
+  // ---- legacy aliases (kept for backward compat) ----
+  institutional_message:  { templateId: '157823', name: 'תבנית בדיקה גינדי (2)',                                   params: [], hasButtons: false },
+  institutional_original: { templateId: '156872', name: 'תבנית בדיקה גינדי',                                       params: [], hasButtons: false },
+  representative_intro:   { templateId: '141183', name: 'הזמנה למפגש נציגות',                                    params: [], hasButtons: false },
+  project_attendance:     { templateId: '141181', name: 'תזכורת לאישור הגעה למפגש נציגות',                       params: [], hasButtons: false },
+  meeting_attendance:     { templateId: '141183', name: 'הזמנה למפגש נציגות',                                    params: [], hasButtons: false },
+  file_link_basic:        { templateId: '157823', name: 'תבנית בדיקה גינדי (2)',                                   params: [], hasButtons: false },
+  file_link_updated:      { templateId: '157823', name: 'תבנית בדיקה גינדי (2)',                                   params: [], hasButtons: false },
 };
 
 const QUANTUM_WA_MAPPINGS = {
-  seller_initial: 'file_link_basic',
-  seller_followup: 'institutional_message',
-  buyer_opportunity: 'project_attendance',
-  kones_inquiry: 'representative_intro',
-  test_message: 'institutional_message'
+  seller_initial:   'file_link_basic',
+  seller_followup:  'institutional_message',
+  buyer_opportunity:'project_attendance',
+  kones_inquiry:    'representative_intro',
+  test_message:     'test_message'
 };
 
 // ==================== AUTH ====================
@@ -191,7 +210,6 @@ async function sendWhatsAppChat(phone, message, options = {}) {
   logger.info('SendWhatsAppChat payload', { phone: normalizedPhone, messageLength: message.length, customerMessageId, fullPayload: JSON.stringify(payload) });
 
   try {
-    // validateStatus: () => true prevents axios from throwing on 4xx/5xx
     const response = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsAppChat`, payload, {
       headers: { 'Content-Type': 'application/json', 'Authorization': getBasicAuth() },
       timeout: 30000,
