@@ -1,11 +1,13 @@
 /**
- * QUANTUM Visual Booking Route v6.5
+ * QUANTUM Visual Booking Route v6.6
  *
  * v6.2: Fix clicks not working — data-slot-id + JSON slot map
  * v6.3: Responsive desktop layout — two columns, bigger slots, sidebar confirm panel
  * v6.4: Remove AT TIME ZONE (wrong direction)
- * v6.5: Correct fix — slot_datetime stored as TIMESTAMP WITHOUT TZ in UTC values.
- *       Use AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem' to convert correctly.
+ * v6.5: Tried AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem' — wrong (added 2h instead)
+ * v6.6: CORRECT FIX — slot_datetime (TIMESTAMP WITHOUT TZ) stores Israel wall-clock time.
+ *       Just use TO_CHAR with no timezone conversion at all.
+ *       09:40 stored = 09:40 displayed. No conversion needed.
  *
  * GET  /booking/:token          - Visual calendar HTML
  * GET  /booking/:token/slots    - JSON slot data
@@ -94,15 +96,14 @@ async function scoreSlotsByProximity(slots, campaignId, contactStreet) {
 // ══════════════════════════════════════════════════════════════
 
 async function getMeetingSlots(campaignId, contactStreet) {
-  // slot_datetime is TIMESTAMP WITHOUT TIME ZONE, but its values are UTC
-  // (Railway server is UTC; slot generation uses new Date() + setHours() which stores UTC wall-clock time).
-  // To display in Israel time: treat stored value as UTC, convert to Asia/Jerusalem.
-  // PostgreSQL syntax: col AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem'
+  // slot_datetime is TIMESTAMP WITHOUT TIME ZONE storing Israel wall-clock times.
+  // Slots are generated with Israeli times in mind (e.g. 09:40 means 09:40 Israel).
+  // NO timezone conversion needed — just read the stored value directly.
   const res = await pool.query(
     `SELECT id, slot_datetime,
-            TO_CHAR(slot_datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD') AS slot_date,
-            TO_CHAR(slot_datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem','HH24:MI') AS time_str,
-            EXTRACT(DOW FROM slot_datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem')::int AS dow,
+            TO_CHAR(slot_datetime,'YYYY-MM-DD') AS slot_date,
+            TO_CHAR(slot_datetime,'HH24:MI') AS time_str,
+            EXTRACT(DOW FROM slot_datetime)::int AS dow,
             representative_name
      FROM meeting_slots
      WHERE campaign_id=$1 AND status='open' AND slot_datetime > NOW()
@@ -325,10 +326,10 @@ router.post('/:token/confirm', async (req, res) => {
       );
       if (!lockRes.rows.length) return res.status(409).json({ error: 'slot_taken' });
       const slot = lockRes.rows[0];
+      // slot_datetime stores Israel wall-clock time — read directly without TZ conversion
       const slotDt = new Date(slot.slot_datetime);
-      // slot_datetime is UTC wall-clock; display via UTC methods = correct Israel time display
-      dateStr = slotDt.toLocaleDateString('he-IL', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
-      timeStr = slotDt.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+      dateStr = `${String(slotDt.getUTCDate()).padStart(2,'0')}/${String(slotDt.getUTCMonth()+1).padStart(2,'0')}/${slotDt.getUTCFullYear()}`;
+      timeStr = `${String(slotDt.getUTCHours()).padStart(2,'0')}:${String(slotDt.getUTCMinutes()).padStart(2,'0')}`;
       repName = slot.representative_name;
       slotDatetime = slot.slot_datetime;
       if (gcal?.createMeetingSlotEvent) gcal.createMeetingSlotEvent(pool, slot, ctx.contactName || '', session.phone).then(id => id && pool.query(`UPDATE meeting_slots SET google_event_id=$1 WHERE id=$2`, [id, slot.id]).catch(() => {})).catch(e => logger.warn('[BookingRoute] GCal meeting failed:', e.message));
