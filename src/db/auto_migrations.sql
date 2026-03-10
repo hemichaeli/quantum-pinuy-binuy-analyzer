@@ -132,10 +132,6 @@ CREATE INDEX IF NOT EXISTS idx_reschedule_expires  ON reschedule_requests(expire
 
 -- ========================================================
 -- QUANTUM v4.79+ - Campaign Availability Settings
--- available_windows stores per-day time windows:
--- [{ "day": 0, "start": "09:00", "end": "18:00" }, ...]
--- day: 0=ראשון, 1=שני, 2=שלישי, 3=רביעי, 4=חמישי, 5=שישי, 6=שבת
--- Default: Sun-Thu 09:00-18:00
 -- ========================================================
 
 ALTER TABLE campaign_schedule_config
@@ -144,7 +140,6 @@ ALTER TABLE campaign_schedule_config
 ALTER TABLE campaign_schedule_config
   ADD COLUMN IF NOT EXISTS default_end_time TIME DEFAULT '18:00:00';
 
--- Ensure available_windows has a proper default (Sun-Thu 09:00-18:00)
 UPDATE campaign_schedule_config
   SET available_windows = '[
     {"day":0,"start":"09:00","end":"18:00"},
@@ -159,24 +154,84 @@ UPDATE campaign_schedule_config
 -- QUANTUM v4.81+ - Zoho Calendar event IDs
 -- ========================================================
 
--- Store Zoho Calendar event UID alongside Google event ID
 ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS zoho_event_id TEXT;
 ALTER TABLE ceremony_slots ADD COLUMN IF NOT EXISTS zoho_event_id TEXT;
-
--- Store Zoho Calendar ID per project (for event creation)
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS zoho_calendar_id TEXT;
-
--- Store Zoho Calendar ID per ceremony station (for per-lawyer calendars)
 ALTER TABLE ceremony_stations ADD COLUMN IF NOT EXISTS zoho_calendar_id TEXT;
 
 -- ========================================================
 -- QUANTUM v4.89+ - Per-project INFORU credentials
--- Each project (מיזם) has its own developer (יזם) with
--- a separate WhatsApp sender account on INFORU.
--- inforu_username: INFORU account username (e.g. "QUANTUM", "DEVELOPER2")
--- inforu_password: INFORU Base Credentials token
--- Falls back to global INFORU_USERNAME / INFORU_PASSWORD env vars if NULL.
 -- ========================================================
 
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS inforu_username TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS inforu_password TEXT;
+
+-- ========================================================
+-- QUANTUM v4.90+ - Professional Visits (Appraiser / Surveyor)
+--
+-- professional_visits: ביקור של שמאי/מודד לבניין ספציפי
+-- visit_professionals: השמאים/מודדים שמגיעים (עד 3)
+-- meeting_slots:       slots נוצרים per-professional
+-- bot_sessions:        מאוכלס מראש ע"י Zoho Webhook (pre-register)
+--
+-- זרימה:
+--   1. Admin מגדיר ביקור → slots נוצרים אוטומטית
+--   2. Zoho שולח WA לדיירים + קורא POST /api/scheduling/pre-register
+--   3. pre-register מאכלס bot_sessions עם כתובת + בניין + campaign_buildings
+--   4. דייר עונה → בוט בודק End_Date + Status → מציג slots של הבניין שלו
+--   5. דייר ללא כתובת → בוט שואל לבחור מרשימת הבניינים
+-- ========================================================
+
+CREATE TABLE IF NOT EXISTS professional_visits (
+  id                    SERIAL PRIMARY KEY,
+  campaign_id           TEXT NOT NULL,
+  project_id            INTEGER REFERENCES projects(id),
+  visit_type            TEXT NOT NULL CHECK (visit_type IN ('appraiser','surveyor')),
+  building_address      TEXT NOT NULL,       -- "סמילצ'נסקי 3"
+  city                  TEXT NOT NULL,       -- "ראשון לציון"
+  visit_date            DATE NOT NULL,
+  start_time            TIME NOT NULL,
+  end_time              TIME NOT NULL,
+  slot_duration_minutes INTEGER NOT NULL DEFAULT 30,
+  buffer_minutes        INTEGER NOT NULL DEFAULT 5,
+  status                TEXT NOT NULL DEFAULT 'active',
+  created_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_prof_visits_campaign ON professional_visits(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_prof_visits_building ON professional_visits(building_address, visit_date);
+
+CREATE TABLE IF NOT EXISTS visit_professionals (
+  id                    SERIAL PRIMARY KEY,
+  visit_id              INTEGER NOT NULL REFERENCES professional_visits(id) ON DELETE CASCADE,
+  professional_name     TEXT NOT NULL,
+  professional_phone    TEXT,
+  zoho_calendar_id      TEXT,
+  display_order         INTEGER DEFAULT 0,
+  created_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_visit_professionals_visit ON visit_professionals(visit_id);
+
+-- Link meeting_slots to a specific visit professional
+ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS visit_professional_id INTEGER REFERENCES visit_professionals(id);
+-- Apartment number captured at booking time
+ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS apartment_number TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_meeting_slots_visit_prof ON meeting_slots(visit_professional_id)
+  WHERE visit_professional_id IS NOT NULL;
+
+-- bot_sessions: pre-register fields
+-- building_address: normalized building address matched to professional_visit
+-- apartment_number: extracted from property_addresses ("דירה 9")
+-- campaign_buildings: JSON array of all buildings in campaign (for select_building state)
+-- campaign_end_date: End_Date from Zoho campaign (bot stops responding after this)
+-- campaign_status: Status from Zoho campaign ('Active' / other)
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS building_address TEXT;
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS apartment_number TEXT;
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS campaign_buildings JSONB DEFAULT '[]';
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS campaign_end_date DATE;
+ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS campaign_status TEXT DEFAULT 'Active';
+
+CREATE INDEX IF NOT EXISTS idx_bot_sessions_building_addr ON bot_sessions(building_address)
+  WHERE building_address IS NOT NULL;
