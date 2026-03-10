@@ -1,6 +1,7 @@
 /**
- * QUANTUM WhatsApp Bot - v6.1
+ * QUANTUM WhatsApp Bot - v6.2
  * Full conversation tracking + enhanced AI + lead management + auto-handoff
+ * v6.2: First message no longer says "אני מ-QUANTUM" - they already know.
  */
 
 const express = require('express');
@@ -74,7 +75,6 @@ function shouldHandoff(message, history, leadInfo) {
     const userMessages = history.filter(m => m.sender === 'user').map(m => m.message);
     const lastThree = userMessages.slice(-3);
     
-    // Check if user keeps asking similar things
     const similarityCount = lastThree.filter((msg, idx) => 
       lastThree.some((other, otherIdx) => 
         idx !== otherIdx && 
@@ -100,7 +100,6 @@ function shouldHandoff(message, history, leadInfo) {
 // Request handoff
 async function requestHandoff(leadId, reason, urgency, phone, name) {
   try {
-    // Update lead status
     await pool.query(`
       UPDATE leads 
       SET 
@@ -119,7 +118,6 @@ async function requestHandoff(leadId, reason, urgency, phone, name) {
       WHERE id = $3
     `, [JSON.stringify(reason), JSON.stringify(urgency), leadId]);
     
-    // Send handoff message
     const handoffMessage = `${name ? name + ', ' : ''}אני מעביר אותך למומחה שלנו שיוכל לעזור לך יותר טוב.\n\nהוא יחזור אליך תוך ${urgency === 'high' ? '30 דקות' : 'שעה-שעתיים'}. תודה על הסבלנות! 🙏`;
     
     const auth = getBasicAuth();
@@ -141,7 +139,6 @@ async function requestHandoff(leadId, reason, urgency, phone, name) {
       validateStatus: () => true
     });
     
-    // Save handoff message
     await pool.query(`
       INSERT INTO whatsapp_conversations (lead_id, sender, message, ai_metadata, created_at)
       VALUES ($1, 'bot', $2, $3, NOW())
@@ -159,10 +156,9 @@ async function requestHandoff(leadId, reason, urgency, phone, name) {
 // Enhanced AI call with conversation context
 async function callClaudeWithContext(conversationHistory, currentMessage, leadInfo) {
   try {
-    // Build context from history
     let contextSummary = '';
     if (conversationHistory.length > 0) {
-      const lastFew = conversationHistory.slice(-4); // Last 4 messages
+      const lastFew = conversationHistory.slice(-4);
       contextSummary = lastFew.map(msg => 
         `${msg.sender === 'user' ? 'לקוח' : 'אתה'}: ${msg.message}`
       ).join('\n');
@@ -187,7 +183,8 @@ async function callClaudeWithContext(conversationHistory, currentMessage, leadIn
     return response.data.content[0].text;
   } catch (error) {
     console.error('Claude API error:', error.message);
-    return 'שלום! אני מ-QUANTUM. איך אני יכול לעזור לך?';
+    // Fallback - no "אני מ-QUANTUM", they already know
+    return 'שלום! במה אפשר לעזור?';
   }
 }
 
@@ -195,29 +192,101 @@ function buildEnhancedPrompt(leadInfo, conversationContext) {
   const stage = leadInfo?.stage || 'greeting';
   const name = leadInfo?.name || null;
   const userType = leadInfo?.user_type || null;
+  const isFirstMessage = !conversationContext;
   
-  let basePrompt = `אתה QUANTUM Sales AI - הבוט החכם ביותר בתחום הנדל"ן בישראל.\n\n## זהות QUANTUM\n- מתווכים בוטיק עם מומחיות בפינוי-בינוי\n- "מח חד, הבנה עמוקה, גישה לנכסים סודיים"\n- כל לקוח מרגיש כמו "בן יחיד"\n- לא פלטפורמה טכנולוגית - אנשים אמיתיים עם יתרון טכנולוגי\n\n## הסגנון שלך\n- חד אבל חם - חכם אבל לא יהיר\n- ישיר אבל אכפתי\n- קצר - לא יותר מ-2-3 משפטים\n- אמוג'י במינון - רק 👋 בפתיחה או ✨ לנקודות חשובות\n- עברית טבעית - לא פורמלית מדי\n\n## המטרה שלך (לפי שלבים)`;
+  let basePrompt = `אתה נציג QUANTUM - משרד תיווך בוטיק המתמחה בפינוי-בינוי.
+
+## זהות QUANTUM
+- מתווכים בוטיק עם מומחיות בפינוי-בינוי
+- "מח חד, הבנה עמוקה, גישה לנכסים סודיים"
+- כל לקוח מרגיש כמו "בן יחיד"
+- לא פלטפורמה טכנולוגית - אנשים אמיתיים עם יתרון טכנולוגי
+
+## הסגנון שלך
+- חד אבל חם - חכם אבל לא יהיר
+- ישיר אבל אכפתי
+- קצר - לא יותר מ-2-3 משפטים
+- אמוג'י במינון - רק 👋 לפתיחה הראשונה או ✨ לנקודות חשובות
+- עברית טבעית - לא פורמלית מדי
+
+## חוק ברזל #1 - הפתיחה
+❌ לעולם אל תאמר "אני מ-QUANTUM" / "שלום, אני מ-QUANTUM" / "היי, QUANTUM כאן"
+✓ הם פנו אליך - הם יודעים מי אתה. קפוץ ישר לעניין.
+✓ פתיחה אידיאלית: שאלה אחת ממוקדת שמראה שאתה מבין מה הם צריכים.`;
 
   // Stage-specific instructions
   if (stage === 'greeting') {
-    basePrompt += `\n\n### שלב: פתיחה\n1. שאל את השם (אם אין)\n2. זהה מהר: קונה או מוכר?\n3. המשך ישר לשאלות הנכונות`;
+    if (isFirstMessage) {
+      basePrompt += `
+
+### שלב: פגישה ראשונה
+המטרה: להבין מהר מה הם צריכים ולהראות שאתה הבן אדם הנכון.
+1. אל תציג את עצמך - הם יודעים עם מי הם מדברים
+2. שאל שאלה אחת פתוחה שמזמינה אותם לספר
+3. אם הם כבר כתבו מה הם רוצים - הגב ישירות לזה
+דוגמה טובה: "ספר לי - קונה או מוכר, ומה מחפש?"
+דוגמה רעה: "שלום! אני מ-QUANTUM. איך אני יכול לעזור לך?"`;
+    } else {
+      basePrompt += `
+
+### שלב: פתיחה (המשך)
+1. שאל את השם (אם אין)
+2. זהה מהר: קונה או מוכר?
+3. המשך ישר לשאלות הנכונות`;
+    }
   } else if (stage === 'info_gathering') {
-    basePrompt += `\n\n### שלב: איסוף מידע\n${userType === 'buyer' ? `\n**קונה:**\n- איזה אזור מעניין?\n- באיזה תקציב?\n- יש מתווך כבר?\n- למה לא מצא עדיין? (חשוב!)\n` : userType === 'seller' ? `\n**מוכר:**\n- איפה הנכס ומה הסוג?\n- למה רוצה למכור? (דחיפות!)\n- יש מתווך כבר?\n- מה לא עובד עם המתווך הנוכחי?\n` : `\n- קודם כל: קונה או מוכר?\n`}`;
+    basePrompt += `
+
+### שלב: איסוף מידע
+${userType === 'buyer' ? `
+**קונה:**
+- איזה אזור מעניין?
+- באיזה תקציב?
+- יש מתווך כבר?
+- למה לא מצא עדיין? (חשוב!)
+` : userType === 'seller' ? `
+**מוכר:**
+- איפה הנכס ומה הסוג?
+- למה רוצה למכור? (דחיפות!)
+- יש מתווך כבר?
+- מה לא עובד עם המתווך הנוכחי?
+` : `
+- קודם כל: קונה או מוכר?
+`}`;
   } else if (stage === 'scheduling') {
-    basePrompt += `\n\n### שלב: קביעת פגישה\n- "בוא נקבע שיחת היכרות קצרה עם [שם מומחה]"\n- שאל מתי נוח - היום? מחר?\n- אל תהיה לחוץ - תן ללקוח להחליט`;
+    basePrompt += `
+
+### שלב: קביעת פגישה
+- "בוא נקבע שיחת היכרות קצרה"
+- שאל מתי נוח - היום? מחר?
+- אל תהיה לחוץ - תן ללקוח להחליט`;
   }
 
-  // Add conversation context if exists
   if (conversationContext) {
-    basePrompt += `\n\n## השיחה עד כה:\n${conversationContext}\n\nהמשך את השיחה באופן טבעי בהתאם למה שכבר נאמר.`;
+    basePrompt += `
+
+## השיחה עד כה:
+${conversationContext}
+
+המשך את השיחה באופן טבעי בהתאם למה שכבר נאמר.`;
   }
 
-  // Add name if we have it
   if (name) {
     basePrompt += `\n\nשם הלקוח: ${name} - השתמש בשם מדי פעם.`;
   }
 
-  basePrompt += `\n\n## חוקי זהב\n❌ לעולם אל תשאל את אותה שאלה פעמיים\n❌ אל תהיה דוחף - תן ללקוח לנשום\n❌ אל תדבר יותר מדי - שאל, הקשב, המשך\n✓ היה אנושי - לא סקריפט\n✓ התאם את עצמך ללקוח - יש כאלה שרוצים עסקי, יש שרוצים יותר חברותי\n✓ אם הלקוח לא מעוניין - בסדר! "אם תשנה דעתך, אני כאן"\n\nתן תשובה אחת קצרה, ממוקדת, טבעית.`;
+  basePrompt += `
+
+## חוקי זהב
+❌ לעולם אל תאמר "אני מ-QUANTUM" - בשום שלב בשיחה
+❌ לעולם אל תשאל את אותה שאלה פעמיים
+❌ אל תהיה דוחף - תן ללקוח לנשום
+❌ אל תדבר יותר מדי - שאל, הקשב, המשך
+✓ היה אנושי - לא סקריפט
+✓ התאם את עצמך ללקוח - יש כאלה שרוצים עסקי, יש שרוצים יותר חברותי
+✓ אם הלקוח לא מעוניין - בסדר! "אם תשנה דעתך, אני כאן"
+
+תן תשובה אחת קצרה, ממוקדת, טבעית.`;
 
   return basePrompt;
 }
@@ -336,8 +405,8 @@ router.get('/whatsapp/webhook', (req, res) => {
   res.status(200).json({
     success: true,
     message: 'QUANTUM WhatsApp Webhook - Active',
-    version: '6.1',
-    features: ['conversation_tracking', 'context_awareness', 'lead_management', 'auto_handoff'],
+    version: '6.2',
+    features: ['conversation_tracking', 'context_awareness', 'lead_management', 'auto_handoff', 'smart_first_response'],
     webhookUrl: getWebhookUrl(),
     whatsappNumber: '037572229',
     timestamp: new Date().toISOString()
@@ -405,7 +474,7 @@ router.post('/whatsapp/webhook', async (req, res) => {
         Phone: parsed.phone,
         Settings: {
           CustomerMessageId: `bot_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-          CustomerParameter: 'QUANTUM_BOT_V6_1'
+          CustomerParameter: 'QUANTUM_BOT_V6_2'
         }
       }
     }, {
@@ -432,7 +501,7 @@ router.post('/whatsapp/webhook', async (req, res) => {
   }
 });
 
-// Conversations dashboard - returns both 'conversations' and 'data' for compatibility
+// Conversations dashboard
 router.get('/whatsapp/conversations', async (req, res) => {
   try {
     const { search, status } = req.query;
@@ -461,7 +530,6 @@ router.get('/whatsapp/conversations', async (req, res) => {
     query += ` GROUP BY l.id ORDER BY MAX(wc.created_at) DESC NULLS LAST LIMIT 50`;
     
     const result = await pool.query(query, params);
-    // Return both keys for dashboard compatibility
     res.json({ success: true, conversations: result.rows, data: result.rows, total: result.rows.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -491,13 +559,12 @@ router.get('/whatsapp/conversations/:leadId', async (req, res) => {
   }
 });
 
-// Get messages by phone OR leadId - dashboard compatibility endpoint
+// Get messages by phone OR leadId
 router.get('/whatsapp/conversations/:identifier/messages', async (req, res) => {
   try {
     const { identifier } = req.params;
     let leadId;
 
-    // Short numeric = leadId, longer string or phone = look up by phone
     if (/^\d{1,8}$/.test(identifier)) {
       leadId = parseInt(identifier);
     } else {
@@ -523,7 +590,6 @@ router.get('/whatsapp/conversations/:identifier/messages', async (req, res) => {
     }
 
     const lead = leadResult.rows[0];
-    // Transform to format dashboard JS expects: direction instead of sender
     const data = msgResult.rows.map(m => ({
       direction: m.sender === 'bot' ? 'outgoing' : 'incoming',
       message: m.message,
@@ -551,14 +617,15 @@ router.get('/whatsapp/setup-guide', (req, res) => {
   res.type('text/html').send(`
 <!DOCTYPE html>
 <html dir="rtl" lang="he">
-<head><meta charset="UTF-8"><title>QUANTUM WhatsApp v6.1</title></head>
+<head><meta charset="UTF-8"><title>QUANTUM WhatsApp v6.2</title></head>
 <body style="font-family:system-ui;max-width:900px;margin:40px auto;padding:20px">
-  <h1 style="color:#2563eb">🚀 QUANTUM WhatsApp Bot v6.1</h1>
+  <h1 style="color:#2563eb">🚀 QUANTUM WhatsApp Bot v6.2</h1>
   <div style="background:#ecfdf5;border-right:4px solid #10b981;padding:15px">
-    <strong>✓ Active!</strong> Auto-handoff, conversation tracking, analytics.
+    <strong>✓ Active!</strong> Smart first response, auto-handoff, conversation tracking.
   </div>
   <p><strong>Webhook:</strong> <code>${webhookUrl}</code></p>
   <ul>
+    <li>✓ Smart first response (no "אני מ-QUANTUM")</li>
     <li>✓ Auto-handoff detection</li>
     <li>✓ Follow-up automation</li>
     <li>✓ Analytics dashboard</li>
@@ -615,11 +682,11 @@ router.get('/whatsapp/stats', async (req, res) => {
     
     res.json({
       success: true,
-      version: '6.1',
+      version: '6.2',
       timestamp: new Date().toISOString(),
       webhookUrl: getWebhookUrl(),
       stats: stats.rows[0],
-      features: ['Conversation tracking', 'Context-aware AI', 'Lead management', 'Auto-handoff', 'Analytics']
+      features: ['Smart first response', 'Conversation tracking', 'Context-aware AI', 'Lead management', 'Auto-handoff']
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
