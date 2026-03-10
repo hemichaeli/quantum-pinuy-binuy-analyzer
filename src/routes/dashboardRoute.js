@@ -293,32 +293,32 @@ function generateDashboardHTML(stats) {
     </div>
 
     <div class="nav-tabs">
-        <div class="nav-tab active" onclick="switchTab('dashboard')">📊 דשבורד</div>
-        <div class="nav-tab" onclick="switchTab('ads')">🏘 מודעות</div>
-        <div class="nav-tab" onclick="switchTab('messages')">💬 הודעות</div>
-        <div class="nav-tab" onclick="switchTab('leads')">👤 לידים</div>
-        <div class="nav-tab" onclick="switchTab('complexes')">🏢 מתחמים</div>
-        <div class="nav-tab" onclick="switchTab('kones')">🏗️ כינוס</div>
-        <div class="nav-tab" onclick="switchTab('news')">📰 חדשות</div>
-        <div class="nav-tab" onclick="switchTab('scheduling')">📅 תיאומים</div>
-        <div class="nav-tab" onclick="switchTab('scrapers')">🔍 סריקות</div>
+        <div class="nav-tab active" data-tab="dashboard">📊 דשבורד</div>
+        <div class="nav-tab" data-tab="ads">🏘 מודעות</div>
+        <div class="nav-tab" data-tab="messages">💬 הודעות</div>
+        <div class="nav-tab" data-tab="leads">👤 לידים</div>
+        <div class="nav-tab" data-tab="complexes">🏢 מתחמים</div>
+        <div class="nav-tab" data-tab="kones">🏗️ כינוס</div>
+        <div class="nav-tab" data-tab="news">📰 חדשות</div>
+        <div class="nav-tab" data-tab="scheduling">📅 תיאומים</div>
+        <div class="nav-tab" data-tab="scrapers">🔍 סריקות</div>
     </div>
 
     <div id="tab-dashboard" class="tab-content active">
         <div class="stats-grid">
-            <div class="stat-card" onclick="switchTab('complexes')" title="לחץ לפתיחת רשימת המתחמים">
+            <div class="stat-card" data-tab="complexes" title="לחץ לפתיחת רשימת המתחמים">
                 <div class="stat-number">${stats.totalComplexes}</div>
                 <div class="stat-label">מתחמי פינוי-בינוי</div>
                 <div class="stat-hint">→ לחץ לפתיחת רשימת המתחמים</div>
                 <div class="stat-change">+12% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('ads')" title="לחץ לפתיחת רשימת המודעות">
+            <div class="stat-card" data-tab="ads" title="לחץ לפתיחת רשימת המודעות">
                 <div class="stat-number">${stats.newListings}</div>
                 <div class="stat-label">מודעות פעילות</div>
                 <div class="stat-hint">→ לחץ לפתיחת רשימת המודעות</div>
                 <div class="stat-change">+8% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('messages')" title="לחץ לפתיחת הודעות">
+            <div class="stat-card" data-tab="messages" title="לחץ לפתיחת הודעות">
                 <div class="stat-number">${stats.activeMessages}</div>
                 <div class="stat-label">שיחות WhatsApp</div>
                 <div class="stat-hint">→ לחץ לפתיחת מרכז השיחות</div>
@@ -336,13 +336,13 @@ function generateDashboardHTML(stats) {
                 <div class="stat-hint">→ IAI > 75 | לחץ לפתיחת רשימה</div>
                 <div class="stat-change">+31% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('ads')" title="לחץ לפתיחת עסקאות">
+            <div class="stat-card" data-tab="ads" title="לחץ לפתיחת עסקאות">
                 <div class="stat-number">${stats.closedDeals}</div>
                 <div class="stat-label">עסקאות תיווך</div>
                 <div class="stat-hint">→ לחץ לפתיחת נתונים</div>
                 <div class="stat-change">+67% השנה</div>
             </div>
-            <div class="stat-card" onclick="switchTab('kones')" title="לחץ לפתיחת כינוסי נכסים">
+            <div class="stat-card" data-tab="kones" title="לחץ לפתיחת כינוסי נכסים">
                 <div class="stat-number">${stats.konesCount}</div>
                 <div class="stat-label">כינוסי נכסים</div>
                 <div class="stat-hint">→ לחץ לפתיחת רשימת כינוסים</div>
@@ -353,19 +353,19 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>⚡ פעולות מהירות</h2>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-                <button class="btn btn-intel" onclick="loadMorningIntelligence()">🧠 ינטליגנציה יומית</button>
-                <button class="btn" onclick="runAction('scan-yad2')">🏠 סרוק יד2</button>
-                <button class="btn" onclick="runAction('scan-facebook')">📱 סרוק פייסבוק</button>
-                <button class="btn" onclick="refreshStats()">🔄 רענן נתונים</button>
-                <button class="btn btn-secondary" onclick="window.open('/api/docs','_blank')">📋 API Docs</button>
-                <button class="btn btn-secondary" onclick="window.open('/sandbox','_blank')">🧪 Sandbox</button>
+                <button class="btn btn-intel" data-onclick="loadMorningIntelligence()">🧠 ינטליגנציה יומית</button>
+                <button class="btn" data-onclick="runAction('scan-yad2')">🏠 סרוק יד2</button>
+                <button class="btn" data-onclick="runAction('scan-facebook')">📱 סרוק פייסבוק</button>
+                <button class="btn" data-onclick="refreshStats()">🔄 רענן נתונים</button>
+                <button class="btn btn-secondary" data-onclick="window.open('/api/docs','_blank')">📋 API Docs</button>
+                <button class="btn btn-secondary" data-onclick="window.open('/sandbox','_blank')">🧪 Sandbox</button>
             </div>
         </div>
 
         <div class="section" id="morning-section" style="display:none;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
                 <h2 style="margin:0;">🧠 ינטליגנציה יומית</h2>
-                <button class="btn btn-secondary" onclick="document.getElementById('morning-section').style.display='none'" style="padding:6px 12px;font-size:12px;">✕ סגור</button>
+                <button class="btn btn-secondary" data-onclick="document.getElementById('morning-section').style.display='none'" style="padding:6px 12px;font-size:12px;">✕ סגור</button>
             </div>
             <div id="morning-content"><div class="loading">טוען...</div></div>
         </div>
@@ -395,8 +395,8 @@ function generateDashboardHTML(stats) {
                 </select>
             </div>
             <div class="actions-bar">
-                <button class="btn" onclick="loadAds()">🔍 טען מודעות</button>
-                <button class="btn btn-secondary" onclick="exportData('ads')">📊 ייצוא לאקסל</button>
+                <button class="btn" data-onclick="loadAds()">🔍 טען מודעות</button>
+                <button class="btn btn-secondary" data-onclick="exportData('ads')">📊 ייצוא לאקסל</button>
             </div>
             <div id="ads-list" class="data-list"><div class="loading">טוען מודעות...</div></div>
         </div>
@@ -414,8 +414,8 @@ function generateDashboardHTML(stats) {
                         <option value="closed">סגורות</option>
                         <option value="agent_needed">דורש טיפול</option>
                     </select>
-                    <button class="btn" onclick="loadConversations()">🔄 רענן</button>
-                    <button class="btn btn-secondary" onclick="exportData('messages')">📊 ייצוא</button>
+                    <button class="btn" data-onclick="loadConversations()">🔄 רענן</button>
+                    <button class="btn btn-secondary" data-onclick="exportData('messages')">📊 ייצוא</button>
                 </div>
             </div>
         </div>
@@ -436,11 +436,11 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>👤 רשימת לידים</h2>
             <div class="actions-bar">
-                <button class="btn" onclick="loadLeads()">👤 כל הלידים</button>
-                <button class="btn btn-secondary" onclick="loadLeads('qualified')">✰ מוכשרים</button>
-                <button class="btn btn-secondary" onclick="loadLeads('contacted')">📞 בתהליך</button>
-                <button class="btn btn-secondary" onclick="loadLeads('new')">🆕 חדשים</button>
-                <button class="btn btn-green" onclick="exportData('leads')">📊 ייצוא לאקסל</button>
+                <button class="btn" data-onclick="loadLeads()">👤 כל הלידים</button>
+                <button class="btn btn-secondary" data-onclick="loadLeads('qualified')">✰ מוכשרים</button>
+                <button class="btn btn-secondary" data-onclick="loadLeads('contacted')">📞 בתהליך</button>
+                <button class="btn btn-secondary" data-onclick="loadLeads('new')">🆕 חדשים</button>
+                <button class="btn btn-green" data-onclick="exportData('leads')">📊 ייצוא לאקסל</button>
             </div>
             <div id="leads-filter-badge" style="margin-bottom:10px;"></div>
             <div id="leads-list" class="data-list"><div class="loading">טוען לידים...</div></div>
@@ -463,9 +463,9 @@ function generateDashboardHTML(stats) {
                 </select>
             </div>
             <div class="actions-bar">
-                <button class="btn" onclick="loadComplexes()">🔍 טען מתחמים</button>
-                <button class="btn btn-secondary" onclick="loadComplexes('hot')">🔥 הזדמנויות חמות</button>
-                <button class="btn btn-secondary" onclick="exportData('complexes')">📊 ייצוא</button>
+                <button class="btn" data-onclick="loadComplexes()">🔍 טען מתחמים</button>
+                <button class="btn btn-secondary" data-onclick="loadComplexes('hot')">🔥 הזדמנויות חמות</button>
+                <button class="btn btn-secondary" data-onclick="exportData('complexes')">📊 ייצוא</button>
             </div>
             <div id="complexes-filter-badge" style="margin-bottom:10px;"></div>
             <div id="complexes-list" class="data-list"><div class="loading">טוען מתחמים...</div></div>
@@ -488,11 +488,11 @@ function generateDashboardHTML(stats) {
                 </select>
             </div>
             <div class="actions-bar">
-                <button class="btn" onclick="loadKones()">🔍 טען כינוסים</button>
-                <button class="btn btn-secondary" onclick="loadKones('landline')">📞 קווי ארץ</button>
-                <button class="btn btn-secondary" onclick="loadKones('pending')">⏳ ממתינים</button>
-                <button class="btn btn-green" onclick="runKonesAutoContact()">📱 הפעל Auto Contact</button>
-                <button class="btn btn-secondary" onclick="exportData('kones')">📊 ייצוא</button>
+                <button class="btn" data-onclick="loadKones()">🔍 טען כינוסים</button>
+                <button class="btn btn-secondary" data-onclick="loadKones('landline')">📞 קווי ארץ</button>
+                <button class="btn btn-secondary" data-onclick="loadKones('pending')">⏳ ממתינים</button>
+                <button class="btn btn-green" data-onclick="runKonesAutoContact()">📱 הפעל Auto Contact</button>
+                <button class="btn btn-secondary" data-onclick="exportData('kones')">📊 ייצוא</button>
             </div>
             <div id="kones-filter-badge" style="margin-bottom:10px;"></div>
             <div id="kones-stats-bar" style="margin-bottom:12px;display:none;"></div>
@@ -504,7 +504,7 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>📰 חדשות שוק הנדלן</h2>
             <div class="actions-bar">
-                <button class="btn" onclick="loadFacebookAds()">📱 מודעות פייסבוק</button>
+                <button class="btn" data-onclick="loadFacebookAds()">📱 מודעות פייסבוק</button>
             </div>
             <div id="news-list" class="data-list">
                 <div class="data-item"><h3>📈 ריבית בנק ישראל</h3><p>מחירי הדירות עלו בממוצע ב-3.2% בחודש האחרון</p><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">קטגוריה:</span><span class="data-meta-value">מאקרו</span></div></div></div>
@@ -531,7 +531,7 @@ function generateDashboardHTML(stats) {
                     <option value="ru">🇷🇺 רוסית</option>
                 </select>
                 <input id="sched-search" type="text" placeholder="🔍 חיפוש שם / טלפון..." oninput="filterSchedulingTable()" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:8px 12px;font-size:13px;min-width:200px;">
-                <button class="btn" onclick="loadScheduling()" style="margin-right:auto;">🔄 רענן</button>
+                <button class="btn" data-onclick="loadScheduling()" style="margin-right:auto;">🔄 רענן</button>
                 <a href="/api/scheduling/campaign" target="_blank" class="btn" style="background:#1e3a5f;border-color:#3b82f6;color:#93c5fd;">📊 דוח קמפיין</a>
             </div>
             <div id="sched-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px;"></div>
@@ -543,8 +543,8 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>🔍 מקורות סריקה — Real Estate Data Sources</h2>
             <div class="actions-bar" style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                <button class="btn btn-green" onclick="runAllScrapers()">▶️ הפעל את כולם</button>
-                <button class="btn" onclick="loadScraperStatus()">🔄 רענן סטטוס</button>
+                <button class="btn btn-green" data-onclick="runAllScrapers()">▶️ הפעל את כולם</button>
+                <button class="btn" data-onclick="loadScraperStatus()">🔄 רענן סטטוס</button>
             </div>
             <div id="scrapers-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:16px;">
                 <!-- Scraper cards injected by JS -->
@@ -561,6 +561,59 @@ function generateDashboardHTML(stats) {
         document.addEventListener('DOMContentLoaded', function() {
             updateTime();
             setInterval(updateTime, 1000);
+            
+            // Event delegation for nav-tabs (data-tab attribute)
+            document.querySelectorAll('.nav-tab[data-tab]').forEach(function(el) {
+                el.addEventListener('click', function() {
+                    switchTab(this.getAttribute('data-tab'));
+                });
+            });
+            
+            // Event delegation for stat-cards (data-tab attribute)
+            document.querySelectorAll('.stat-card[data-tab]').forEach(function(el) {
+                el.addEventListener('click', function() {
+                    switchTab(this.getAttribute('data-tab'));
+                });
+            });
+            
+            // Event delegation for buttons (data-onclick attribute)
+            document.querySelectorAll('[data-onclick]').forEach(function(el) {
+                el.addEventListener('click', function() {
+                    var fn = this.getAttribute('data-onclick');
+                    try { 
+                        // Execute the function call safely
+                        var funcMatch = fn.match(/^(\w+)\((.*)\)$/);
+                        if (funcMatch) {
+                            var funcName = funcMatch[1];
+                            var argsStr = funcMatch[2].trim();
+                            if (typeof window[funcName] === 'function') {
+                                if (argsStr === '') {
+                                    window[funcName]();
+                                } else {
+                                    // Parse the argument (single string arg)
+                                    var argVal = argsStr.replace(/^\'|^\'|^'|^"/g, '').replace(/\'$|\'$|'$|"$/g, '');
+                                    // Handle escaped quotes
+                                    argVal = argsStr.replace(/^['"\\]+|['"\\]+$/g, '');
+                                    // Try eval for complex args
+                                    try {
+                                        var args = eval('[' + argsStr + ']');
+                                        window[funcName].apply(null, args);
+                                    } catch(e2) {
+                                        window[funcName](argsStr);
+                                    }
+                                }
+                            } else {
+                                // Fallback to eval
+                                eval(fn);
+                            }
+                        } else {
+                            eval(fn);
+                        }
+                    } catch(e) { 
+                        console.error('Button action error:', fn, e); 
+                    }
+                });
+            });
         });
 
         function updateTime() {
@@ -1003,7 +1056,7 @@ function generateDashboardHTML(stats) {
         }
 
         function errorHTML(msg, retryFn) {
-            return '<div class="error"><p>❌ שגיאה: ' + msg + '</p><button class="btn" onclick="' + retryFn + '" style="margin-top:10px;">נסה שוב</button></div>';
+            return '<div class="error"><p>❌ שגיאה: ' + msg + '</p><button class="btn" data-onclick="' + retryFn + '" style="margin-top:10px;">נסה שוב</button></div>';
         }
 
         // ── SCHEDULING TAB ───────────────────────────────────────────
@@ -1115,7 +1168,7 @@ function generateDashboardHTML(stats) {
                     + '<div>🕐 הפעלה אחרונה:<br><span style="color:#e2e8f0;">' + lastRun + '</span></div>'
                     + '<div>📦 מודעות שנמצאו:<br><span style="color:#d4af37;font-weight:700;font-size:16px;">' + count + '</span></div></div>'
                     + (st.error ? '<div style="font-size:11px;color:#ef4444;margin-bottom:8px;padding:6px;background:#1e0a0a;border-radius:4px;">⚠️ ' + st.error + '</div>' : '')
-                    + '<button class="btn btn-green" data-id="' + s.id + '" data-endpoint="' + s.endpoint + '" onclick="runScraper(this.dataset.id, this.dataset.endpoint)" '
+                    + '<button class="btn btn-green" data-id="' + s.id + '" data-endpoint="' + s.endpoint + '" data-onclick="runScraper(this.dataset.id, this.dataset.endpoint)" '
                     + (running ? 'disabled' : '') + ' style="width:100%;padding:8px;font-size:13px;">'
                     + (running ? '⏳ פועל...' : '▶️ סרוק עכשיו') + '</button></div>';
             }).join('');
