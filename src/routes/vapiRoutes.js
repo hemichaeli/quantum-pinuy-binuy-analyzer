@@ -1,6 +1,6 @@
 /**
  * QUANTUM Voice AI - Vapi Integration Routes
- * v1.8.0 - inforuService XML SMS, pre-fetched slots in prompt, native endCall
+ * v1.9.0 - server-ip endpoint, inforuService SMS, pre-fetched slots
  */
 
 const express = require('express');
@@ -64,14 +64,13 @@ async function fetchFreeSlots() {
   const now = new Date();
   const todayStr = now.toLocaleDateString('sv-SE', { timeZone: TZ });
 
-  // Build candidate slots for next 3 weekdays
   const candidates = [];
   let d = new Date(now);
   let daysAdded = 0;
   while (daysAdded < 3) {
     d = new Date(d.getTime() + 86400000);
     const dow = d.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
-    if (dow === 'Fri' || dow === 'Sat') continue; // Israel weekend
+    if (dow === 'Fri' || dow === 'Sat') continue;
     const dateStr = d.toLocaleDateString('sv-SE', { timeZone: TZ });
     for (const h of [9, 10, 11, 13, 14, 15, 16]) candidates.push({ dateStr, hour: h });
     daysAdded++;
@@ -133,8 +132,6 @@ function getFallbackSlots(todayStr) {
 }
 
 // ─── Vapi tool call parser ────────────────────────────────────────────────────
-// Vapi sends: body.message.toolCallList  (NOT toolCalls)
-// Response must be: { results: [{ toolCallId, result }] }
 
 function parseVapiToolCall(body, toolName) {
   const list = body?.message?.toolCallList || body?.message?.toolCalls || [];
@@ -163,7 +160,7 @@ function generateCalendarLinks({ title, description, location, startISO, duratio
   };
 }
 
-// ─── Send meeting notification (SMS via inforuService XML, WA fallback) ───────
+// ─── Send meeting notification ────────────────────────────────────────────────
 
 async function sendMeetingNotification({ phone, leadName, meetingDatetime, address }) {
   const inforuService = require('../services/inforuService');
@@ -193,25 +190,15 @@ async function sendMeetingNotification({ phone, leadName, meetingDatetime, addre
     'קוונטום נדלן | 03-757-2229',
   ].filter(l => l !== null).join('\n');
 
-  // SMS via XML endpoint (uses INFORU_PASSWORD / INFORU_USERNAME)
   try {
     const smsResult = await inforuService.sendSms(phone, msg);
-    if (smsResult.success) {
-      logger.info(`[VAPI] Meeting SMS sent to ${phone}`);
-      return { success: true, channel: 'sms' };
-    }
+    if (smsResult.success) { logger.info(`[VAPI] Meeting SMS sent to ${phone}`); return { success: true, channel: 'sms' }; }
     logger.warn('[VAPI] SMS failed, trying WhatsApp chat:', smsResult.description);
-  } catch (err) {
-    logger.warn('[VAPI] SMS exception, trying WhatsApp chat:', err.message);
-  }
+  } catch (err) { logger.warn('[VAPI] SMS exception, trying WhatsApp chat:', err.message); }
 
-  // WhatsApp fallback (chat - only works within 24h window)
   try {
     const waResult = await inforuService.sendWhatsAppChat(phone, msg);
-    if (waResult.success) {
-      logger.info(`[VAPI] Meeting WhatsApp sent to ${phone}`);
-      return { success: true, channel: 'whatsapp' };
-    }
+    if (waResult.success) { logger.info(`[VAPI] Meeting WhatsApp sent to ${phone}`); return { success: true, channel: 'whatsapp' }; }
     logger.warn('[VAPI] WhatsApp also failed:', waResult.description || JSON.stringify(waResult));
     return { success: false, error: waResult.description };
   } catch (err) {
@@ -228,9 +215,7 @@ async function buildCallerContext(phone) {
   let lead = null;
   try {
     const placeholders = variants.map((_, i) => `$${i + 1}`).join(', ');
-    const result = await pool.query(
-      `SELECT * FROM leads WHERE phone IN (${placeholders}) ORDER BY updated_at DESC LIMIT 1`, variants
-    );
+    const result = await pool.query(`SELECT * FROM leads WHERE phone IN (${placeholders}) ORDER BY updated_at DESC LIMIT 1`, variants);
     if (result.rows.length > 0) lead = result.rows[0];
   } catch (err) { logger.warn('[VAPI] Lead lookup error:', err.message); }
 
@@ -242,6 +227,16 @@ async function buildCallerContext(phone) {
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
+
+// Get this server's public outbound IP (for INFORU whitelist)
+router.get('/server-ip', async (req, res) => {
+  try {
+    const r = await axios.get('https://api.ipify.org?format=json', { timeout: 5000 });
+    res.json({ success: true, server_ip: r.data.ip, note: 'Add this IP to INFORU whitelist: https://uapi.inforu.co.il → Settings → IP Whitelist' });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
 
 router.get('/agents', (req, res) => {
   res.json({ success: true, agents: [{ id: 'cold_prospecting', name: 'Cold Prospecting', hasAssistantId: !!process.env.VAPI_ASSISTANT_COLD }] });
@@ -255,7 +250,7 @@ router.get('/google-auth-status', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// ─── Send Meeting SMS (called by Vapi tool) ───────────────────────────────────
+// ─── Send Meeting SMS (Vapi tool endpoint) ────────────────────────────────────
 
 router.post('/send-meeting-sms', async (req, res) => {
   try {
@@ -324,8 +319,6 @@ router.post('/outbound', async (req, res) => {
       ? slots.slice(0, 4).map(s => s.label).join(', ')
       : 'מחר בעשר בבוקר, מחרתיים בשתיים אחרי הצהריים';
 
-    const slotsJson = JSON.stringify(slots.slice(0, 4));
-
     logger.info(`[VAPI] Outbound to ${phone} | slots: ${slotsText}`);
 
     const payload = {
@@ -337,7 +330,7 @@ router.post('/outbound', async (req, res) => {
           lead_context: context.lead_context || 'לקוח חדש',
           complex_city: metadata.city || '',
           available_slots: slotsText,
-          slots_json: slotsJson,
+          slots_json: JSON.stringify(slots.slice(0, 4)),
         },
         metadata: { agent_type, lead_id: lead_id || context.lead_id, complex_id, ...metadata },
       },
