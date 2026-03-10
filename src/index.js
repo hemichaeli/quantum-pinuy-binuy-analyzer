@@ -15,7 +15,7 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const VERSION = '4.89.0';
-const BUILD = '2026-03-10-v4.87.2-all-syntax-errors-fixed';
+const BUILD = '2026-03-10-v4.89.0-short-calendar-links';
 
 async function runAutoMigrations() {
   try {
@@ -65,7 +65,7 @@ const limiter = rateLimit({
     req.path.startsWith('/api/scheduling/') || req.path.startsWith('/api/backup/') ||
     req.path.startsWith('/api/notifications/') || req.path.startsWith('/api/search/') ||
     req.path.startsWith('/api/docs') || req.path.startsWith('/api/auto-contact') ||
-    req.path.startsWith('/booking/') || req.path.startsWith('/api/kones/') ||
+    req.path.startsWith('/booking/') || req.path.startsWith('/cal/') || req.path.startsWith('/api/kones/') ||
     req.path.startsWith('/api/appointments/') || req.path.startsWith('/api/test/'),
   message: { error: 'Too many requests, please try again later' }
 });
@@ -89,6 +89,7 @@ function loadAllRoutes() {
     { path: '/dashboard', file: 'routes/dashboardRoute.js' },
     { path: '/sandbox', file: 'routes/sandboxRoute.js' },
     { path: '/booking', file: 'routes/bookingRoute.js' },
+    { path: '/cal', file: 'routes/calRoute.js' },
     { path: '/api/projects', file: 'routes/projects.js' },
     { path: '/api', file: 'routes/opportunities.js' },
     { path: '/api/scan', file: 'routes/scan.js' },
@@ -337,7 +338,6 @@ async function start() {
 
   try { const { startOptimizationCron } = require('./cron/optimizationCron'); startOptimizationCron(); logger.info('[ScheduleOptimization] ACTIVE'); } catch (e) { logger.warn('[ScheduleOptimization] Failed:', e.message); }
 
-  // ── Incoming WhatsApp poll (every 60 seconds via INFORU PullData) ──────────
   try {
     const { pollIncomingWhatsApp } = require('./cron/incomingWhatsAppCron');
     const cron = require('node-cron');
@@ -347,7 +347,6 @@ async function start() {
     logger.info('[IncomingWA] ACTIVE - polling INFORU every 60s');
   } catch (e) { logger.warn('[IncomingWA] Failed to start:', e.message); }
 
-  // ── Vapi Keyterms Support Checker (every 3 days at 09:00) ─────────────────
   try {
     const cron = require('node-cron');
     cron.schedule('0 9 */3 * *', async () => {
