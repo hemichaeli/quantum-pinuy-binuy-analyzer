@@ -638,19 +638,16 @@ function generateDashboardHTML(stats) {
                 });
             });
             
-            // Event delegation for buttons (data-onclick attribute)
-            document.querySelectorAll('[data-onclick]').forEach(function(el) {
-                el.addEventListener('click', function() {
-                    var fn = this.getAttribute('data-onclick');
-                    try { eval(fn); } catch(e) { console.error('Action error:', fn, e); }
-                });
-            });
-            
-            // Event delegation for inforu send buttons
+            // Document-level delegation for data-onclick (covers dynamic buttons too)
             document.addEventListener('click', function(e) {
-                const btn = e.target.closest('.inforu-btn');
+                const btn = e.target.closest('[data-onclick]');
                 if (btn) {
-                    sendInforu(btn.dataset.phone, btn.dataset.name);
+                    var fn = btn.getAttribute('data-onclick');
+                    try { eval(fn); } catch(err) { console.error('Action error:', fn, err); }
+                }
+                const inforuBtn = e.target.closest('.inforu-btn');
+                if (inforuBtn) {
+                    sendInforu(inforuBtn.dataset.phone, inforuBtn.dataset.name);
                 }
             });
         });
@@ -665,9 +662,9 @@ function generateDashboardHTML(stats) {
             document.querySelectorAll('.nav-tab').forEach(n => n.classList.remove('active'));
             const target = document.getElementById('tab-' + tabName);
             if (target) target.classList.add('active');
-            // Activate the correct nav tab by matching onclick attribute
+            // Activate the correct nav tab by matching data-tab attribute
             document.querySelectorAll('.nav-tab').forEach(function(n) {
-                if (n.getAttribute('onclick') && n.getAttribute('onclick').includes("'" + tabName + "'")) {
+                if (n.getAttribute('data-tab') === tabName) {
                     n.classList.add('active');
                 }
             });
@@ -730,7 +727,7 @@ function generateDashboardHTML(stats) {
                             '<div class="meta">' +
                             '<span class="intel-score" style="background:#f59e0b;color:#000;">SSI ' + ssi + '</span>' +
                             (s.city ? s.city : '') +
-                            (s.asking_price ? ' | ₪' + parseInt(s.asking_price).toLocaleString() : '') +
+                            (s.asking_price ? ' | \u20AA' + parseInt(s.asking_price).toLocaleString() : '') +
                             '</div></div>';
                     }
                 }
@@ -1094,10 +1091,10 @@ function generateDashboardHTML(stats) {
                             statsBar.style.flexWrap = 'wrap';
                             statsBar.style.gap = '8px';
                             statsBar.innerHTML =
-                                '<span class="filter-active-badge" style="cursor:pointer;" onclick="loadKones(&apos;contacted&apos;)">✅ נוצר קשר: ' + s.contacted + '</span>' +
-                                '<span class="filter-active-badge" style="background:rgba(107,114,128,0.2);border-color:#6b7280;color:#9ca3af;cursor:pointer;" onclick="loadKones(&apos;landline&apos;)">📞 קו ארץ: ' + s.landline + '</span>' +
-                                '<span class="filter-active-badge" style="background:rgba(55,65,81,0.3);border-color:#374151;color:#6b7280;cursor:pointer;" onclick="loadKones(&apos;no_phone&apos;)">🚫 אין טלפון: ' + s.no_phone + '</span>' +
-                                '<span class="filter-active-badge" style="background:rgba(239,68,68,0.2);border-color:#ef4444;color:#fca5a5;cursor:pointer;" onclick="loadKones(&apos;failed&apos;)">❌ נכשל: ' + s.failed + '</span>';
+                                '<span class="filter-active-badge" style="cursor:pointer;" onclick="loadKones(\'contacted\')">✅ נוצר קשר: ' + s.contacted + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(107,114,128,0.2);border-color:#6b7280;color:#9ca3af;cursor:pointer;" onclick="loadKones(\'landline\')">📞 קו ארץ: ' + s.landline + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(55,65,81,0.3);border-color:#374151;color:#6b7280;cursor:pointer;" onclick="loadKones(\'no_phone\')">🚫 אין טלפון: ' + s.no_phone + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(239,68,68,0.2);border-color:#ef4444;color:#fca5a5;cursor:pointer;" onclick="loadKones(\'failed\')">❌ נכשל: ' + s.failed + '</span>';
                         }
                     } catch(e) { /* ignore */ }
                 } else if (statsBar) {
