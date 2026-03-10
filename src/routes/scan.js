@@ -747,6 +747,103 @@ router.get('/morning-report', async (req, res) => {
   }
 });
 
+
+
+// ============================================================
+// Additional scraper endpoints (yad1, madlan, dira, komo, govmap, bidspirit, banknadlan)
+// ============================================================
+
+// POST /api/scan/yad1 - Yad1 scraper
+router.post('/yad1', async (req, res) => {
+  try {
+    const { scanAll } = require('../services/yad1Scraper');
+    const result = await scanAll();
+    const count = (result && result.saved) || (Array.isArray(result) ? result.length : 0);
+    res.json({ success: true, count, result });
+  } catch (err) {
+    logger.error('Yad1 scraper failed', { error: err.message });
+    res.status(500).json({ error: err.message, count: 0 });
+  }
+});
+
+// POST /api/scan/madlan - Madlan service
+router.post('/madlan', async (req, res) => {
+  try {
+    const { scanAllMadlan } = require('../services/madlanService');
+    const result = await scanAllMadlan();
+    const count = (result && result.saved) || (result && result.count) || (Array.isArray(result) ? result.length : 0);
+    res.json({ success: true, count, result });
+  } catch (err) {
+    logger.error('Madlan service failed', { error: err.message });
+    res.status(500).json({ error: err.message, count: 0 });
+  }
+});
+
+// POST /api/scan/dira - Dira scraper
+router.post('/dira', async (req, res) => {
+  try {
+    const { scanAll } = require('../services/diraScraper');
+    const result = await scanAll();
+    const count = (result && result.saved) || (Array.isArray(result) ? result.length : 0);
+    res.json({ success: true, count, result });
+  } catch (err) {
+    logger.error('Dira scraper failed', { error: err.message });
+    res.status(500).json({ error: err.message, count: 0 });
+  }
+});
+
+// POST /api/scan/komo - Komo scraper
+router.post('/komo', async (req, res) => {
+  try {
+    const { scanAll } = require('../services/komoScraper');
+    const result = await scanAll();
+    const count = (result && result.saved) || (Array.isArray(result) ? result.length : 0);
+    res.json({ success: true, count, result });
+  } catch (err) {
+    logger.error('Komo scraper failed', { error: err.message });
+    res.status(500).json({ error: err.message, count: 0 });
+  }
+});
+
+// POST /api/scan/govmap - GovMap scraper
+router.post('/govmap', async (req, res) => {
+  try {
+    const { scanAll } = require('../services/govmapScraper');
+    const result = await scanAll();
+    const count = (result && result.saved) || (Array.isArray(result) ? result.length : 0);
+    res.json({ success: true, count, result });
+  } catch (err) {
+    logger.error('GovMap scraper failed', { error: err.message });
+    res.status(500).json({ error: err.message, count: 0 });
+  }
+});
+
+// POST /api/scan/bidspirit - BidSpirit scraper
+router.post('/bidspirit', async (req, res) => {
+  try {
+    const { scanAll } = require('../services/bidspiritScraper');
+    const result = await scanAll();
+    const count = (result && result.saved) || (Array.isArray(result) ? result.length : 0);
+    res.json({ success: true, count, result });
+  } catch (err) {
+    logger.error('BidSpirit scraper failed', { error: err.message });
+    res.status(500).json({ error: err.message, count: 0 });
+  }
+});
+
+// POST /api/scan/banknadlan - Bank Nadlan scraper
+router.post('/banknadlan', async (req, res) => {
+  try {
+    const { scanAll } = require('../services/bankNadlanScraper');
+    const result = await scanAll();
+    const count = (result && result.saved) || (Array.isArray(result) ? result.length : 0);
+    res.json({ success: true, count, result });
+  } catch (err) {
+    logger.error('BankNadlan scraper failed', { error: err.message });
+    res.status(500).json({ error: err.message, count: 0 });
+  }
+});
+
 // GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
 router.get('/:id', async (req, res) => {
   try {

@@ -301,6 +301,7 @@ function generateDashboardHTML(stats) {
         <div class="nav-tab" onclick="switchTab('kones')">🏗️ כינוס</div>
         <div class="nav-tab" onclick="switchTab('news')">📰 חדשות</div>
         <div class="nav-tab" onclick="switchTab('scheduling')">📅 תיאומים</div>
+        <div class="nav-tab" onclick="switchTab('scrapers')">🔍 סריקות</div>
     </div>
 
     <div id="tab-dashboard" class="tab-content active">
@@ -537,6 +538,20 @@ function generateDashboardHTML(stats) {
             <div id="sched-list" class="data-list"><div class="loading">טוען נתוני תיאומים...</div></div>
         </div>
     </div>
+
+    <div id="tab-scrapers" class="tab-content">
+        <div class="section">
+            <h2>🔍 מקורות סריקה — Real Estate Data Sources</h2>
+            <div class="actions-bar" style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                <button class="btn btn-green" onclick="runAllScrapers()">▶️ הפעל את כולם</button>
+                <button class="btn" onclick="loadScraperStatus()">🔄 רענן סטטוס</button>
+            </div>
+            <div id="scrapers-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:16px;">
+                <!-- Scraper cards injected by JS -->
+            </div>
+        </div>
+    </div>
+
 
     <script>
         let currentTab = 'dashboard';
@@ -1052,6 +1067,84 @@ function generateDashboardHTML(stats) {
             }).join('');
             list.innerHTML = '<div style="font-size:12px;color:#64748b;padding:8px 16px;border-bottom:1px solid #1e293b;">' + filtered.length + ' רשומות</div>' + rows_html;
         }
+
+        // ============================================================
+        // SCRAPERS TAB FUNCTIONS
+        // ============================================================
+        const SCRAPERS_CONFIG = [
+            { id: 'yad2',       name: 'יד2',          icon: '🏠', desc: 'פורטל הנדלן הגדול בישראל',    endpoint: '/api/scan/yad2',      color: '#e74c3c' },
+            { id: 'yad1',       name: 'יד1',          icon: '🏡', desc: 'מודעות נדלן יד ראשונה',       endpoint: '/api/scan/yad1',      color: '#e67e22' },
+            { id: 'winwin',     name: 'WinWin',       icon: '🏢', desc: 'נדלן מסחרי ומגורים',          endpoint: '/api/scan/winwin',    color: '#3498db' },
+            { id: 'homeless',   name: 'Homeless',     icon: '🏘', desc: 'מודעות דירות ומשרדים',        endpoint: '/api/scan/homeless',  color: '#9b59b6' },
+            { id: 'nadlan',     name: 'נדלן.נט',      icon: '🌐', desc: 'פורטל נדלן מקיף',             endpoint: '/api/scan/nadlan',    color: '#1abc9c' },
+            { id: 'mavat',      name: 'מבא"ת',        icon: '📋', desc: 'מידע ממשלתי על נכסים',        endpoint: '/api/scan/mavat',     color: '#2ecc71' },
+            { id: 'madlan',     name: 'מדלן',         icon: '📊', desc: 'נתוני שוק ומחירים',           endpoint: '/api/scan/madlan',    color: '#f39c12' },
+            { id: 'dira',       name: 'דירה',         icon: '🔑', desc: 'מודעות דירות להשכרה ומכירה', endpoint: '/api/scan/dira',      color: '#e74c3c' },
+            { id: 'komo',       name: 'Komo',         icon: '🏗', desc: 'פרויקטים חדשים',              endpoint: '/api/scan/komo',      color: '#3498db' },
+            { id: 'govmap',     name: 'GovMap',       icon: '🗺', desc: 'מפות ממשלתיות ותכנון',        endpoint: '/api/scan/govmap',    color: '#27ae60' },
+            { id: 'bidspirit',  name: 'BidSpirit',    icon: '🔨', desc: 'מכירות פומביות ומכרזים',      endpoint: '/api/scan/bidspirit', color: '#c0392b' },
+            { id: 'banknadlan', name: 'בנק נדלן',     icon: '🏦', desc: 'נכסי בנקים ומימוש משכנתאות', endpoint: '/api/scan/banknadlan',color: '#2980b9' },
+            { id: 'facebook',   name: 'פייסבוק',      icon: '📱', desc: 'מודעות נדלן בפייסבוק',        endpoint: '/api/facebook/sync',  color: '#3b5998' },
+        ];
+
+        let scraperStatuses = {};
+
+        function renderScraperCards() {
+            const grid = document.getElementById('scrapers-grid');
+            if (!grid) return;
+            grid.innerHTML = SCRAPERS_CONFIG.map(function(s) {
+                const st = scraperStatuses[s.id] || {};
+                const running = st.running;
+                const lastRun = st.lastRun ? new Date(st.lastRun).toLocaleString('he-IL') : 'לא הופעל';
+                const count = st.count !== undefined ? st.count : '—';
+                const statusColor = running ? '#f59e0b' : (st.error ? '#ef4444' : '#22c55e');
+                const statusText = running ? '⏳ פועל...' : (st.error ? '❌ שגיאה' : (st.lastRun ? '✅ הושלם' : '⚪ ממתין'));
+                return '<div class="data-item" style="border-left:4px solid ' + s.color + ';padding:16px;position:relative;">'
+                    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">'
+                    + '<div><div style="font-size:22px;margin-bottom:4px;">' + s.icon + ' ' + s.name + '</div>'
+                    + '<div style="font-size:12px;color:#94a3b8;">' + s.desc + '</div></div>'
+                    + '<span style="font-size:12px;color:' + statusColor + ';font-weight:600;">' + statusText + '</span></div>'
+                    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;font-size:12px;color:#64748b;">'
+                    + '<div>🕐 הפעלה אחרונה:<br><span style="color:#e2e8f0;">' + lastRun + '</span></div>'
+                    + '<div>📦 מודעות שנמצאו:<br><span style="color:#d4af37;font-weight:700;font-size:16px;">' + count + '</span></div></div>'
+                    + (st.error ? '<div style="font-size:11px;color:#ef4444;margin-bottom:8px;padding:6px;background:#1e0a0a;border-radius:4px;">⚠️ ' + st.error + '</div>' : '')
+                    + '<button class="btn btn-green" onclick="runScraper('' + s.id + '', '' + s.endpoint + '')" '
+                    + (running ? 'disabled' : '') + ' style="width:100%;padding:8px;font-size:13px;">'
+                    + (running ? '⏳ פועל...' : '▶️ סרוק עכשיו') + '</button></div>';
+            }).join('');
+        }
+
+        async function runScraper(id, endpoint) {
+            scraperStatuses[id] = Object.assign({}, scraperStatuses[id], { running: true, error: null });
+            renderScraperCards();
+            try {
+                const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 50 }) });
+                const d = await res.json();
+                scraperStatuses[id] = {
+                    running: false,
+                    lastRun: new Date().toISOString(),
+                    count: d.count || d.total || d.found || (d.results && d.results.length) || 0,
+                    error: res.ok ? null : (d.error || d.message || 'שגיאה לא ידועה')
+                };
+            } catch (e) {
+                scraperStatuses[id] = { running: false, lastRun: new Date().toISOString(), count: 0, error: e.message };
+            }
+            renderScraperCards();
+        }
+
+        async function runAllScrapers() {
+            if (!confirm('להפעיל את כל הסורקים? הפעולה עשויה לקחת מספר דקות.')) return;
+            for (var i = 0; i < SCRAPERS_CONFIG.length; i++) {
+                var s = SCRAPERS_CONFIG[i];
+                runScraper(s.id, s.endpoint);
+                await new Promise(function(r) { setTimeout(r, 500); });
+            }
+        }
+
+        function loadScraperStatus() {
+            renderScraperCards();
+        }
+
     </script>
 </body>
 </html>`;
