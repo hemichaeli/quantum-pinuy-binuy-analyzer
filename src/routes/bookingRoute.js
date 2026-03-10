@@ -1,5 +1,5 @@
 /**
- * QUANTUM Visual Booking Route v6.6
+ * QUANTUM Visual Booking Route v6.7
  *
  * v6.2: Fix clicks not working — data-slot-id + JSON slot map
  * v6.3: Responsive desktop layout — two columns, bigger slots, sidebar confirm panel
@@ -8,6 +8,7 @@
  * v6.6: CORRECT FIX — slot_datetime (TIMESTAMP WITHOUT TZ) stores Israel wall-clock time.
  *       Just use TO_CHAR with no timezone conversion at all.
  *       09:40 stored = 09:40 displayed. No conversion needed.
+ * v6.7: Short calendar links - /cal/g /cal/o /cal/i for Google, Outlook, iOS
  *
  * GET  /booking/:token          - Visual calendar HTML
  * GET  /booking/:token/slots    - JSON slot data
@@ -96,9 +97,6 @@ async function scoreSlotsByProximity(slots, campaignId, contactStreet) {
 // ══════════════════════════════════════════════════════════════
 
 async function getMeetingSlots(campaignId, contactStreet) {
-  // slot_datetime is TIMESTAMP WITHOUT TIME ZONE storing Israel wall-clock times.
-  // Slots are generated with Israeli times in mind (e.g. 09:40 means 09:40 Israel).
-  // NO timezone conversion needed — just read the stored value directly.
   const res = await pool.query(
     `SELECT id, slot_datetime,
             TO_CHAR(slot_datetime,'YYYY-MM-DD') AS slot_date,
@@ -326,7 +324,6 @@ router.post('/:token/confirm', async (req, res) => {
       );
       if (!lockRes.rows.length) return res.status(409).json({ error: 'slot_taken' });
       const slot = lockRes.rows[0];
-      // slot_datetime stores Israel wall-clock time — read directly without TZ conversion
       const slotDt = new Date(slot.slot_datetime);
       dateStr = `${String(slotDt.getUTCDate()).padStart(2,'0')}/${String(slotDt.getUTCMonth()+1).padStart(2,'0')}/${slotDt.getUTCFullYear()}`;
       timeStr = `${String(slotDt.getUTCHours()).padStart(2,'0')}:${String(slotDt.getUTCMinutes()).padStart(2,'0')}`;
@@ -339,18 +336,21 @@ router.post('/:token/confirm', async (req, res) => {
     ctx.confirmedSlot = { dateStr, timeStr, time: timeStr, date_str: dateStr, rep_name: repName || '' };
     await pool.query(`UPDATE bot_sessions SET state='confirmed', context=$1, booking_completed_at=NOW() WHERE booking_token=$2`, [JSON.stringify(ctx), token]);
 
-    const gcalEnd = new Date(new Date(slotDatetime).getTime() + 45 * 60000);
-    const fmt = (d) => d.toISOString().replace(/[-:.]/g, '').substring(0, 15) + 'Z';
-    const meetingLabel = { appraiser:'\u05d1\u05d9\u05e7\u05d5\u05e8 \u05e9\u05de\u05d0\u05d9 QUANTUM', consultation:'\u05e4\u05d2\u05d9\u05e9\u05ea \u05d9\u05d9\u05e2\u05d5\u05e5 QUANTUM', physical:'\u05e4\u05d2\u05d9\u05e9\u05d4 \u05e4\u05d9\u05d6\u05d9\u05ea QUANTUM', surveyor:'\u05d1\u05d9\u05e7\u05d5\u05e8 \u05de\u05d5\u05d3\u05d3 QUANTUM', signing_ceremony:'\u05db\u05e0\u05e1 \u05d7\u05ea\u05d9\u05de\u05d5\u05ea QUANTUM' }[session.meeting_type] || 'QUANTUM';
-    const gcalLink = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(meetingLabel)}&dates=${fmt(new Date(slotDatetime))}/${fmt(gcalEnd)}&sf=true`;
+    // Short calendar links via /cal/g /cal/o /cal/i
+    const slotIdEnc = Buffer.from(String(slotId)).toString('base64url');
+    const calBase = `${BASE_URL}/cal`;
+    const calLinks = { g: `${calBase}/g/${slotIdEnc}`, o: `${calBase}/o/${slotIdEnc}`, i: `${calBase}/i/${slotIdEnc}` };
 
     const repLine = repName ? `\n\u{1F464} ${lang === 'ru' ? '\u041f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u0438\u0442\u0435\u043b\u044c' : '\u05e0\u05e6\u05d9\u05d2'}: ${repName}` : '';
+    const calLines = lang === 'ru'
+      ? `\n\n\uD83D\uDCC6 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c:\n\uD83D\uDD35 Google: ${calLinks.g}\n\uD83D\uDD37 Outlook: ${calLinks.o}\n\uD83C\uDF4E iOS: ${calLinks.i}`
+      : `\n\n\uD83D\uDCC6 \u05d4\u05d5\u05e1\u05e3 \u05dc\u05d9\u05d5\u05de\u05df:\n\uD83D\uDD35 Google: ${calLinks.g}\n\uD83D\uDD37 Outlook: ${calLinks.o}\n\uD83C\uDF4E iOS: ${calLinks.i}`;
     const waMsg = lang === 'ru'
-      ? `\u2705 *\u0412\u0441\u0442\u0440\u0435\u0447\u0430 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0430!*\n\n\uD83D\uDCC5 ${dateStr}\n\u23F0 ${timeStr}${repLine}\n\n\u041d\u0430\u043f\u043e\u043c\u043d\u0438\u043c \u0437\u0430 \u0441\u0443\u0442\u043a\u0438. \u0414\u043e \u0432\u0441\u0442\u0440\u0435\u0447\u0438! \uD83D\uDC4B\n\n\uD83D\uDCC6 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c: ${gcalLink}`
-      : `\u2705 *\u05d4\u05e4\u05d2\u05d9\u05e9\u05d4 \u05d0\u05d5\u05e9\u05e8\u05d4!*\n\n\uD83D\uDCC5 ${dateStr}\n\u23F0 ${timeStr}${repLine}\n\n\u05ea\u05e7\u05d1\u05dc/\u05d9 \u05ea\u05d6\u05db\u05d5\u05e8\u05ea \u05d9\u05d5\u05dd \u05dc\u05e4\u05e0\u05d9. \u05dc\u05d4\u05ea\u05e8\u05d0\u05d5\u05ea! \uD83D\uDC4B\n\n\uD83D\uDCC6 \u05d4\u05d5\u05e1\u05e3 \u05dc\u05d9\u05d5\u05de\u05df: ${gcalLink}`;
+      ? `\u2705 *\u0412\u0441\u0442\u0440\u0435\u0447\u0430 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0430!*\n\n\uD83D\uDCC5 ${dateStr}\n\u23F0 ${timeStr}${repLine}\n\n\u041d\u0430\u043f\u043e\u043c\u043d\u0438\u043c \u0437\u0430 \u0441\u0443\u0442\u043a\u0438. \u0414\u043e \u0432\u0441\u0442\u0440\u0435\u0447\u0438! \uD83D\uDC4B${calLines}`
+      : `\u2705 *\u05d4\u05e4\u05d2\u05d9\u05e9\u05d4 \u05d0\u05d5\u05e9\u05e8\u05d4!*\n\n\uD83D\uDCC5 ${dateStr}\n\u23F0 ${timeStr}${repLine}\n\n\u05ea\u05e7\u05d1\u05dc/\u05d9 \u05ea\u05d6\u05db\u05d5\u05e8\u05ea \u05d9\u05d5\u05dd \u05dc\u05e4\u05e0\u05d9. \u05dc\u05d4\u05ea\u05e8\u05d0\u05d5\u05ea! \uD83D\uDC4B${calLines}`;
 
     inforuService.sendWhatsAppChat(session.phone, waMsg).catch(e => logger.warn('[BookingRoute] WA send failed:', e.message));
-    res.json({ success: true, dateStr, timeStr, repName, gcalLink });
+    res.json({ success: true, dateStr, timeStr, repName, calLinks });
   } catch (err) {
     logger.error('[BookingRoute] confirm error:', err);
     res.status(500).json({ error: err.message });
@@ -405,7 +405,7 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
       cancel: '\u05d1\u05d7\u05e8/\u05d9 \u05de\u05d5\u05e2\u05d3 \u05d0\u05d7\u05e8',
       rep_label: '\u05e0\u05e6\u05d9\u05d2',
       smart_heading: '\u05de\u05d5\u05e2\u05d3\u05d9\u05dd \u05de\u05d5\u05de\u05dc\u05e6\u05d9\u05dd',
-      gcal: '\u05d4\u05d5\u05e1\u05e3 \u05dc\u05d9\u05d5\u05de\u05df Google',
+      gcal: '\u05d4\u05d5\u05e1\u05e3 \u05dc\u05d9\u05d5\u05de\u05df',
       spots_one: '\u05de\u05e7\u05d5\u05dd \u05d0\u05d7\u05d3 \u05e4\u05e0\u05d5\u05d9',
       spots_many: '\u05de\u05e7\u05d5\u05de\u05d5\u05ea \u05e4\u05e0\u05d5\u05d9\u05d9\u05dd',
       no_selection: '\u05d1\u05d7\u05e8/\u05d9 \u05de\u05d5\u05e2\u05d3 \u05d5\u05dc\u05d7\u05e5 \u05d0\u05d9\u05e9\u05d5\u05e8',
@@ -569,7 +569,7 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .success-title{font-size:24px;font-weight:900;color:var(--green);margin-bottom:10px}
   .success-detail{font-size:17px;font-weight:700;margin-bottom:8px}
   .success-sub{font-size:14px;color:var(--muted);margin-bottom:28px}
-  .gcal-btn{display:inline-block;background:#0f1e35;color:#93c5fd;border:1.5px solid #3b82f6;border-radius:14px;padding:14px 24px;font-size:14px;text-decoration:none;font-weight:700}
+  .gcal-btn{display:inline-block;background:#0f1e35;color:#93c5fd;border:1.5px solid #3b82f6;border-radius:14px;padding:14px 24px;font-size:14px;text-decoration:none;font-weight:700;width:100%;text-align:center}
   .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-80px);background:#7f1d1d;color:#fca5a5;padding:10px 20px;border-radius:10px;font-size:14px;transition:transform .25s;z-index:200;max-width:320px;text-align:center;font-weight:600}
   .toast.show{transform:translateX(-50%) translateY(0)}
   .loading-overlay{display:none;position:fixed;inset:0;background:#07080fcc;z-index:150;align-items:center;justify-content:center}
@@ -661,7 +661,11 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   <div class="success-title">${T.success_title}</div>
   <div class="success-detail" id="successDetail"></div>
   <div class="success-sub">${T.success_sub}</div>
-  <a class="gcal-btn" id="gcalLink" href="#" target="_blank">&#x1F4C6; ${T.gcal}</a>
+  <div id="calBtns" style="display:none;flex-direction:column;gap:10px;width:100%;max-width:280px;align-items:center;">
+    <a class="gcal-btn" id="calGoogle" href="#" target="_blank">&#x1F535; Google Calendar</a>
+    <a class="gcal-btn" id="calOutlook" href="#" target="_blank">&#x1F537; Outlook Calendar</a>
+    <a class="gcal-btn" id="calIos" href="#" target="_blank">&#x1F34E; Apple / iOS</a>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 <div class="loading-overlay" id="loader"><div class="spinner"></div></div>
@@ -670,8 +674,8 @@ var TOKEN = ${JSON.stringify(token)};
 var SHOW_REP = ${config.show_rep_name ? 'true' : 'false'};
 var REP_LABEL = ${JSON.stringify(T.rep_label || '')};
 var SLOT_TAKEN_MSG = ${JSON.stringify(lang === 'ru' ? '\u042d\u0442\u043e \u0432\u0440\u0435\u043c\u044f \u0443\u0436\u0435 \u0437\u0430\u043d\u044f\u0442\u043e \u2014 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u043e\u0435.' : '\u05d4\u05de\u05d5\u05e2\u05d3 \u05db\u05d1\u05e8 \u05e0\u05ea\u05e4\u05e1 \u2014 \u05d0\u05e0\u05d0 \u05d1\u05d7\u05e8/\u05d9 \u05de\u05d5\u05e2\u05d3 \u05d0\u05d7\u05e8.')};
-var SHOW_ALL_TXT = '\u25BC ${T.show_all}';
-var HIDE_ALL_TXT = '\u25B2 ${T.hide_all}';
+var SHOW_ALL_TXT = '\\u25BC ${T.show_all}';
+var HIDE_ALL_TXT = '\\u25B2 ${T.hide_all}';
 var SLOT_DATA = ${JSON.stringify(slotDataMap)};
 var selectedSlotId = null;
 var allVisible = false;
@@ -756,7 +760,7 @@ async function confirmBooking() {
       document.getElementById('mainView').style.display = 'none';
       document.getElementById('confirmPanel').classList.remove('open');
       document.getElementById('successDetail').textContent = data.dateStr + '  \u23F0 ' + data.timeStr;
-      if (data.gcalLink) document.getElementById('gcalLink').href = data.gcalLink;
+      if (data.calLinks) { document.getElementById('calGoogle').href = data.calLinks.g; document.getElementById('calOutlook').href = data.calLinks.o; document.getElementById('calIos').href = data.calLinks.i; document.getElementById('calBtns').style.display = 'flex'; }
       document.getElementById('successScreen').classList.add('show');
     } else {
       showToast('\u05e9\u05d2\u05d9\u05d0\u05d4 \u2014 \u05d0\u05e0\u05d0 \u05e0\u05e1\u05d4/\u05d9 \u05e9\u05d5\u05d1');
