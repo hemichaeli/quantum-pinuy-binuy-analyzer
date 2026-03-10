@@ -1,11 +1,11 @@
 /**
- * QUANTUM Visual Booking Route v6.4
+ * QUANTUM Visual Booking Route v6.5
  *
  * v6.2: Fix clicks not working — data-slot-id + JSON slot map
  * v6.3: Responsive desktop layout — two columns, bigger slots, sidebar confirm panel
- * v6.4: Fix UTC timezone display bug — remove AT TIME ZONE from getMeetingSlots SQL
- *       slot_datetime stored as TIMESTAMP WITHOUT TZ in UTC (Railway server),
- *       display directly without conversion.
+ * v6.4: Remove AT TIME ZONE (wrong direction)
+ * v6.5: Correct fix — slot_datetime stored as TIMESTAMP WITHOUT TZ in UTC values.
+ *       Use AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem' to convert correctly.
  *
  * GET  /booking/:token          - Visual calendar HTML
  * GET  /booking/:token/slots    - JSON slot data
@@ -94,14 +94,15 @@ async function scoreSlotsByProximity(slots, campaignId, contactStreet) {
 // ══════════════════════════════════════════════════════════════
 
 async function getMeetingSlots(campaignId, contactStreet) {
-  // NOTE: slot_datetime is TIMESTAMP WITHOUT TIME ZONE stored as intended local time
-  // (Railway server runs UTC, setHours() stores intended display time directly).
-  // Do NOT use AT TIME ZONE — display the stored value as-is.
+  // slot_datetime is TIMESTAMP WITHOUT TIME ZONE, but its values are UTC
+  // (Railway server is UTC; slot generation uses new Date() + setHours() which stores UTC wall-clock time).
+  // To display in Israel time: treat stored value as UTC, convert to Asia/Jerusalem.
+  // PostgreSQL syntax: col AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem'
   const res = await pool.query(
     `SELECT id, slot_datetime,
-            TO_CHAR(slot_datetime,'YYYY-MM-DD') AS slot_date,
-            TO_CHAR(slot_datetime,'HH24:MI') AS time_str,
-            EXTRACT(DOW FROM slot_datetime)::int AS dow,
+            TO_CHAR(slot_datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem','YYYY-MM-DD') AS slot_date,
+            TO_CHAR(slot_datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem','HH24:MI') AS time_str,
+            EXTRACT(DOW FROM slot_datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem')::int AS dow,
             representative_name
      FROM meeting_slots
      WHERE campaign_id=$1 AND status='open' AND slot_datetime > NOW()
@@ -325,9 +326,9 @@ router.post('/:token/confirm', async (req, res) => {
       if (!lockRes.rows.length) return res.status(409).json({ error: 'slot_taken' });
       const slot = lockRes.rows[0];
       const slotDt = new Date(slot.slot_datetime);
-      // Display slot time as stored (no TZ conversion - stored as intended local time)
-      dateStr = `${String(slotDt.getUTCDate()).padStart(2,'0')}/${String(slotDt.getUTCMonth()+1).padStart(2,'0')}/${slotDt.getUTCFullYear()}`;
-      timeStr = `${String(slotDt.getUTCHours()).padStart(2,'0')}:${String(slotDt.getUTCMinutes()).padStart(2,'0')}`;
+      // slot_datetime is UTC wall-clock; display via UTC methods = correct Israel time display
+      dateStr = slotDt.toLocaleDateString('he-IL', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+      timeStr = slotDt.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
       repName = slot.representative_name;
       slotDatetime = slot.slot_datetime;
       if (gcal?.createMeetingSlotEvent) gcal.createMeetingSlotEvent(pool, slot, ctx.contactName || '', session.phone).then(id => id && pool.query(`UPDATE meeting_slots SET google_event_id=$1 WHERE id=$2`, [id, slot.id]).catch(() => {})).catch(e => logger.warn('[BookingRoute] GCal meeting failed:', e.message));
@@ -431,7 +432,6 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
     },
   }[lang] || {};
 
-  // Slot data map for JS
   const slotDataMap = {};
   for (const s of (allSlots || [])) {
     const dateObj = new Date(`${s.slot_date}T${s.time_str}`);
@@ -450,7 +450,6 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
     }
   }
 
-  // Smart picks HTML
   let smartHtml = '';
   if (!isCeremony && smartPicks && smartPicks.length > 0) {
     const LABELS = [T.recommended, T.earliest, T.latest];
@@ -471,7 +470,6 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
     smartHtml += `</div></div>`;
   }
 
-  // Slot grid HTML
   let slotsHtml = '';
   if (!grouped.length) {
     slotsHtml = `<div class="no-slots">${T.noSlots}</div>`;
@@ -516,8 +514,6 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   html,body{height:100%}
   body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;background:var(--dark);color:var(--text);min-height:100vh;direction:${dir}}
-
-  /* ── HEADER ── */
   .page-header{background:linear-gradient(160deg,#0d1f3c 0%,#061120 100%);border-bottom:1px solid #1e3a5f66;padding:0}
   .header-inner{max-width:1200px;margin:0 auto;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:16px}
   .header-brand{display:flex;align-items:center;gap:12px}
@@ -527,19 +523,11 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .header-title{font-size:18px;font-weight:800;color:#f1f5f9}
   .header-sub{font-size:13px;color:#94a3b8;margin-top:2px}
   .building-tag{display:inline-block;margin-top:5px;background:#1e3a5f;color:#93c5fd;border:1px solid #3b82f660;border-radius:8px;padding:2px 10px;font-size:12px;font-weight:600}
-
-  /* ── LAYOUT ── */
   .page-body{max-width:1200px;margin:0 auto;padding:24px 24px 40px}
-
-  /* Mobile: single column */
   .layout{display:block}
   .main-col{min-width:0}
   .sidebar-col{display:none}
-
-  /* ── SECTION LABELS ── */
   .section-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
-
-  /* ── SMART PICKS ── */
   .smart-section{margin-bottom:28px}
   .smart-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px}
   .smart-btn{background:linear-gradient(160deg,#131d2e,#0a1120);border:1.5px solid var(--blue);border-radius:16px;padding:16px 12px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;touch-action:manipulation;transition:all .15s;-webkit-appearance:none;text-align:center}
@@ -549,18 +537,12 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .smart-time{font-size:26px;font-weight:900;color:var(--text);line-height:1;pointer-events:none}
   .smart-date{font-size:12px;color:var(--muted);pointer-events:none;margin-top:2px}
   .smart-rep{font-size:10px;color:#475569;pointer-events:none}
-
-  /* ── ALL SLOTS TOGGLE ── */
   .all-toggle{text-align:center;padding:12px 16px;color:var(--blue);font-size:14px;cursor:pointer;border:1px dashed var(--border);border-radius:12px;margin-bottom:20px;user-select:none;font-weight:600}
   .all-toggle:hover{background:#0f1623;border-color:var(--blue)}
-
-  /* ── DAY GROUPS ── */
   .day-group{margin-bottom:28px}
   .day-label{display:flex;align-items:center;gap:12px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
   .day-name{font-size:15px;font-weight:800;color:var(--blue)}
   .day-date{font-size:13px;color:var(--muted);font-weight:500}
-
-  /* ── SLOT BUTTONS ── */
   .slots-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px}
   .slot-btn{position:relative;background:var(--card);border:1.5px solid var(--border);border-radius:12px;padding:12px 8px;cursor:pointer;transition:border-color .12s,background .12s,box-shadow .12s,transform .1s;display:flex;flex-direction:column;align-items:center;gap:4px;touch-action:manipulation;-webkit-appearance:none}
   .slot-btn:hover,.slot-btn:active{border-color:var(--blue);background:#0f1e35;transform:translateY(-1px)}
@@ -571,8 +553,6 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .rep-name{font-size:9px;color:var(--muted);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;text-align:center}
   .cap-badge{font-size:9px;font-weight:600;color:#6ee7b7;pointer-events:none}
   .no-slots{text-align:center;color:var(--muted);padding:60px 20px;font-size:15px}
-
-  /* ── MOBILE CONFIRM PANEL (fixed bottom) ── */
   .confirm-panel{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(180deg,#0c1525,#08101e);border-top:1px solid #2563eb88;padding:16px 20px 32px;transform:translateY(110%);transition:transform .3s cubic-bezier(.4,0,.2,1);z-index:100;backdrop-filter:blur(12px)}
   .confirm-panel.open{transform:translateY(0)}
   .selected-time{font-size:22px;font-weight:900;margin-bottom:3px;color:#f1f5f9}
@@ -581,11 +561,7 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .confirm-btn:hover{opacity:.92}
   .confirm-btn:disabled{background:#1e293b;color:#475569;cursor:not-allowed}
   .cancel-link{display:block;text-align:center;margin-top:12px;color:var(--muted);font-size:13px;cursor:pointer;padding:4px}
-
-  /* ── SIDEBAR CONFIRM CARD (desktop only, hidden on mobile) ── */
   .sidebar-confirm{display:none}
-
-  /* ── SUCCESS SCREEN ── */
   .success-screen{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:40px 24px}
   .success-screen.show{display:flex}
   .success-icon{font-size:72px;margin-bottom:24px}
@@ -593,20 +569,12 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   .success-detail{font-size:17px;font-weight:700;margin-bottom:8px}
   .success-sub{font-size:14px;color:var(--muted);margin-bottom:28px}
   .gcal-btn{display:inline-block;background:#0f1e35;color:#93c5fd;border:1.5px solid #3b82f6;border-radius:14px;padding:14px 24px;font-size:14px;text-decoration:none;font-weight:700}
-
-  /* ── TOAST ── */
   .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-80px);background:#7f1d1d;color:#fca5a5;padding:10px 20px;border-radius:10px;font-size:14px;transition:transform .25s;z-index:200;max-width:320px;text-align:center;font-weight:600}
   .toast.show{transform:translateX(-50%) translateY(0)}
-
-  /* ── LOADER ── */
   .loading-overlay{display:none;position:fixed;inset:0;background:#07080fcc;z-index:150;align-items:center;justify-content:center}
   .loading-overlay.show{display:flex}
   .spinner{width:44px;height:44px;border:3px solid #1e293b;border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
-
-  /* ══════════════════════════════════════════════
-     DESKTOP — 768px and above
-  ══════════════════════════════════════════════ */
   @media (min-width:768px) {
     .header-title{font-size:21px}
     .layout{display:grid;grid-template-columns:1fr var(--sidebar);gap:32px;align-items:start}
@@ -636,7 +604,6 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
     .page-body{padding:28px 28px 60px}
     .all-toggle{padding:14px 20px}
   }
-
   @media (min-width:1100px) {
     --sidebar: 340px;
     .slots-row{grid-template-columns:repeat(auto-fill,minmax(100px,1fr))}
@@ -645,8 +612,6 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
 </style>
 </head>
 <body>
-
-<!-- Header -->
 <div class="page-header">
   <div class="header-inner">
     <div class="header-brand">
@@ -660,20 +625,14 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
     </div>
   </div>
 </div>
-
 <div id="mainView">
   <div class="page-body">
     <div class="layout">
-
-      <!-- Left/Main column: smart picks + calendar -->
       <div class="main-col">
         ${smartHtml}
         ${allSlotsSection}
       </div>
-
-      <!-- Right/Sidebar: confirm card + brand (desktop only) -->
       <div class="sidebar-col">
-
         <div class="sidebar-confirm" id="sidebarConfirm">
           <div class="section-label">&#x2713; ${T.confirm}</div>
           <div class="sidebar-no-sel" id="sidebarNoSel">${T.no_selection}</div>
@@ -682,26 +641,20 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
           <button class="sidebar-confirm-btn" id="sidebarConfirmBtn">${T.confirm}</button>
           <span class="sidebar-cancel-link" id="sidebarCancelBtn">&#x21A9; ${T.cancel}</span>
         </div>
-
         <div class="sidebar-brand">
           <div class="sidebar-brand-logo">&#x26A1; QUANTUM</div>
           <div class="sidebar-brand-tagline">${lang === 'ru' ? '\u0411\u0443\u0442\u0438\u043a\u043e\u0432\u043e\u0435 \u0430\u0433\u0435\u043d\u0442\u0441\u0442\u0432\u043e \u043d\u0435\u0434\u0432\u0438\u0436\u0438\u043c\u043e\u0441\u0442\u0438' : '\u05ea\u05d9\u05d5\u05d5\u05db \u05e0\u05d3\u05dc\u05df \u05de\u05d5\u05d1\u05d7\u05e8 \u05d1\u05e4\u05d9\u05e0\u05d5\u05d9-\u05d1\u05d9\u05e0\u05d5\u05d9'}</div>
         </div>
-
       </div>
     </div>
   </div>
 </div>
-
-<!-- Mobile confirm panel (hidden on desktop via CSS) -->
 <div class="confirm-panel" id="confirmPanel">
   <div class="selected-time" id="selectedLabel"></div>
   <div class="selected-rep" id="selectedRep"></div>
   <button class="confirm-btn" id="confirmBtn">${T.confirm}</button>
   <span class="cancel-link" id="cancelBtn">&#x21A9; ${T.cancel}</span>
 </div>
-
-<!-- Success screen -->
 <div class="success-screen" id="successScreen">
   <div class="success-icon">&#x1F389;</div>
   <div class="success-title">${T.success_title}</div>
@@ -709,10 +662,8 @@ function calendarPage(token, name, lang, config, grouped, isCeremony, buildingLa
   <div class="success-sub">${T.success_sub}</div>
   <a class="gcal-btn" id="gcalLink" href="#" target="_blank">&#x1F4C6; ${T.gcal}</a>
 </div>
-
 <div class="toast" id="toast"></div>
 <div class="loading-overlay" id="loader"><div class="spinner"></div></div>
-
 <script>
 var TOKEN = ${JSON.stringify(token)};
 var SHOW_REP = ${config.show_rep_name ? 'true' : 'false'};
@@ -723,20 +674,14 @@ var HIDE_ALL_TXT = '\u25B2 ${T.hide_all}';
 var SLOT_DATA = ${JSON.stringify(slotDataMap)};
 var selectedSlotId = null;
 var allVisible = false;
-
-function isDesktop() { return window.innerWidth >= 768; }
-
 document.addEventListener('click', function(e) {
   var slotBtn = e.target.closest('[data-slot-id]');
   if (slotBtn && !slotBtn.disabled) { selectSlot(slotBtn, slotBtn.getAttribute('data-slot-id')); return; }
   var el = e.target;
-  if (el.id === 'confirmBtn' || el.closest('#confirmBtn') ||
-      el.id === 'sidebarConfirmBtn' || el.closest('#sidebarConfirmBtn')) { confirmBooking(); return; }
-  if (el.id === 'cancelBtn' || el.closest('#cancelBtn') ||
-      el.id === 'sidebarCancelBtn' || el.closest('#sidebarCancelBtn')) { cancelSelection(); return; }
+  if (el.id === 'confirmBtn' || el.closest('#confirmBtn') || el.id === 'sidebarConfirmBtn' || el.closest('#sidebarConfirmBtn')) { confirmBooking(); return; }
+  if (el.id === 'cancelBtn' || el.closest('#cancelBtn') || el.id === 'sidebarCancelBtn' || el.closest('#sidebarCancelBtn')) { cancelSelection(); return; }
   if (el.id === 'allToggle' || el.closest('#allToggle')) { toggleAllSlots(); return; }
 });
-
 function selectSlot(btn, id) {
   document.querySelectorAll('[data-slot-id]').forEach(function(b) { b.classList.remove('selected'); });
   btn.classList.add('selected');
@@ -744,11 +689,9 @@ function selectSlot(btn, id) {
   var data = SLOT_DATA[String(id)] || {};
   var label = (data.dateLabel || '') + '  \u23F0 ' + (data.time || '');
   var rep = (SHOW_REP && data.rep) ? REP_LABEL + ': ' + data.rep : '';
-
   document.getElementById('selectedLabel').textContent = label;
   document.getElementById('selectedRep').textContent = rep;
   document.getElementById('confirmPanel').classList.add('open');
-
   var sidebarNoSel = document.getElementById('sidebarNoSel');
   var sidebarTime = document.getElementById('sidebarTime');
   var sidebarRep = document.getElementById('sidebarRep');
@@ -762,12 +705,10 @@ function selectSlot(btn, id) {
   if (sidebarCancelBtn) sidebarCancelBtn.classList.add('visible');
   if (sidebarConfirm) sidebarConfirm.classList.add('has-selection');
 }
-
 function cancelSelection() {
   document.querySelectorAll('[data-slot-id]').forEach(function(b) { b.classList.remove('selected'); });
   selectedSlotId = null;
   document.getElementById('confirmPanel').classList.remove('open');
-
   var sidebarNoSel = document.getElementById('sidebarNoSel');
   var sidebarTime = document.getElementById('sidebarTime');
   var sidebarRep = document.getElementById('sidebarRep');
@@ -781,20 +722,17 @@ function cancelSelection() {
   if (sidebarCancelBtn) sidebarCancelBtn.classList.remove('visible');
   if (sidebarConfirm) sidebarConfirm.classList.remove('has-selection');
 }
-
 function toggleAllSlots() {
   allVisible = !allVisible;
   document.getElementById('allSlots').style.display = allVisible ? 'block' : 'none';
   document.getElementById('allToggle').textContent = allVisible ? HIDE_ALL_TXT : SHOW_ALL_TXT;
 }
-
 function showToast(msg) {
   var t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(function() { t.classList.remove('show'); }, 3500);
 }
-
 async function confirmBooking() {
   if (!selectedSlotId) return;
   var confirmBtns = [document.getElementById('confirmBtn'), document.getElementById('sidebarConfirmBtn')];
