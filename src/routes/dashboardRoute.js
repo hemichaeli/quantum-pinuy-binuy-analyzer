@@ -573,10 +573,12 @@ function generateDashboardHTML(stats) {
             document.querySelectorAll('.nav-tab').forEach(n => n.classList.remove('active'));
             const target = document.getElementById('tab-' + tabName);
             if (target) target.classList.add('active');
-            const tabs = ['dashboard','ads','messages','leads','complexes','kones','news','scheduling'];
-            const idx = tabs.indexOf(tabName);
-            const navTabs = document.querySelectorAll('.nav-tab');
-            if (navTabs[idx]) navTabs[idx].classList.add('active');
+            // Activate the correct nav tab by matching onclick attribute
+            document.querySelectorAll('.nav-tab').forEach(function(n) {
+                if (n.getAttribute('onclick') && n.getAttribute('onclick').includes("'" + tabName + "'")) {
+                    n.classList.add('active');
+                }
+            });
             currentTab = tabName;
             window.scrollTo(0, 0);
             if (tabName === 'ads') loadAds();
@@ -585,6 +587,7 @@ function generateDashboardHTML(stats) {
             else if (tabName === 'complexes') loadComplexes(filter === 'hot' ? 'hot' : null);
             else if (tabName === 'kones') loadKones(filter || null);
             else if (tabName === 'scheduling') loadScheduling();
+            else if (tabName === 'scrapers') loadScraperStatus();
         }
 
         async function loadMorningIntelligence() {
@@ -992,7 +995,11 @@ function generateDashboardHTML(stats) {
 
         async function fetchJSON(url, options) {
             const res = await fetch(url, options);
-            return res.json();
+                const text = await res.text();
+                throw new Error('HTTP ' + res.status + ': ' + text.substring(0, 100));
+            }
+            const text = await res.text();
+            try { return JSON.parse(text); } catch(e) { throw new Error('Invalid JSON: ' + text.substring(0, 100)); }
         }
 
         function errorHTML(msg, retryFn) {
