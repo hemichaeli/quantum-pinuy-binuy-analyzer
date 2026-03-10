@@ -1,18 +1,19 @@
 /**
- * QUANTUM AI Service — v1.0
- * Auto-fallback: Claude → Gemini on credit error
+ * QUANTUM AI Service — v1.1
+ * Auto-fallback: Claude → Gemini on ANY API error
  * Sends WhatsApp alert to owner on provider switch
  */
 
 const axios = require('axios');
 
 const INFORU_CAPI_BASE = 'https://capi.inforu.co.il/api/v2';
-const OWNER_PHONE = '972546550815'; // Hemi
+const OWNER_PHONE = '972546550815'; // חמי
 
-// In-memory state — resets on redeploy (good: forces re-check after fix)
+// In-memory state — resets on redeploy (forces re-check after fix)
 let currentProvider = 'claude'; // 'claude' | 'gemini'
 let lastProviderSwitch = null;
 let switchCount = 0;
+let lastClaudeError = null;
 
 function getProvider() { return currentProvider; }
 
@@ -33,7 +34,7 @@ async function sendOwnerAlert(message) {
       timeout: 10000,
       validateStatus: () => true
     });
-    console.log(`[AIService] Owner alert sent: ${message.substring(0, 60)}...`);
+    console.log(`[AIService] ✅ Owner alert sent`);
   } catch (err) {
     console.error('[AIService] Failed to send owner alert:', err.message);
   }
@@ -77,11 +78,21 @@ async function callGemini(systemPrompt, userMessage) {
   return response.data.candidates[0].content.parts[0].text;
 }
 
+function describeClaudeError(status, errMsg) {
+  if (status === 400 && errMsg.toLowerCase().includes('credit')) return 'נגמר קרדיט';
+  if (status === 401) return 'שגיאת הרשאה (API key לא תקין)';
+  if (status === 403) return 'גישה נדחתה (403)';
+  if (status === 404) return 'מודל לא נמצא (404)';
+  if (status === 429) return 'חריגת מכסה (rate limit)';
+  if (status === 529) return 'שרת עמוס (overloaded)';
+  return `שגיאה ${status}`;
+}
+
 /**
- * Main AI call — tries Claude, falls back to Gemini on credit error
+ * Main AI call — tries Claude, falls back to Gemini on ANY API error
  */
 async function generateResponse(systemPrompt, userMessage) {
-  // If already switched to Gemini, use it directly
+  // Already on Gemini — use it directly
   if (currentProvider === 'gemini') {
     try {
       const text = await callGemini(systemPrompt, userMessage);
@@ -89,7 +100,7 @@ async function generateResponse(systemPrompt, userMessage) {
       return { text, provider: 'gemini' };
     } catch (err) {
       console.error('[AIService] Gemini error:', err.message);
-      return { text: 'שלום! במה אפשר לעזור?', provider: 'gemini_fallback' };
+      return { text: 'שלום! במה אפשר לעזור?', provider: 'gemini_error' };
     }
   }
 
@@ -101,31 +112,34 @@ async function generateResponse(systemPrompt, userMessage) {
   } catch (err) {
     const status = err.response?.status;
     const errMsg = err.response?.data?.error?.message || err.message || '';
-    const isCreditError = status === 400 && errMsg.toLowerCase().includes('credit');
-    const isAuthError = status === 401;
+    const isApiError = status && status >= 400;
+    const isTransient = status === 500 || status === 503; // server error — don't switch, might recover
 
-    if (isCreditError || isAuthError) {
-      // Switch to Gemini
+    console.error(`[AIService] ⚠️ Claude error (${status}): ${errMsg.substring(0, 120)}`);
+    lastClaudeError = { status, message: errMsg, time: new Date().toISOString() };
+
+    if (isApiError && !isTransient) {
+      // Permanent-ish error (400, 401, 403, 404, 429) — switch to Gemini
       currentProvider = 'gemini';
       lastProviderSwitch = new Date().toISOString();
       switchCount++;
 
-      console.warn(`[AIService] ⚠️ Claude ${isCreditError ? 'credit depleted' : 'auth error'} — switching to Gemini (switch #${switchCount})`);
+      const reason = describeClaudeError(status, errMsg);
+      console.warn(`[AIService] ⚡ Switching to Gemini (${reason}) — switch #${switchCount}`);
 
-      // Alert owner via WhatsApp
+      // Alert owner
       await sendOwnerAlert(
         `⚠️ *QUANTUM Bot — התראה*\n\n` +
-        `Claude API ${isCreditError ? 'נגמר קרדיט' : 'שגיאת הרשאה'}.\n` +
+        `Claude API נכשל: *${reason}*\n` +
         `*עבר אוטומטית ל-Gemini* ✅\n\n` +
         `הבוט ממשיך לעבוד רגיל.\n` +
-        `לחזרה ל-Claude: הוסף קרדיט ב-console.anthropic.com ואז redeploy ב-Railway.\n\n` +
-        `שגיאה: ${errMsg.substring(0, 100)}`
+        `לחזרה ל-Claude: תקן את הבעיה ואז עשה Redeploy ב-Railway.\n\n` +
+        `פרטים: ${errMsg.substring(0, 100)}`
       );
 
-      // Now try Gemini
       try {
         const text = await callGemini(systemPrompt, userMessage);
-        console.log('[AIService] ✅ Gemini fallback response OK');
+        console.log('[AIService] ✅ Gemini fallback OK');
         return { text, provider: 'gemini' };
       } catch (geminiErr) {
         console.error('[AIService] Gemini also failed:', geminiErr.message);
@@ -133,31 +147,26 @@ async function generateResponse(systemPrompt, userMessage) {
       }
     }
 
-    // Other Claude error (network, timeout, etc.) — don't switch, just fallback text
-    console.error(`[AIService] Claude error (${status}): ${errMsg}`);
-    return { text: 'שלום! במה אפשר לעזור?', provider: 'error_fallback' };
+    // Transient error (500/503/network) — don't switch, just return fallback
+    return { text: 'שלום! במה אפשר לעזור?', provider: 'transient_error' };
   }
 }
 
-/**
- * Status endpoint data
- */
 function getStatus() {
   return {
     currentProvider,
     lastProviderSwitch,
     switchCount,
+    lastClaudeError,
     claudeKeySet: !!process.env.ANTHROPIC_API_KEY,
     geminiKeySet: !!process.env.GEMINI_API_KEY
   };
 }
 
-/**
- * Manual reset to Claude (call after adding credits + redeploy)
- */
-function resetToClaud() {
+function resetToClaude() {
   currentProvider = 'claude';
+  lastClaudeError = null;
   console.log('[AIService] Reset to Claude');
 }
 
-module.exports = { generateResponse, getProvider, getStatus, resetToClaud };
+module.exports = { generateResponse, getProvider, getStatus, resetToClaude };
