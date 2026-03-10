@@ -721,7 +721,7 @@ function generateDashboardHTML(stats) {
             const date = conv.updated_at ? new Date(conv.updated_at).toLocaleDateString('he-IL') : '';
             const statusColors = { active: '#22c55e', closed: '#6b7280', agent_needed: '#ef4444' };
             const dot = statusColors[conv.status] || '#6b7280';
-            return '<div class="conv-item" data-phone="' + conv.phone + '" onclick="openConversation(\'' + conv.phone.replace(/'/g, '') + '\')">' +
+            return '<div class="conv-item" data-phone="' + conv.phone + '" onclick="openConversation(this.dataset.phone)">' +
                 '<div style="display:flex;align-items:center;gap:8px;">' +
                 '<div style="width:8px;height:8px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></div>' +
                 '<div class="conv-name">' + name + '</div>' +
@@ -768,7 +768,7 @@ function generateDashboardHTML(stats) {
                         const time = msg.created_at ? new Date(msg.created_at).toLocaleString('he-IL', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
                         html += '<div style="display:flex;justify-content:' + (isOut ? 'flex-end' : 'flex-start') + ';">' +
                             '<div class="bubble ' + (isOut ? 'bubble-out' : 'bubble-in') + '">' +
-                            '<div>' + (msg.message || '').replace(/\n/g, '<br>') + '</div>' +
+                            '<div>' + (msg.message || '').replace(/\\n/g, '<br>') + '</div>' +
                             '<div class="bubble-time" style="text-align:' + (isOut ? 'left' : 'right') + ';">' + time + '</div>' +
                             '</div>' +
                             '</div>';
@@ -878,10 +878,10 @@ function generateDashboardHTML(stats) {
                             statsBar.style.flexWrap = 'wrap';
                             statsBar.style.gap = '8px';
                             statsBar.innerHTML =
-                                '<span class="filter-active-badge" style="cursor:pointer;" onclick="loadKones(\'contacted\')">✅ נוצר קשר: ' + s.contacted + '</span>' +
-                                '<span class="filter-active-badge" style="background:rgba(107,114,128,0.2);border-color:#6b7280;color:#9ca3af;cursor:pointer;" onclick="loadKones(\'landline\')">📞 קו ארץ: ' + s.landline + '</span>' +
-                                '<span class="filter-active-badge" style="background:rgba(55,65,81,0.3);border-color:#374151;color:#6b7280;cursor:pointer;" onclick="loadKones(\'no_phone\')">🚫 אין טלפון: ' + s.no_phone + '</span>' +
-                                '<span class="filter-active-badge" style="background:rgba(239,68,68,0.2);border-color:#ef4444;color:#fca5a5;cursor:pointer;" onclick="loadKones(\'failed\')">❌ נכשל: ' + s.failed + '</span>';
+                                '<span class="filter-active-badge" style="cursor:pointer;" onclick="loadKones(&apos;contacted&apos;)">✅ נוצר קשר: ' + s.contacted + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(107,114,128,0.2);border-color:#6b7280;color:#9ca3af;cursor:pointer;" onclick="loadKones(&apos;landline&apos;)">📞 קו ארץ: ' + s.landline + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(55,65,81,0.3);border-color:#374151;color:#6b7280;cursor:pointer;" onclick="loadKones(&apos;no_phone&apos;)">🚫 אין טלפון: ' + s.no_phone + '</span>' +
+                                '<span class="filter-active-badge" style="background:rgba(239,68,68,0.2);border-color:#ef4444;color:#fca5a5;cursor:pointer;" onclick="loadKones(&apos;failed&apos;)">❌ נכשל: ' + s.failed + '</span>';
                         }
                     } catch(e) { /* ignore */ }
                 } else if (statsBar) {
@@ -1108,7 +1108,7 @@ function generateDashboardHTML(stats) {
                     + '<div>🕐 הפעלה אחרונה:<br><span style="color:#e2e8f0;">' + lastRun + '</span></div>'
                     + '<div>📦 מודעות שנמצאו:<br><span style="color:#d4af37;font-weight:700;font-size:16px;">' + count + '</span></div></div>'
                     + (st.error ? '<div style="font-size:11px;color:#ef4444;margin-bottom:8px;padding:6px;background:#1e0a0a;border-radius:4px;">⚠️ ' + st.error + '</div>' : '')
-                    + '<button class="btn btn-green" onclick="runScraper('' + s.id + '', '' + s.endpoint + '')" '
+                    + '<button class="btn btn-green" data-id="' + s.id + '" data-endpoint="' + s.endpoint + '" onclick="runScraper(this.dataset.id, this.dataset.endpoint)" '
                     + (running ? 'disabled' : '') + ' style="width:100%;padding:8px;font-size:13px;">'
                     + (running ? '⏳ פועל...' : '▶️ סרוק עכשיו') + '</button></div>';
             }).join('');
