@@ -59,10 +59,10 @@ router.get('/api/stats', async (req, res) => {
 router.get('/api/kones', async (req, res) => {
     try {
         const { city, status, search } = req.query;
-        let query = `SELECT id, COALESCE(title, address) as title, address, city, price, phone,
+        let query = `SELECT id, COALESCE(address, city, 'כינוס נכסים') as title, address, city, price, phone,
                             contact_status, contact_attempts, last_contact_at,
-                            source, contact_person, email, url, gush_helka,
-                            created_at
+                            source, source_site, contact_person, contact_name, email, url, gush_helka,
+                            submission_deadline, property_type, created_at
                      FROM kones_listings WHERE is_active = TRUE`;
         const params = [];
         let n = 1;
@@ -145,7 +145,7 @@ router.get('/api/ads', async (req, res) => {
                    ROUND(COALESCE(c.theoretical_premium_max,0), 1) as premium_max,
                    c.name as complex_name, c.status as complex_status,
                    GREATEST(c.deposit_date, c.approval_date, c.permit_date, c.declaration_date) as complex_status_date,
-                   COALESCE(c.avg_price_sqm, 0) as avg_price_sqm,
+                   NULL::numeric as avg_price_sqm,
                    l.phone, l.message_status as contact_status, l.deal_status,
                    l.created_at, l.url, l.ssi_score
             FROM listings l
@@ -566,13 +566,26 @@ function generateDashboardHTML(stats) {
         <div class="section">
             <h2>📰 חדשות שוק הנדלן</h2>
             <div class="actions-bar">
-                <button class="btn" data-onclick="loadFacebookAds()">📱 מודעות פייסבוק</button>
+                <button class="btn" data-onclick="loadNews()">🔄 רענן חדשות</button>
+                <button class="btn btn-secondary" data-onclick="loadFacebookAds()">📱 מודעות פייסבוק</button>
             </div>
-            <div id="news-list" class="data-list">
-                <div class="data-item"><h3>📈 ריבית בנק ישראל</h3><p>מחירי הדירות עלו בממוצע ב-3.2% בחודש האחרון</p><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">קטגוריה:</span><span class="data-meta-value">מאקרו</span></div></div></div>
-                <div class="data-item"><h3>🏗️ פינוי-בינוי חדשות</h3><p>אושר פינוי-בינוי חדש ברחוב הרצל - 180 יחידות</p><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">עיר:</span><span class="data-meta-value">קרית ביאליק</span></div></div></div>
-                <div id="facebook-ads-section" style="display:none;"><h3 style="color:#d4af37;margin:15px 0;">📱 מודעות פייסבוק</h3><div id="facebook-ads-list"></div></div>
+            <div id="news-table-container" style="overflow-x:auto;margin-top:16px;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead>
+                        <tr style="background:#1e293b;">
+                            <th style="padding:10px 12px;border-bottom:1px solid #334155;text-align:right;color:#94a3b8;font-weight:600;">#</th>
+                            <th style="padding:10px 12px;border-bottom:1px solid #334155;text-align:right;color:#94a3b8;font-weight:600;">כותרת</th>
+                            <th style="padding:10px 12px;border-bottom:1px solid #334155;text-align:right;color:#94a3b8;font-weight:600;">תיאור</th>
+                            <th style="padding:10px 12px;border-bottom:1px solid #334155;text-align:right;color:#94a3b8;font-weight:600;">קטגוריה</th>
+                            <th style="padding:10px 12px;border-bottom:1px solid #334155;text-align:right;color:#94a3b8;font-weight:600;">תאריך</th>
+                        </tr>
+                    </thead>
+                    <tbody id="news-table-body">
+                        <tr><td colspan="5" style="padding:20px;text-align:center;color:#6b7280;">טוען חדשות...</td></tr>
+                    </tbody>
+                </table>
             </div>
+            <div id="facebook-ads-section" style="display:none;margin-top:20px;"><h3 style="color:#d4af37;margin:15px 0;">📱 מודעות פייסבוק</h3><div id="facebook-ads-list"></div></div>
         </div>
     </div>
 
@@ -677,6 +690,7 @@ function generateDashboardHTML(stats) {
             else if (tabName === 'kones') loadKones(filter || null);
             else if (tabName === 'scheduling') loadScheduling();
             else if (tabName === 'scrapers') loadScraperStatus();
+            else if (tabName === 'news') loadNews();
         }
 
         async function loadMorningIntelligence() {
@@ -1162,6 +1176,38 @@ function generateDashboardHTML(stats) {
                     loadKones();
                 } else throw new Error('HTTP ' + res.status);
             } catch (e) { alert('❌ נכשל: ' + e.message); }
+        }
+
+        const NEWS_TYPE_LABELS = {
+            ad: '🏠 מודעה', lead: '👤 ליד', complex: '🏗️ מתחם',
+            regulation: '📜 רגולציה', market: '📈 שוק', alert: '🔔 התראה'
+        };
+        async function loadNews() {
+            const tbody = document.getElementById('news-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:#6b7280;">טוען...</td></tr>';
+            try {
+                const data = await fetchJSON('/api/dashboard/news');
+                const items = data.news || [];
+                if (!items.length) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:#6b7280;">אין חדשות כרגע</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = items.map(function(item, idx) {
+                    var typeLabel = NEWS_TYPE_LABELS[item.type] || item.type || 'אחר';
+                    var dateStr = item.timestamp ? new Date(item.timestamp).toLocaleString('he-IL') : '';
+                    var rowBg = idx % 2 === 0 ? '#0f172a' : '#1e293b';
+                    return '<tr style="background:' + rowBg + ';">' +
+                        '<td style="padding:10px 12px;border-bottom:1px solid #1e293b;color:#6b7280;">' + (idx + 1) + '</td>' +
+                        '<td style="padding:10px 12px;border-bottom:1px solid #1e293b;color:#e2e8f0;font-weight:500;">' + (item.title || '') + '</td>' +
+                        '<td style="padding:10px 12px;border-bottom:1px solid #1e293b;color:#94a3b8;max-width:300px;">' + (item.description || '') + '</td>' +
+                        '<td style="padding:10px 12px;border-bottom:1px solid #1e293b;"><span class="filter-active-badge" style="font-size:11px;">' + typeLabel + '</span></td>' +
+                        '<td style="padding:10px 12px;border-bottom:1px solid #1e293b;color:#6b7280;white-space:nowrap;">' + dateStr + '</td>' +
+                        '</tr>';
+                }).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:#ef4444;">שגיאה: ' + e.message + '</td></tr>';
+            }
         }
 
         async function loadFacebookAds() {
