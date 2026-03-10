@@ -168,3 +168,15 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS zoho_calendar_id TEXT;
 
 -- Store Zoho Calendar ID per ceremony station (for per-lawyer calendars)
 ALTER TABLE ceremony_stations ADD COLUMN IF NOT EXISTS zoho_calendar_id TEXT;
+
+-- ========================================================
+-- QUANTUM v4.89+ - Per-project INFORU credentials
+-- Each project (מיזם) has its own developer (יזם) with
+-- a separate WhatsApp sender account on INFORU.
+-- inforu_username: INFORU account username (e.g. "QUANTUM", "DEVELOPER2")
+-- inforu_password: INFORU Base Credentials token
+-- Falls back to global INFORU_USERNAME / INFORU_PASSWORD env vars if NULL.
+-- ========================================================
+
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS inforu_username TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS inforu_password TEXT;
