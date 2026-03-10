@@ -14,7 +14,7 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.87.3';
+const VERSION = '4.87.4';
 const BUILD = '2026-03-10-v4.87.2-all-syntax-errors-fixed';
 
 async function runAutoMigrations() {
@@ -50,6 +50,7 @@ app.use(helmet({
       connectSrc: ["'self'"],
       frameSrc: ["'none'"],
       objectSrc: ["'none'"],
+      scriptSrcAttr: ["'unsafe-inline'"],
     }
   }
 }));
