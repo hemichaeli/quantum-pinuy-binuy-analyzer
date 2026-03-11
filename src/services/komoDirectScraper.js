@@ -263,10 +263,10 @@ async function scanCity(city, maxPages = 3) {
 async function enrichExistingListings(limit = 200) {
   logger.info(`[KomoDirect] Enriching up to ${limit} existing komo listings without phone...`);
   
+  // Get ALL komo listings without phone - both numeric IDs and URL-based ones
   const rows = await pool.query(
     `SELECT id, source_listing_id, url FROM listings 
-     WHERE source = 'komo' AND phone IS NULL AND source_listing_id IS NOT NULL
-     AND source_listing_id ~ '^[0-9]+$'
+     WHERE source = 'komo' AND phone IS NULL
      ORDER BY created_at DESC LIMIT $1`,
     [limit]
   );
@@ -277,18 +277,38 @@ async function enrichExistingListings(limit = 200) {
   
   for (const row of rows.rows) {
     try {
-      const phoneData = await fetchPhone(row.source_listing_id);
+      // Try to extract modaaNum from source_listing_id or URL
+      let modaaNum = null;
+      
+      // Check if source_listing_id is numeric
+      if (row.source_listing_id && /^\d+$/.test(row.source_listing_id)) {
+        modaaNum = row.source_listing_id;
+      }
+      // Try to extract from URL: modaaNum=XXXXXXX
+      else if (row.url) {
+        const match = row.url.match(/modaaNum=(\d+)/i);
+        if (match) modaaNum = match[1];
+      }
+      
+      if (!modaaNum) {
+        logger.debug(`[KomoDirect] No modaaNum for listing ${row.id}, skipping`);
+        continue;
+      }
+      
+      const phoneData = await fetchPhone(modaaNum);
       if (phoneData.phone) {
         await pool.query(
-          `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), updated_at = NOW() WHERE id = $3`,
-          [phoneData.phone, phoneData.contact_name, row.id]
+          `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name),
+           source_listing_id = COALESCE(NULLIF(source_listing_id, ''), $3),
+           updated_at = NOW() WHERE id = $4`,
+          [phoneData.phone, phoneData.contact_name, modaaNum, row.id]
         );
         enriched++;
-        logger.debug(`[KomoDirect] Enriched ${row.source_listing_id}: ${phoneData.phone}`);
+        logger.debug(`[KomoDirect] Enriched ${modaaNum}: ${phoneData.phone}`);
       }
       await sleep(800); // Faster for enrichment
     } catch (err) {
-      logger.warn(`[KomoDirect] Enrich error for ${row.source_listing_id}: ${err.message}`);
+      logger.warn(`[KomoDirect] Enrich error for listing ${row.id}: ${err.message}`);
       failed++;
     }
   }
