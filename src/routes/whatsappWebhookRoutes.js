@@ -1,6 +1,8 @@
 /**
- * QUANTUM WhatsApp Bot - v6.5
+ * QUANTUM WhatsApp Bot - v7.0
+ * Persona: רן מ-QUANTUM (aligned with Vapi agent — overlapping scripts)
  * Auto-fallback: Claude → Gemini on credit error + WhatsApp alert to owner
+ * v7.0: "רן" persona, WA reply signals to campaign system
  */
 
 const express = require('express');
@@ -102,44 +104,58 @@ async function requestHandoff(leadId, reason, urgency, phone, name) {
   }
 }
 
-function buildEnhancedPrompt(leadInfo, conversationContext) {
+// ─── רן מ-QUANTUM — System Prompt ────────────────────────────────────────────
+// חופף לתסריט ה-Vapi: אותה פרסונה, אותו DNA, שני ערוצים
+function buildRanPrompt(leadInfo, conversationContext) {
   const stage = leadInfo?.stage || 'greeting';
   const name = leadInfo?.name || null;
   const userType = leadInfo?.user_type || null;
   const isFirstMessage = !conversationContext;
 
-  let p = `אתה נציג QUANTUM - משרד תיווך בוטיק המתמחה בפינוי-בינוי.
+  let p = `אתה רן — נציג QUANTUM, משרד תיווך בוטיק המתמחה בפינוי-בינוי.
 
-## זהות QUANTUM
-- מתווכים בוטיק עם מומחיות בפינוי-בינוי
-- "מח חד, הבנה עמוקה, גישה לנכסים סודיים"
-- כל לקוח מרגיש כמו "בן יחיד"
+## האישיות
+- חכם, חם, ישיר — כמו האדם החכם ביותר שהלקוח פגש
+- בטוח אבל לא מתנשא — נותן ערך, לא "מוכר"
+- מהיר — 1-3 משפטים בכל תגובה
+- עברית טבעית, לא פורמלית
+- לא מזכיר "מערכת", "AI", "אלגוריתם", "פלטפורמה"
 
-## סגנון
-- חד אבל חם, ישיר אבל אכפתי
-- קצר — לא יותר מ-2-3 משפטים
-- עברית טבעית
+## מטרה
+לזהות קונה / מוכר → לאסוף פרטים → לקבוע שיחה עם המומחה.
 
-## חוק ברזל
-❌ לעולם אל תאמר "אני מ-QUANTUM" — בשום שלב
-✓ קפוץ ישר לעניין`;
+## תובנות לזרוק לפי קונטקסט
+מוכר: "אנחנו יודעים מי הקונים הרציניים לפני שהם מפרסמים — בנכס כמו שלך זה יכול לחסוך 3-4 חודשים."
+קונה: "80% מהעסקאות הטובות לא יוצאות לשוק. אנחנו שמים אנשים לפני נכסים שכולם ידברו עליהם בעוד 3 חודשים."
+פינוי-בינוי: "רוב האנשים נכנסים מאוחר מדי לפינוי-בינוי. אנחנו רואים מתחמים 18 חודשים לפני שהם בשוק."`;
 
   if (stage === 'greeting' && isFirstMessage) {
-    p += `\n\n### פגישה ראשונה\nשאל שאלה פתוחה אחת. דוגמה: "ספר לי - קונה או מוכר, ומה מחפש?"`;
+    p += `\n\n## פגישה ראשונה
+הצג את עצמך פעם אחת: "שלום${name ? ' ' + name : ''}! אני רן מ-QUANTUM 👋"
+שאל שאלה פתוחה אחת: "קונה, מוכר, או בשלב של בדיקה?"`;
   } else if (stage === 'info_gathering') {
     p += userType === 'buyer'
-      ? `\n\n### קונה: שאל על אזור, תקציב, מתווך קיים.`
+      ? `\n\n## קונה — שאל:
+שאלה אחת בכל פעם: אזור, תקציב, לוח זמנים, מתווך קיים?`
       : userType === 'seller'
-      ? `\n\n### מוכר: שאל על הנכס, סיבת המכירה, מתווך קיים.`
-      : `\n\n### קודם זהה: קונה או מוכר?`;
+      ? `\n\n## מוכר — שאל:
+שאלה אחת בכל פעם: איפה הנכס, כמה חדרים, כמה זמן בשוק, סיבת המכירה?`
+      : `\n\n## קודם כל — זהה: קונה או מוכר?`;
   } else if (stage === 'scheduling') {
-    p += `\n\n### קביעת פגישה: הצע שיחה קצרה, שאל מתי נוח.`;
+    p += `\n\n## קביעת פגישה
+"יש לי המומחה שלנו פנוי השבוע — מתי נוח לך ל-15 דקות שיחה?"`;
   }
 
   if (conversationContext) p += `\n\n## השיחה עד כה:\n${conversationContext}\n\nהמשך באופן טבעי.`;
   if (name) p += `\n\nשם הלקוח: ${name}`;
 
-  p += `\n\n## חוקי זהב\n❌ אל תאמר "אני מ-QUANTUM"\n❌ אל תשאל אותה שאלה פעמיים\n✓ קצר, ממוקד, אנושי`;
+  p += `\n\n## חוקי זהב
+✓ קצר — 1-3 משפטים בלבד
+✓ שאלה אחת בכל פעם — לא רשימות
+✓ הצג את עצמך כ"רן" רק בהודעה הראשונה
+❌ אל תבטיח מחירים ספציפיים
+❌ אל תשאל את אותה שאלה פעמיים`;
+
   return p;
 }
 
@@ -200,12 +216,24 @@ function extractInsights(message, history) {
   return ins;
 }
 
+// Signal to campaign system that this phone replied (cancel pending escalation)
+async function signalCampaignReply(phone) {
+  try {
+    await axios.post(
+      `http://localhost:${process.env.PORT || 3000}/api/campaigns/webhook/wa-reply`,
+      { phone },
+      { timeout: 3000, validateStatus: () => true }
+    );
+  } catch (_) { /* non-blocking */ }
+}
+
 // ─── GET webhook verification ─────────────────────────────────────────────────
 router.get('/whatsapp/webhook', (req, res) => {
   const aiStatus = aiService.getStatus();
   res.json({
     success: true,
-    version: '6.5',
+    version: '7.0',
+    persona: 'רן מ-QUANTUM',
     ai: aiStatus,
     webhookUrl: getWebhookUrl(),
     timestamp: new Date().toISOString()
@@ -218,6 +246,9 @@ router.post('/whatsapp/webhook', async (req, res) => {
     const parsed = parseInforuWebhook(req.body);
     if (!parsed.phone || !parsed.message) return res.status(200).json({ received: true, processed: false });
     if (parsed.network !== 'WhatsApp' && parsed.network !== 'Direct') return res.json({ received: true, processed: false });
+
+    // Signal campaign system: this phone replied (prevents escalation call)
+    signalCampaignReply(parsed.phone);
 
     const lead = await getOrCreateLead(parsed.phone);
     if (!lead) throw new Error('Failed to get/create lead');
@@ -233,8 +264,8 @@ router.post('/whatsapp/webhook', async (req, res) => {
       return res.json({ success: true, handoff: true, reason: handoffCheck.reason, leadId: lead.id });
     }
 
-    const contextSummary = history.slice(-4).map(m => `${m.sender === 'user' ? 'לקוח' : 'אתה'}: ${m.message}`).join('\n');
-    const systemPrompt = buildEnhancedPrompt(leadInfo, contextSummary);
+    const contextSummary = history.slice(-4).map(m => `${m.sender === 'user' ? 'לקוח' : 'רן'}: ${m.message}`).join('\n');
+    const systemPrompt = buildRanPrompt(leadInfo, contextSummary);
     const { text: aiResponse, provider } = await aiService.generateResponse(systemPrompt, parsed.message);
 
     await saveMessage(lead.id, 'bot', aiResponse, { provider, stage: insights.stage });
@@ -242,7 +273,7 @@ router.post('/whatsapp/webhook', async (req, res) => {
 
     const auth = getBasicAuth();
     const result = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsAppChat`, {
-      Data: { Message: aiResponse, Phone: parsed.phone, Settings: { CustomerMessageId: `bot_${Date.now()}`, CustomerParameter: 'QUANTUM_BOT_V6_5' } }
+      Data: { Message: aiResponse, Phone: parsed.phone, Settings: { CustomerMessageId: `bot_${Date.now()}`, CustomerParameter: 'QUANTUM_RAN_V7' } }
     }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Basic ${auth}` }, timeout: 15000, validateStatus: () => true });
 
     res.json({ success: result.data.StatusId === 1, processed: true, leadId: lead.id, insights, provider });
@@ -295,8 +326,8 @@ router.post('/whatsapp/trigger', async (req, res) => {
     await saveMessage(lead.id, 'user', message);
     const insights = extractInsights(message, history);
     const leadInfo = { id: lead.id, name: insights.name || lead.name, user_type: insights.user_type || lead.user_type, stage: insights.stage };
-    const contextSummary = history.slice(-4).map(m => `${m.sender === 'user' ? 'לקוח' : 'אתה'}: ${m.message}`).join('\n');
-    const systemPrompt = buildEnhancedPrompt(leadInfo, contextSummary);
+    const contextSummary = history.slice(-4).map(m => `${m.sender === 'user' ? 'לקוח' : 'רן'}: ${m.message}`).join('\n');
+    const systemPrompt = buildRanPrompt(leadInfo, contextSummary);
     const { text: aiResponse, provider } = await aiService.generateResponse(systemPrompt, message);
     await saveMessage(lead.id, 'bot', aiResponse, { provider });
     await updateLead(lead.id, insights);
@@ -311,8 +342,8 @@ router.post('/whatsapp/trigger', async (req, res) => {
 // ─── GET stats ────────────────────────────────────────────────────────────────
 router.get('/whatsapp/stats', async (req, res) => {
   try {
-    const stats = (await pool.query(`SELECT COUNT(DISTINCT l.id) as total_leads,COUNT(DISTINCT CASE WHEN l.status='new' THEN l.id END) as new_leads,COUNT(DISTINCT CASE WHEN l.status='pending_handoff' THEN l.id END) as pending_handoff,COUNT(wc.id) as total_messages FROM leads l LEFT JOIN whatsapp_conversations wc ON l.id=wc.lead_id WHERE l.source='whatsapp_bot'`)).rows[0];
-    res.json({ success: true, version: '6.5', ai: aiService.getStatus(), stats, webhookUrl: getWebhookUrl() });
+    const stats = (await pool.query(`SELECT COUNT(DISTINCT l.id) as total_leads,COUNT(DISTINCT CASE WHEN l.status='new' THEN l.id END) as new_leads,COUNT(DISTINCT CASE WHEN l.status='pending_handoff' THEN l.id END) as pending_handoff,COUNT(DISTINCT CASE WHEN l.status='vapi_called' THEN l.id END) as escalated_to_call,COUNT(wc.id) as total_messages FROM leads l LEFT JOIN whatsapp_conversations wc ON l.id=wc.lead_id WHERE l.source='whatsapp_bot'`)).rows[0];
+    res.json({ success: true, version: '7.0', persona: 'רן מ-QUANTUM', ai: aiService.getStatus(), stats, webhookUrl: getWebhookUrl() });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
