@@ -893,6 +893,29 @@ router.post('/enrich-phones', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/scan/yad2-reveal-phones - Use Puppeteer to reveal yad2 phone numbers
+router.post('/yad2-reveal-phones', async (req, res) => {
+  try {
+    const { limit = 200 } = req.body;
+    const scanLog = await pool.query(`INSERT INTO scan_logs (scan_type, status) VALUES ('yad2_phone_reveal', 'running') RETURNING *`);
+    const scanId = scanLog.rows[0].id;
+    res.json({ message: 'yad2 phone reveal triggered', scan_id: scanId, limit });
+    (async () => {
+      try {
+        const { revealPhonesForAllYad2 } = require('../services/yad2PhoneReveal');
+        const result = await revealPhonesForAllYad2({ limit, scanId });
+        await pool.query(
+          `UPDATE scan_logs SET status = 'completed', completed_at = NOW(), complexes_scanned = $1, summary = $2 WHERE id = $3`,
+          [result.total, `yad2 phone reveal: ${result.enriched}/${result.total} phones revealed`, scanId]
+        );
+      } catch (err) {
+        await pool.query(`UPDATE scan_logs SET status = 'failed', completed_at = NOW(), errors = $1 WHERE id = $2`, [err.message, scanId]);
+        logger.error('[yad2PhoneReveal] Scan failed', { error: err.message });
+      }
+    })();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
 router.get('/:id', async (req, res) => {
   try {
