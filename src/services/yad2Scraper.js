@@ -209,6 +209,8 @@ async function queryYad2Perplexity(complex) {
   const prompt = `חפש מודעות למכירה פעילות באתר yad2.co.il עבור הכתובות הבאות ב${complex.city}:
 ${streetList}
 
+חשוב מאוד: כלול מספר טלפון של המוכר/מתווך לכל מודעה!
+
 עבור כל מודעה שנמצאת, החזר את הפרטים הבאים בפורמט JSON:
 {
   "listings": [
@@ -224,6 +226,8 @@ ${streetList}
       "url": "קישור למודעה",
       "listing_id": "מזהה מודעה",
       "days_on_market": ימים_באתר,
+      "phone": "מספר טלפון של המוכר/מתווך או null",
+      "contact_name": "שם המוכר/מתווך או null",
       "is_urgent": true/false,
       "is_foreclosure": true/false,
       "is_inheritance": true/false
@@ -235,7 +239,8 @@ ${streetList}
 חשוב:
 - רק דירות למכירה, לא להשכרה
 - מחירים בשקלים
-- שים לב למילים: דחוף, הזדמנות, כינוס, ירושה, חייב למכור`;
+- שים לב למילים: דחוף, הזדמנות, כינוס, ירושה, חייב למכור
+- נסה לכלול מספר טלפון לכל מודעה - זה קריטי!`;
 
   try {
     const response = await axios.post(PERPLEXITY_API, {
@@ -367,7 +372,15 @@ async function processListing(listing, complexId, complexCity) {
       }
 
       const keywords = detectKeywords(description);
-
+      // Clean phone for update too
+      function cleanPhoneUpd(p) {
+        if (!p) return null;
+        const d = String(p).replace(/\D/g, '');
+        if (d.length < 9 || d.length > 12) return null;
+        if (d.startsWith('972')) return '0' + d.slice(3);
+        return d.startsWith('0') ? d : null;
+      }
+      const updPhone = cleanPhoneUpd(listing.phone);
       await pool.query(
         `UPDATE listings SET
           last_seen = CURRENT_DATE,
@@ -382,6 +395,8 @@ async function processListing(listing, complexId, complexCity) {
           is_foreclosure = $9,
           is_inheritance = $10,
           url = COALESCE($11, url),
+          phone = COALESCE(phone, $13),
+          contact_name = COALESCE(contact_name, $14),
           updated_at = NOW()
         WHERE id = $12`,
         [
@@ -392,7 +407,9 @@ async function processListing(listing, complexId, complexCity) {
           keywords.is_foreclosure || listing.is_foreclosure,
           keywords.is_inheritance || listing.is_inheritance,
           listing.url,
-          ex.id
+          ex.id,
+          updPhone,
+          listing.contact_name || null
         ]
       );
 
@@ -408,6 +425,17 @@ async function processListing(listing, complexId, complexCity) {
       const keywords = detectKeywords(description);
       const daysOnMarket = parseInt(listing.days_on_market) || 0;
 
+      // Clean phone number
+      function cleanPhone(p) {
+        if (!p) return null;
+        const d = String(p).replace(/\D/g, '');
+        if (d.length < 9 || d.length > 12) return null;
+        if (d.startsWith('972')) return '0' + d.slice(3);
+        return d.startsWith('0') ? d : null;
+      }
+      const phone = cleanPhone(listing.phone);
+      const contactName = listing.contact_name || null;
+
       const result = await pool.query(
         `INSERT INTO listings (
           complex_id, source, source_listing_id, url,
@@ -415,8 +443,9 @@ async function processListing(listing, complexId, complexCity) {
           address, city, first_seen, last_seen, days_on_market,
           original_price, description_snippet,
           has_urgent_keywords, urgent_keywords_found, is_foreclosure, is_inheritance,
+          phone, contact_name,
           is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, CURRENT_DATE, $12, $13, $14, $15, $16, $17, $18, TRUE)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, CURRENT_DATE, $12, $13, $14, $15, $16, $17, $18, $19, $20, TRUE)
         ON CONFLICT DO NOTHING
         RETURNING id`,
         [
@@ -428,7 +457,8 @@ async function processListing(listing, complexId, complexCity) {
           keywords.has_urgent_keywords || listing.is_urgent,
           keywords.urgent_keywords_found,
           keywords.is_foreclosure || listing.is_foreclosure,
-          keywords.is_inheritance || listing.is_inheritance
+          keywords.is_inheritance || listing.is_inheritance,
+          phone, contactName
         ]
       );
 
