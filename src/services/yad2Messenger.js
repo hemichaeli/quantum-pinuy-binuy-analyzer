@@ -70,7 +70,18 @@ async function login() {
   
   try {
     await page.goto(YAD2_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 3000));
+    
+    // yad2 login has tabs: "מייל" (email) and "סיסמה" (password)
+    // Step 1: Click the "מייל" tab to show email input
+    try {
+      const emailTab = await page.$x("//li[contains(., 'מייל')] | //button[contains(., 'מייל')] | //span[contains(., 'מייל')]");
+      if (emailTab.length > 0) {
+        await emailTab[0].click();
+        await new Promise(r => setTimeout(r, 1500));
+        logger.info('yad2Messenger: Clicked email tab');
+      }
+    } catch(e) { logger.debug('yad2Messenger: No email tab found, proceeding'); }
     
     // Try multiple login form selectors (yad2 changes their UI)
     const emailSelectors = [
@@ -79,7 +90,9 @@ async function login() {
       'input[placeholder*="מייל"]',
       'input[placeholder*="email"]',
       '#email',
-      'input[data-test="email"]'
+      'input[data-test="email"]',
+      'input[autocomplete="email"]',
+      'input[autocomplete="username"]'
     ];
     
     let emailInput = null;
@@ -89,17 +102,9 @@ async function login() {
     }
     
     if (!emailInput) {
-      // Maybe there's a "login with email" button first
-      const emailLoginBtn = await page.$('button[data-test="email-login"]') 
-        || await page.$('a[href*="email"]');
-      if (emailLoginBtn) {
-        await emailLoginBtn.click();
-        await new Promise(r => setTimeout(r, 1500));
-        for (const sel of emailSelectors) {
-          emailInput = await page.$(sel);
-          if (emailInput) break;
-        }
-      }
+      // Try XPath for any visible input
+      const allInputs = await page.$$('input:not([type="hidden"])');
+      if (allInputs.length > 0) emailInput = allInputs[0];
     }
     
     if (!emailInput) {
@@ -108,28 +113,63 @@ async function login() {
       throw new Error('Login form not found - yad2 may have changed their UI');
     }
     
+    await emailInput.click({ clickCount: 3 });
     await emailInput.type(email, { delay: 50 });
+    logger.info('yad2Messenger: Entered email');
     
-    const passwordSelectors = [
-      'input[type="password"]',
-      'input[name="password"]',
-      '#password'
-    ];
+    // Step 2: Click the "סיסמה" tab or find password input
+    let passwordInput = await page.$('input[type="password"]');
     
-    let passwordInput = null;
-    for (const sel of passwordSelectors) {
-      passwordInput = await page.$(sel);
-      if (passwordInput) break;
+    if (!passwordInput) {
+      // Try clicking the password tab
+      try {
+        const passwordTab = await page.$x("//li[contains(., 'סיסמה')] | //button[contains(., 'סיסמה')] | //span[contains(., 'סיסמה')]");
+        if (passwordTab.length > 0) {
+          await passwordTab[0].click();
+          await new Promise(r => setTimeout(r, 1500));
+          logger.info('yad2Messenger: Clicked password tab');
+          passwordInput = await page.$('input[type="password"]');
+        }
+      } catch(e) { logger.debug('yad2Messenger: No password tab'); }
+    }
+    
+    if (!passwordInput) {
+      // Try pressing Enter to advance to password field
+      await page.keyboard.press('Enter');
+      await new Promise(r => setTimeout(r, 1500));
+      passwordInput = await page.$('input[type="password"]');
     }
     
     if (passwordInput) {
+      await passwordInput.click({ clickCount: 3 });
       await passwordInput.type(password, { delay: 50 });
+      logger.info('yad2Messenger: Entered password');
+    } else {
+      logger.warn('yad2Messenger: Password input not found, trying to submit anyway');
     }
     
-    // Click submit
-    const submitBtn = await page.$('button[type="submit"]') || await page.$('button[data-test="submit"]');
+    // Click submit - try multiple selectors
+    const submitSelectors = [
+      'button[type="submit"]',
+      'button[data-test="submit"]',
+      'button[class*="submit"]',
+      'button[class*="login"]'
+    ];
+    let submitBtn = null;
+    for (const sel of submitSelectors) {
+      submitBtn = await page.$(sel);
+      if (submitBtn) break;
+    }
+    if (!submitBtn) {
+      // Try XPath for התחברות button
+      const xpathBtns = await page.$x("//button[contains(., 'התחברות')] | //button[contains(., 'כניסה')]");
+      if (xpathBtns.length > 0) submitBtn = xpathBtns[0];
+    }
     if (submitBtn) {
       await submitBtn.click();
+      logger.info('yad2Messenger: Clicked submit');
+    } else {
+      await page.keyboard.press('Enter');
     }
     
     await new Promise(r => setTimeout(r, 5000));
