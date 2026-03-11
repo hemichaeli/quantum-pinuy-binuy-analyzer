@@ -813,6 +813,74 @@ function generateDashboardHTML(stats) {
             } catch (e) { container.innerHTML = errorHTML(e.message, 'loadAds()'); }
         }
 
+        let _adsView = 'table';
+        function setAdsView(view) {
+            _adsView = view;
+            const tableBtn = document.getElementById('ads-view-table');
+            const gridBtn = document.getElementById('ads-view-grid');
+            if (tableBtn) { tableBtn.style.background = view === 'table' ? '#1e40af' : ''; tableBtn.className = view === 'table' ? 'btn' : 'btn btn-secondary'; }
+            if (gridBtn) { gridBtn.style.background = view === 'grid' ? '#1e40af' : ''; gridBtn.className = view === 'grid' ? 'btn' : 'btn btn-secondary'; }
+            if (_adsData.length) {
+                if (view === 'grid') renderAdsGrid(_adsData);
+                else renderAdsTable(_adsData);
+            }
+        }
+        function renderAdsGrid(ads) {
+            const table = document.getElementById('ads-table');
+            const oldList = document.getElementById('ads-list');
+            const gridContainer = document.getElementById('ads-grid-container');
+            if (!gridContainer) return;
+            if (table) table.style.display = 'none';
+            if (oldList) oldList.style.display = 'none';
+            gridContainer.style.display = '';
+            const premiumColor = (pct) => parseFloat(pct) > 30 ? '#22c55e' : parseFloat(pct) > 15 ? '#f59e0b' : '#ef4444';
+            gridContainer.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">'
+                + ads.map((ad, i) => {
+                    const price = ad.price_current ? '\u20AA' + parseInt(ad.price_current).toLocaleString() : '\u2014';
+                    const premNow = ad.premium_percent && parseFloat(ad.premium_percent) > 0 ? parseFloat(ad.premium_percent).toFixed(1) + '%' : null;
+                    const premAfter = (ad.premium_min && ad.premium_max && (parseFloat(ad.premium_min) > 0 || parseFloat(ad.premium_max) > 0))
+                        ? parseFloat(ad.premium_min).toFixed(0) + '%\u2013' + parseFloat(ad.premium_max).toFixed(0) + '%' : null;
+                    const statusHe = complexStatusHe[ad.complex_status] || (ad.complex_status || null);
+                    const published = ad.published_at ? new Date(ad.published_at).toLocaleDateString('he-IL') : (ad.created_at ? new Date(ad.created_at).toLocaleDateString('he-IL') : '\u2014');
+                    const ssi = ad.ssi_score || 0;
+                    const ssiColor = ssi > 70 ? '#22c55e' : ssi > 40 ? '#f59e0b' : '#94a3b8';
+                    const title = ad.title || ad.address || ('\u05de\u05d5\u05d3\u05e2\u05d4 #' + (i+1));
+                    const city = ad.city || '';
+                    const rooms = ad.rooms ? ad.rooms + ' \u05d7\u05d3\u0027' : null;
+                    const area = ad.area_sqm ? parseFloat(ad.area_sqm).toFixed(0) + ' \u05de"\u05e8' : null;
+                    const floor = ad.floor != null ? '\u05e7\u05d5\u05de\u05d4 ' + ad.floor : null;
+                    const source = ad.source || null;
+                    return '<div style="background:#1e293b;border-radius:12px;padding:16px;border:1px solid #334155;display:flex;flex-direction:column;gap:8px;">'
+                        + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
+                        + '<div style="font-weight:600;font-size:14px;color:#f1f5f9;line-height:1.3;flex:1;">' + title + '</div>'
+                        + (ssi > 0 ? '<div style="background:rgba(0,0,0,0.3);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;color:' + ssiColor + ';white-space:nowrap;">SSI ' + ssi + '</div>' : '')
+                        + '</div>'
+                        + (city ? '<div style="font-size:13px;color:#94a3b8;">' + city + '</div>' : '')
+                        + '<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px;">'
+                        + (rooms ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#cbd5e1;">' + rooms + '</span>' : '')
+                        + (area ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#cbd5e1;">' + area + '</span>' : '')
+                        + (floor ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#cbd5e1;">' + floor + '</span>' : '')
+                        + (source ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#64748b;">' + source + '</span>' : '')
+                        + '</div>'
+                        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">'
+                        + '<div style="font-size:18px;font-weight:700;color:#fbbf24;">' + price + '</div>'
+                        + '<div style="display:flex;gap:8px;font-size:12px;">'
+                        + (premNow ? '<span style="color:' + premiumColor(ad.premium_percent) + ';">' + premNow + '</span>' : '')
+                        + (premAfter ? '<span style="color:#60a5fa;">' + premAfter + '</span>' : '')
+                        + '</div>'
+                        + '</div>'
+                        + (statusHe ? '<div style="font-size:11px;background:rgba(100,100,200,0.2);padding:3px 8px;border-radius:4px;display:inline-block;align-self:flex-start;color:#a5b4fc;">' + statusHe + '</div>' : '')
+                        + '<div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid #334155;">'
+                        + '<div style="font-size:11px;color:#64748b;">' + published + '</div>'
+                        + '<div style="display:flex;gap:8px;">'
+                        + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:#3b82f6;font-size:12px;text-decoration:none;">' + ad.phone + '</a>' : '')
+                        + (ad.url ? '<a href="' + ad.url + '" target="_blank" style="color:#3b82f6;font-size:12px;text-decoration:none;">&#128279; \u05e4\u05ea\u05d7</a>' : '')
+                        + '</div>'
+                        + '</div>'
+                        + '</div>';
+                }).join('')
+                + '</div>';
+        }
         let _adsSortField = 'created_at', _adsSortDir = 'desc', _adsData = [];
         function sortAdsBy(field) {
             if (_adsSortField === field) _adsSortDir = _adsSortDir === 'asc' ? 'desc' : 'asc';
