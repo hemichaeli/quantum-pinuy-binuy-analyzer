@@ -271,3 +271,25 @@ CREATE TABLE IF NOT EXISTS system_settings (
 INSERT INTO system_settings (key, value, label)
 VALUES ('wa_bot_escalation_minutes', '60', 'זמן המתנה לאחר WA Bot לפני שיחה (0 = כבוי)')
 ON CONFLICT (key) DO NOTHING;
+
+-- ============================================================
+-- Ad Enrichment: Gemini Flash + Perplexity Sonar columns
+-- Added: 2026-03-11
+-- ============================================================
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS gemini_urgency_flag TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS gemini_urgency_reason TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS gemini_hidden_info TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS exact_address_enriched TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS gemini_score_boost INTEGER DEFAULT 0;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS gemini_score_reason TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS gemini_enriched_at TIMESTAMPTZ;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS building_year INTEGER;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS building_age INTEGER;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS nearby_plans JSONB;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS has_renewal_plan BOOLEAN DEFAULT FALSE;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS recent_transactions JSONB;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS avg_price_sqm_area INTEGER;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS perplexity_public_notes TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS perplexity_enriched_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_listings_gemini_enriched ON listings(gemini_enriched_at) WHERE gemini_enriched_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_listings_urgency_flag ON listings(gemini_urgency_flag) WHERE gemini_urgency_flag IS NOT NULL;
