@@ -1,8 +1,6 @@
 /**
- * QUANTUM Campaign Routes — v2.1
- * Manages outreach campaigns: WA→Call or Call-Only
- * Agent: רן מ-QUANTUM (scripts from ranScript.js)
- * v2.1: Added /settings routes for WA Bot escalation config
+ * QUANTUM Campaign Routes — v2.3
+ * v2.3: voice/script settings per campaign + leads from DB filter
  */
 
 const express = require('express');
@@ -61,18 +59,37 @@ async function initiateVapiCall(phone, leadName, campaign) {
   if (!assistantId)              throw new Error('No Vapi assistant configured');
 
   const e164 = normalizePhone(phone);
+
+  // Build assistant overrides — apply voice settings from campaign
+  const assistantOverrides = {
+    variableValues: {
+      lead_name:     leadName || '',
+      agent_name:    campaign.agent_name || 'רן',
+      campaign_id:   String(campaign.id),
+      campaign_name: campaign.name,
+    },
+  };
+
+  // Apply voice override if campaign has custom voice
+  if (campaign.voice_name) {
+    assistantOverrides.voice = {
+      provider: campaign.voice_provider || 'vapi',
+      voiceId:  campaign.voice_name,
+    };
+  }
+
+  // Apply script override if campaign has custom call script
+  if (campaign.call_script) {
+    assistantOverrides.model = {
+      messages: [{ role: 'system', content: campaign.call_script }],
+    };
+  }
+
   const resp = await axios.post(`${VAPI_BASE}/call/phone`, {
     phoneNumberId,
     assistantId,
     customer: { number: e164, name: leadName || 'לקוח' },
-    assistantOverrides: {
-      variableValues: {
-        lead_name:     leadName || '',
-        agent_name:    campaign.agent_name || 'רן',
-        campaign_id:   String(campaign.id),
-        campaign_name: campaign.name,
-      },
-    },
+    assistantOverrides,
   }, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     timeout: 15000,
@@ -117,7 +134,6 @@ router.get('/settings', async (req, res) => {
   try {
     const { getEscalationMinutes, getEscalationStats } = require('../services/waBotEscalationService');
     const [minutes, rawStats] = await Promise.all([getEscalationMinutes(), getEscalationStats()]);
-    // Normalize stats keys for UI compatibility
     const stats = {
       pending_escalation: parseInt(rawStats?.active_bot_leads) || 0,
       escalated_total:    parseInt(rawStats?.total_escalated)  || 0,
@@ -125,8 +141,8 @@ router.get('/settings', async (req, res) => {
     };
     res.json({
       success: true,
-      escalation_minutes: minutes,          // UI expects this key
-      wa_bot_escalation_minutes: minutes,   // alias for backwards compat
+      escalation_minutes: minutes,
+      wa_bot_escalation_minutes: minutes,
       wa_bot_escalation_enabled: minutes > 0,
       stats,
     });
@@ -144,14 +160,13 @@ router.patch('/settings', async (req, res) => {
     }
     const { setEscalationMinutes } = require('../services/waBotEscalationService');
     const val = await setEscalationMinutes(wa_bot_escalation_minutes);
-    logger.info(`[Settings] wa_bot_escalation_minutes set to ${val}`);
     res.json({ success: true, escalation_minutes: val, wa_bot_escalation_minutes: val });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/campaigns/escalation/run  (manual trigger for testing)
+// POST /api/campaigns/escalation/run
 router.post('/escalation/run', async (req, res) => {
   try {
     const { runEscalation } = require('../services/waBotEscalationService');
@@ -171,7 +186,6 @@ router.get('/:id', async (req, res) => {
       'SELECT * FROM campaigns WHERE id = $1', [req.params.id]
     );
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
-
     const { rows: leads } = await pool.query(
       'SELECT * FROM campaign_leads WHERE campaign_id = $1 ORDER BY created_at DESC',
       [req.params.id]
@@ -192,6 +206,10 @@ router.post('/', async (req, res) => {
       agent_name = 'רן',
       wa_message,
       notes,
+      voice_gender = 'male',
+      voice_name,
+      voice_provider = 'vapi',
+      call_script,
     } = req.body;
 
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -200,10 +218,13 @@ router.post('/', async (req, res) => {
     }
 
     const { rows: [campaign] } = await pool.query(`
-      INSERT INTO campaigns (name, mode, wa_wait_minutes, agent_name, wa_message, notes)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO campaigns (name, mode, wa_wait_minutes, agent_name, wa_message, notes,
+                             voice_gender, voice_name, voice_provider, call_script)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
-    `, [name, mode, wa_wait_minutes, agent_name, wa_message || null, notes || null]);
+    `, [name, mode, wa_wait_minutes, agent_name,
+        wa_message || null, notes || null,
+        voice_gender, voice_name || null, voice_provider, call_script || null]);
 
     res.status(201).json({ success: true, campaign });
   } catch (err) {
@@ -211,23 +232,29 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PATCH /api/campaigns/:id
+// PATCH /api/campaigns/:id — update basic fields
 router.patch('/:id', async (req, res) => {
   try {
-    const { name, mode, wa_wait_minutes, agent_name, wa_message, notes, status } = req.body;
+    const { name, mode, wa_wait_minutes, agent_name, wa_message, notes, status,
+            voice_gender, voice_name, voice_provider, call_script } = req.body;
     const { rows: [campaign] } = await pool.query(`
       UPDATE campaigns SET
-        name            = COALESCE($1, name),
-        mode            = COALESCE($2, mode),
-        wa_wait_minutes = COALESCE($3, wa_wait_minutes),
-        agent_name      = COALESCE($4, agent_name),
-        wa_message      = COALESCE($5, wa_message),
-        notes           = COALESCE($6, notes),
-        status          = COALESCE($7, status),
+        name            = COALESCE($1,  name),
+        mode            = COALESCE($2,  mode),
+        wa_wait_minutes = COALESCE($3,  wa_wait_minutes),
+        agent_name      = COALESCE($4,  agent_name),
+        wa_message      = COALESCE($5,  wa_message),
+        notes           = COALESCE($6,  notes),
+        status          = COALESCE($7,  status),
+        voice_gender    = COALESCE($8,  voice_gender),
+        voice_name      = COALESCE($9,  voice_name),
+        voice_provider  = COALESCE($10, voice_provider),
+        call_script     = COALESCE($11, call_script),
         updated_at      = NOW()
-      WHERE id = $8
+      WHERE id = $12
       RETURNING *
-    `, [name, mode, wa_wait_minutes, agent_name, wa_message, notes, status, req.params.id]);
+    `, [name, mode, wa_wait_minutes, agent_name, wa_message, notes, status,
+        voice_gender, voice_name, voice_provider, call_script, req.params.id]);
 
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
     res.json({ success: true, campaign });
@@ -248,13 +275,22 @@ router.delete('/:id', async (req, res) => {
 
 // ─── Lead Management ───────────────────────────────────────────────────────────
 
+// POST /api/campaigns/:id/leads — add leads manually (array)
 router.post('/:id/leads', async (req, res) => {
   try {
     const campaignId = req.params.id;
-    const { leads }  = req.body;
+    const { leads, mode_override } = req.body;
 
     if (!Array.isArray(leads) || !leads.length) {
       return res.status(400).json({ error: 'leads array required' });
+    }
+
+    // If mode_override supplied, update campaign mode before adding leads
+    if (mode_override && ['wa_then_call', 'call_only'].includes(mode_override)) {
+      await pool.query(
+        'UPDATE campaigns SET mode = $1, updated_at = NOW() WHERE id = $2',
+        [mode_override, campaignId]
+      );
     }
 
     const inserted = [];
@@ -274,6 +310,137 @@ router.post('/:id/leads', async (req, res) => {
     }
 
     res.json({ success: true, inserted: inserted.length, leads: inserted });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/:id/leads/from-filter — add leads from leads table with filters
+router.post('/:id/leads/from-filter', async (req, res) => {
+  try {
+    const campaignId = req.params.id;
+    const { city, status: leadStatus, source, min_ssi, max_ssi, limit = 200, mode_override } = req.body;
+
+    // Verify campaign exists
+    const { rows: [campaign] } = await pool.query('SELECT id FROM campaigns WHERE id = $1', [campaignId]);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    // If mode_override supplied, update campaign mode
+    if (mode_override && ['wa_then_call', 'call_only'].includes(mode_override)) {
+      await pool.query('UPDATE campaigns SET mode = $1, updated_at = NOW() WHERE id = $2', [mode_override, campaignId]);
+    }
+
+    // Build dynamic query from filters
+    const conditions = ['l.phone IS NOT NULL', "l.phone != ''"];
+    const params = [];
+
+    if (city) {
+      params.push(city);
+      conditions.push(`l.city = $${params.length}`);
+    }
+    if (leadStatus) {
+      params.push(leadStatus);
+      conditions.push(`l.status = $${params.length}`);
+    }
+    if (source) {
+      params.push(source);
+      conditions.push(`l.source = $${params.length}`);
+    }
+    if (min_ssi !== undefined) {
+      params.push(min_ssi);
+      conditions.push(`l.ssi_score >= $${params.length}`);
+    }
+    if (max_ssi !== undefined) {
+      params.push(max_ssi);
+      conditions.push(`l.ssi_score <= $${params.length}`);
+    }
+
+    params.push(campaignId);
+    const excludeClause = `l.phone NOT IN (
+      SELECT phone FROM campaign_leads WHERE campaign_id = $${params.length}
+    )`;
+    conditions.push(excludeClause);
+
+    params.push(limit);
+    const query = `
+      SELECT l.id, l.phone, l.name, l.city, l.source, l.status, l.ssi_score
+      FROM leads l
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY l.ssi_score DESC NULLS LAST
+      LIMIT $${params.length}
+    `;
+
+    const { rows: leadsToAdd } = await pool.query(query, params);
+
+    if (!leadsToAdd.length) {
+      return res.json({ success: true, inserted: 0, message: 'אין ליידים תואמים לפילטרים' });
+    }
+
+    let inserted = 0;
+    for (const l of leadsToAdd) {
+      try {
+        const { rowCount } = await pool.query(`
+          INSERT INTO campaign_leads (campaign_id, phone, name, source, lead_id)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (campaign_id, phone) DO NOTHING
+        `, [campaignId, l.phone, l.name || null, l.source || 'leads_db', l.id]);
+        if (rowCount > 0) inserted++;
+      } catch (e) {
+        logger.warn(`[Campaign/filter] lead ${l.phone}:`, e.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      inserted,
+      total_matched: leadsToAdd.length,
+      message: `נוספו ${inserted} ליידים מה-DB לקמפיין`,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/campaigns/leads/filter-preview — preview leads matching filters (for UI)
+router.get('/leads/filter-preview', async (req, res) => {
+  try {
+    const { city, status: leadStatus, source, min_ssi, max_ssi, limit = 50 } = req.query;
+
+    const conditions = ['l.phone IS NOT NULL', "l.phone != ''"];
+    const params = [];
+
+    if (city) { params.push(city); conditions.push(`l.city = $${params.length}`); }
+    if (leadStatus) { params.push(leadStatus); conditions.push(`l.status = $${params.length}`); }
+    if (source) { params.push(source); conditions.push(`l.source = $${params.length}`); }
+    if (min_ssi !== undefined) { params.push(min_ssi); conditions.push(`l.ssi_score >= $${params.length}`); }
+    if (max_ssi !== undefined) { params.push(max_ssi); conditions.push(`l.ssi_score <= $${params.length}`); }
+
+    params.push(parseInt(limit));
+    const query = `
+      SELECT l.id, l.phone, l.name, l.city, l.source, l.status, l.ssi_score
+      FROM leads l
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY l.ssi_score DESC NULLS LAST
+      LIMIT $${params.length}
+    `;
+
+    const { rows } = await pool.query(query, params);
+
+    // Also get count
+    const countQuery = `SELECT COUNT(*) FROM leads l WHERE ${conditions.slice(0, -1).join(' AND ')}`;
+    const { rows: [{ count }] } = await pool.query(countQuery, params.slice(0, -1));
+
+    // Get distinct cities for filter dropdown
+    const { rows: cities } = await pool.query(
+      `SELECT DISTINCT city FROM leads WHERE city IS NOT NULL AND city != '' ORDER BY city LIMIT 100`
+    );
+
+    res.json({
+      success: true,
+      leads: rows,
+      total_count: parseInt(count),
+      cities: cities.map(r => r.city),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -316,20 +483,19 @@ router.post('/:id/launch', async (req, res) => {
           `, [vapiCallId, lead.id]);
           callsInitiated++;
         } else {
-          const msgs = campaign.wa_message
-            ? { initial: campaign.wa_message.replace('{{name}}', lead.name || '') }
-            : buildWaMessages({ name: lead.name, city: lead.city, propertyType: lead.property_type });
+          const waText = campaign.wa_message
+            ? campaign.wa_message.replace(/\{\{name\}\}/g, lead.name || '')
+                                 .replace(/\{\{city\}\}/g, lead.city  || '')
+            : buildWaMessages({ name: lead.name, city: lead.city }).initial;
 
-          const ok = await sendWhatsApp(lead.phone, msgs.initial, lead.id);
+          const ok = await sendWhatsApp(lead.phone, waText, lead.id);
           await pool.query(`
             UPDATE campaign_leads
             SET status = $1, wa_sent_at = NOW(), updated_at = NOW()
             WHERE id = $2
           `, [ok ? 'wa_sent' : 'failed', lead.id]);
-          if (ok) waSent++;
-          else errors++;
+          if (ok) waSent++; else errors++;
         }
-
         await new Promise(r => setTimeout(r, 500));
       } catch (e) {
         logger.error(`[Campaign] Lead ${lead.phone} error:`, e.message);
@@ -349,7 +515,7 @@ router.post('/:id/launch', async (req, res) => {
       calls_initiated: callsInitiated,
       errors,
       message: campaign.mode === 'wa_then_call'
-        ? `נשלחו ${waSent} הודעות WA. שיחות יוזמו אוטומטית אחרי ${campaign.wa_wait_minutes} דקות ללא מענה.`
+        ? `נשלחו ${waSent} הודעות WA. שיחות יוזמו אחרי ${campaign.wa_wait_minutes} דק' ללא מענה.`
         : `יזומו ${callsInitiated} שיחות ישירות.`,
     });
   } catch (err) {
@@ -375,7 +541,8 @@ router.post('/followup/run', async (req, res) => {
   try {
     const { rows: overdueLeads } = await pool.query(`
       SELECT cl.*, c.wa_wait_minutes, c.agent_name, c.name AS campaign_name, c.id AS camp_id,
-             cl.name AS lead_name, cl.city, cl.property_type
+             c.voice_gender, c.voice_name, c.voice_provider, c.call_script,
+             cl.name AS lead_name
       FROM campaign_leads cl
       JOIN campaigns c ON c.id = cl.campaign_id
       WHERE cl.status = 'wa_sent'
@@ -392,21 +559,14 @@ router.post('/followup/run', async (req, res) => {
 
     for (const lead of overdueLeads) {
       try {
-        const preCallMsgs = buildWaMessages({
-          name: lead.lead_name,
-          city: lead.city,
-          propertyType: lead.property_type,
-        });
-        try {
-          await sendWhatsApp(lead.phone, preCallMsgs.followup2, lead.id);
-          logger.info(`[Campaign] Pre-call WA sent to ${lead.phone}`);
-          await new Promise(r => setTimeout(r, 3000));
-        } catch (_) { /* non-blocking */ }
-
         const campaign = {
           id: lead.camp_id,
           name: lead.campaign_name,
           agent_name: lead.agent_name,
+          voice_gender: lead.voice_gender,
+          voice_name: lead.voice_name,
+          voice_provider: lead.voice_provider,
+          call_script: lead.call_script,
         };
         const vapiCallId = await initiateVapiCall(lead.phone, lead.lead_name, campaign);
         await pool.query(`
@@ -415,7 +575,6 @@ router.post('/followup/run', async (req, res) => {
               call_queued_at = NOW(), vapi_call_id = $1, updated_at = NOW()
           WHERE id = $2
         `, [vapiCallId, lead.id]);
-        logger.info(`[Campaign] Called ${lead.phone} after WA no-response (${lead.campaign_name})`);
         called++;
         await new Promise(r => setTimeout(r, 800));
       } catch (e) {
@@ -443,10 +602,6 @@ router.post('/webhook/wa-reply', async (req, res) => {
         AND status = 'wa_sent'
         AND campaign_id IN (SELECT id FROM campaigns WHERE status = 'active')
     `, [phone]);
-
-    if (rowCount > 0) {
-      logger.info(`[Campaign] WA reply registered for ${phone} — call cancelled`);
-    }
 
     res.json({ success: true, updated: rowCount });
   } catch (err) {
