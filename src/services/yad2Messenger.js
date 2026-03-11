@@ -5,7 +5,9 @@
  * Uses puppeteer-core with system Chromium
  */
 
-const puppeteer = require('puppeteer-core');
+const puppeteerExtra = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteerExtra.use(StealthPlugin());
 const { logger } = require('./logger');
 
 const YAD2_BASE = 'https://www.yad2.co.il';
@@ -30,7 +32,7 @@ async function getBrowser() {
   if (browser && browser.isConnected()) return browser;
   
   logger.info('yad2Messenger: Launching browser...', { chromiumPath: CHROMIUM_PATH });
-  browser = await puppeteer.launch({
+  browser = await puppeteerExtra.launch({
     headless: 'new',
     executablePath: CHROMIUM_PATH,
     args: [
