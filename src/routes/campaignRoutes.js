@@ -1,7 +1,8 @@
 /**
- * QUANTUM Campaign Routes — v2.0
+ * QUANTUM Campaign Routes — v2.1
  * Manages outreach campaigns: WA→Call or Call-Only
  * Agent: רן מ-QUANTUM (scripts from ranScript.js)
+ * v2.1: Added /settings routes for WA Bot escalation config
  */
 
 const express = require('express');
@@ -102,6 +103,60 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/campaigns/scripts/preview
+router.get('/scripts/preview', (req, res) => {
+  const { name, city, propertyType } = req.query;
+  const msgs = buildWaMessages({ name, city, propertyType });
+  res.json({ success: true, scripts: msgs });
+});
+
+// ─── System Settings (WA Bot Escalation) ──────────────────────────────────────
+
+// GET /api/campaigns/settings
+router.get('/settings', async (req, res) => {
+  try {
+    const { getEscalationMinutes, getEscalationStats } = require('../services/waBotEscalationService');
+    const [minutes, stats] = await Promise.all([getEscalationMinutes(), getEscalationStats()]);
+    res.json({
+      success: true,
+      wa_bot_escalation_minutes: minutes,
+      wa_bot_escalation_enabled: minutes > 0,
+      stats,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/campaigns/settings
+router.patch('/settings', async (req, res) => {
+  try {
+    const { wa_bot_escalation_minutes } = req.body;
+    if (wa_bot_escalation_minutes === undefined) {
+      return res.status(400).json({ error: 'wa_bot_escalation_minutes required' });
+    }
+    const { setEscalationMinutes } = require('../services/waBotEscalationService');
+    const val = await setEscalationMinutes(wa_bot_escalation_minutes);
+    logger.info(`[Settings] wa_bot_escalation_minutes set to ${val}`);
+    res.json({ success: true, wa_bot_escalation_minutes: val });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/escalation/run  (manual trigger for testing)
+router.post('/escalation/run', async (req, res) => {
+  try {
+    const { runEscalation } = require('../services/waBotEscalationService');
+    const result = await runEscalation();
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Single Campaign CRUD ──────────────────────────────────────────────────────
+
 // GET /api/campaigns/:id
 router.get('/:id', async (req, res) => {
   try {
@@ -118,13 +173,6 @@ router.get('/:id', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// GET /api/campaigns/scripts/preview — preview ран messages
-router.get('/scripts/preview', (req, res) => {
-  const { name, city, propertyType } = req.query;
-  const msgs = buildWaMessages({ name, city, propertyType });
-  res.json({ success: true, scripts: msgs });
 });
 
 // POST /api/campaigns — create
@@ -252,7 +300,6 @@ router.post('/:id/launch', async (req, res) => {
     for (const lead of leads) {
       try {
         if (campaign.mode === 'call_only') {
-          // ── שיחה ישירה ──
           const vapiCallId = await initiateVapiCall(lead.phone, lead.name, campaign);
           await pool.query(`
             UPDATE campaign_leads
@@ -262,7 +309,6 @@ router.post('/:id/launch', async (req, res) => {
           `, [vapiCallId, lead.id]);
           callsInitiated++;
         } else {
-          // ── WA ראשון (תסריט רן) ──
           const msgs = campaign.wa_message
             ? { initial: campaign.wa_message.replace('{{name}}', lead.name || '') }
             : buildWaMessages({ name: lead.name, city: lead.city, propertyType: lead.property_type });
@@ -317,8 +363,6 @@ router.post('/:id/pause', async (req, res) => {
 });
 
 // ─── Followup Cron ─────────────────────────────────────────────────────────────
-// POST /api/campaigns/followup/run — called every minute by cron
-// Finds WA-sent leads with no reply after wa_wait_minutes → sends pre-call WA → calls
 
 router.post('/followup/run', async (req, res) => {
   try {
@@ -341,7 +385,6 @@ router.post('/followup/run', async (req, res) => {
 
     for (const lead of overdueLeads) {
       try {
-        // שולח הודעת "עומד להתקשר" לפני השיחה
         const preCallMsgs = buildWaMessages({
           name: lead.lead_name,
           city: lead.city,
@@ -350,8 +393,8 @@ router.post('/followup/run', async (req, res) => {
         try {
           await sendWhatsApp(lead.phone, preCallMsgs.followup2, lead.id);
           logger.info(`[Campaign] Pre-call WA sent to ${lead.phone}`);
-          await new Promise(r => setTimeout(r, 3000)); // 3 שניות לפני השיחה
-        } catch (_) { /* לא חוסם אם WA נכשל */ }
+          await new Promise(r => setTimeout(r, 3000));
+        } catch (_) { /* non-blocking */ }
 
         const campaign = {
           id: lead.camp_id,
@@ -380,7 +423,7 @@ router.post('/followup/run', async (req, res) => {
   }
 });
 
-// POST /api/campaigns/webhook/wa-reply — WA bot מעדכן כאן כשלקוח ענה
+// POST /api/campaigns/webhook/wa-reply
 router.post('/webhook/wa-reply', async (req, res) => {
   try {
     const { phone } = req.body;
