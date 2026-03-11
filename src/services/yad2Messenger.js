@@ -77,12 +77,13 @@ async function login() {
     // yad2 login has tabs: "מייל" (email) and "סיסמה" (password)
     // Step 1: Click the "מייל" tab to show email input
     try {
-      const emailTab = await page.$x("//li[contains(., 'מייל')] | //button[contains(., 'מייל')] | //span[contains(., 'מייל')]");
-      if (emailTab.length > 0) {
-        await emailTab[0].click();
-        await new Promise(r => setTimeout(r, 1500));
-        logger.info('yad2Messenger: Clicked email tab');
-      }
+      await page.evaluate(() => {
+        const els = [...document.querySelectorAll('li, button, span, a')];
+        const emailTab = els.find(el => el.textContent.trim() === 'מייל' || el.textContent.includes('מייל'));
+        if (emailTab) emailTab.click();
+      });
+      await new Promise(r => setTimeout(r, 1500));
+      logger.info('yad2Messenger: Clicked email tab');
     } catch(e) { logger.debug('yad2Messenger: No email tab found, proceeding'); }
     
     // Try multiple login form selectors (yad2 changes their UI)
@@ -125,13 +126,14 @@ async function login() {
     if (!passwordInput) {
       // Try clicking the password tab
       try {
-        const passwordTab = await page.$x("//li[contains(., 'סיסמה')] | //button[contains(., 'סיסמה')] | //span[contains(., 'סיסמה')]");
-        if (passwordTab.length > 0) {
-          await passwordTab[0].click();
-          await new Promise(r => setTimeout(r, 1500));
-          logger.info('yad2Messenger: Clicked password tab');
-          passwordInput = await page.$('input[type="password"]');
-        }
+        await page.evaluate(() => {
+          const els = [...document.querySelectorAll('li, button, span, a')];
+          const pwTab = els.find(el => el.textContent.trim() === 'סיסמה' || el.textContent.includes('סיסמה'));
+          if (pwTab) pwTab.click();
+        });
+        await new Promise(r => setTimeout(r, 1500));
+        logger.info('yad2Messenger: Clicked password tab');
+        passwordInput = await page.$('input[type="password"]');
       } catch(e) { logger.debug('yad2Messenger: No password tab'); }
     }
     
@@ -163,15 +165,23 @@ async function login() {
       if (submitBtn) break;
     }
     if (!submitBtn) {
-      // Try XPath for התחברות button
-      const xpathBtns = await page.$x("//button[contains(., 'התחברות')] | //button[contains(., 'כניסה')]");
-      if (xpathBtns.length > 0) submitBtn = xpathBtns[0];
+      // Try evaluate for התחברות button
+      try {
+        await page.evaluate(() => {
+          const btns = [...document.querySelectorAll('button')];
+          const btn = btns.find(b => b.textContent.includes('התחברות') || b.textContent.includes('כניסה'));
+          if (btn) btn.click();
+        });
+        submitBtn = true; // Mark as clicked
+      } catch(e) {}
     }
-    if (submitBtn) {
+    if (submitBtn && typeof submitBtn.click === 'function') {
       await submitBtn.click();
       logger.info('yad2Messenger: Clicked submit');
-    } else {
+    } else if (!submitBtn) {
       await page.keyboard.press('Enter');
+    } else {
+      logger.info('yad2Messenger: Submit already clicked via evaluate');
     }
     
     await new Promise(r => setTimeout(r, 5000));
@@ -232,15 +242,26 @@ async function sendMessage(listingUrl, messageText) {
     
     // Try XPath for Hebrew text buttons
     if (!msgBtn) {
-      const xpathBtns = await page.$x("//button[contains(., 'שלח הודעה')] | //button[contains(., 'יצירת קשר')] | //a[contains(., 'שלח הודעה')]");
-      if (xpathBtns.length > 0) msgBtn = xpathBtns[0];
+      try {
+        const found = await page.evaluate(() => {
+          const els = [...document.querySelectorAll('button, a')];
+          const el = els.find(e => e.textContent.includes('שלח הודעה') || e.textContent.includes('יצירת קשר'));
+          if (el) { el.click(); return true; }
+          return false;
+        });
+        if (found) msgBtn = true;
+      } catch(e) {}
     }
     
     // Check if textarea is already visible (some layouts show it directly)
     let textarea = await page.$('textarea[placeholder*="הודעה"]') || await page.$('textarea');
     
-    if (!textarea && msgBtn) {
+    if (!textarea && msgBtn && typeof msgBtn.click === 'function') {
       await msgBtn.click();
+      await new Promise(r => setTimeout(r, 2000));
+      textarea = await page.$('textarea[placeholder*="הודעה"]') || await page.$('textarea') || await page.$('div[contenteditable="true"]');
+    } else if (!textarea && msgBtn) {
+      // msgBtn was already clicked via evaluate
       await new Promise(r => setTimeout(r, 2000));
       textarea = await page.$('textarea[placeholder*="הודעה"]') || await page.$('textarea') || await page.$('div[contenteditable="true"]');
     }
@@ -257,15 +278,22 @@ async function sendMessage(listingUrl, messageText) {
     let sendBtn = await page.$('button[type="submit"]') || await page.$('button[class*="send"]') || await page.$('button[data-test="send"]');
     
     if (!sendBtn) {
-      const xpathSend = await page.$x("//button[contains(., 'שלח')]");
-      if (xpathSend.length > 0) sendBtn = xpathSend[0];
+      try {
+        const found = await page.evaluate(() => {
+          const btns = [...document.querySelectorAll('button')];
+          const btn = btns.find(b => b.textContent.includes('שלח'));
+          if (btn) { btn.click(); return true; }
+          return false;
+        });
+        if (found) sendBtn = true;
+      } catch(e) {}
     }
     
     if (!sendBtn) {
       throw new Error('Send button not found');
     }
     
-    await sendBtn.click();
+    if (typeof sendBtn.click === 'function') await sendBtn.click();
     await new Promise(r => setTimeout(r, 3000));
     
     // Check for errors
