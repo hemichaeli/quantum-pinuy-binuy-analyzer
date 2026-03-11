@@ -10,6 +10,7 @@
   --red:#ef4444; --dark:#0a0a0f; --card:#111827; --border:#1e293b;
   --text:#e2e8f0; --muted:#64748b; --input-bg:#0f172a;
   --purple:#8b5cf6; --purple-dark:#6d28d9;
+  --teal:#0d9488; --teal-dark:#0f766e;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;background:var(--dark);color:var(--text);min-height:100vh;direction:rtl}
@@ -23,6 +24,7 @@ body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;background:var(--dark
 .tab-btn:hover{color:var(--text)}
 .tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
 .tab-btn.purple.active{color:var(--purple);border-bottom-color:var(--purple)}
+.tab-btn.teal.active{color:var(--teal);border-bottom-color:var(--teal)}
 
 .tab-pane{display:none}
 .tab-pane.active{display:block}
@@ -157,6 +159,7 @@ select option{background:#1e293b}
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('settings')">⚙️ הגדרות קמפיין</button>
   <button class="tab-btn purple" onclick="switchTab('visits')">🏠 ביקורי מקצועיים</button>
+  <button class="tab-btn teal" onclick="switchTab('events')">📋 ניהול כנסים</button>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════
@@ -469,6 +472,114 @@ select option{background:#1e293b}
 </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════════
+     TAB 3: ניהול כנסים
+     ══════════════════════════════════════════════════════════════ -->
+<div id="tab-events" class="tab-pane">
+<div class="container">
+
+  <div class="section">
+    <div class="section-title">🏙️ מתחם וטעינה</div>
+    <div class="field">
+      <label>בחר מתחם מ-Zoho</label>
+      <div style="display:flex;gap:8px">
+        <select id="evCompound" style="flex:1"><option value="">-- טוען מתחמים... --</option></select>
+        <button class="btn-load" onclick="loadEventsList()" style="border-color:#0d9488;color:#2dd4bf;white-space:nowrap">טען אירועים</button>
+      </div>
+      <div class="hint">האירועים מסוננים לפי מתחם, או הצג הכל בלי בחירה</div>
+    </div>
+  </div>
+
+  <div class="section" id="eventsListSection" style="display:none">
+    <div class="section-title" style="justify-content:space-between">
+      <span>📋 אירועים קיימים</span>
+      <span id="eventsCount" class="badge green"></span>
+    </div>
+    <div id="eventsList"></div>
+  </div>
+
+  <div class="section" id="eventDetailSection" style="display:none">
+    <div class="section-title" style="justify-content:space-between">
+      <span id="eventDetailTitle">פרטי האירוע</span>
+      <button class="btn-remove" onclick="closeEventDetail()" style="padding:4px 10px">✕</button>
+    </div>
+    <div id="eventDetailBody"></div>
+    <div class="sep"></div>
+    <div class="actions" style="flex-wrap:wrap;gap:10px;margin-top:0">
+      <button onclick="importZohoResidents()" style="background:#0d9488;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer">📥 ייבא דיירים מ-Zoho</button>
+      <button onclick="sendEventNotifications()" style="background:var(--purple);color:#fff;border:none;border-radius:10px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer">📱 שלח הזמנות WA</button>
+      <a id="btnEventReport" href="#" target="_blank" style="background:#1e293b;color:#e2e8f0;border:1.5px solid var(--border);border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;text-decoration:none">📊 דוח מלא</a>
+    </div>
+    <div id="eventActionResult" class="preview-box" style="margin-top:12px"></div>
+  </div>
+
+  <div class="section" id="addStationSection" style="display:none">
+    <div class="section-title">👤 הוסף עמדה לאירוע הנבחר</div>
+    <div class="notice" style="background:#0d948822;border-color:#0d948840;color:#2dd4bf">
+      עמדה = איש מקצוע (עו"ד, שמאי וכד') שמקבל slot עצמאי. דיירים מזמינים אצלו ישירות.
+    </div>
+    <div class="row3">
+      <div class="field">
+        <label>שם</label>
+        <input type="text" id="stName" placeholder='עו"ד יוסי כהן'>
+      </div>
+      <div class="field">
+        <label>תפקיד</label>
+        <input type="text" id="stRole" value="עורך דין" placeholder="עורך דין">
+      </div>
+      <div class="field">
+        <label>טלפון</label>
+        <input type="tel" id="stPhone" placeholder="050-0000000" style="direction:ltr">
+      </div>
+    </div>
+    <div class="field" style="max-width:50%">
+      <label>אימייל (אופציונלי)</label>
+      <input type="email" id="stEmail" placeholder="name@example.com" style="direction:ltr">
+    </div>
+    <button onclick="addStationToEvent()" style="background:#0d9488;color:#fff;border:none;border-radius:10px;padding:11px 20px;font-size:14px;font-weight:700;cursor:pointer;margin-top:4px">+ הוסף עמדה</button>
+    <div id="addStationResult" class="preview-box" style="margin-top:12px"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">➕ צור אירוע חדש</div>
+    <div class="notice" style="background:#0d948822;border-color:#0d948840;color:#2dd4bf">
+      לאחר יצירה — הוסף עמדות, ייבא דיירים מ-Zoho ושלח הזמנות WA.
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>כותרת האירוע</label>
+        <input type="text" id="evTitle" placeholder="כנס חתימות — מתחם ז'בוטינסקי">
+      </div>
+      <div class="field">
+        <label>סוג אירוע</label>
+        <select id="evType">
+          <option value="signing_ceremony">כנס חתימות ✍️</option>
+          <option value="consultation">ייעוץ דיירים 💬</option>
+          <option value="appraiser">ביקור שמאי 🏠</option>
+          <option value="surveyor">ביקור מודד 📐</option>
+          <option value="general">כנס כללי 📋</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>תאריך האירוע</label>
+        <input type="date" id="evDate">
+      </div>
+      <div class="field">
+        <label>מיקום</label>
+        <input type="text" id="evLocation" placeholder="רח' הרצל 1, ראשון לציון">
+      </div>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button onclick="createEvent()" id="btnCreateEvent" style="background:#0d9488;color:#fff;border:none;border-radius:12px;padding:13px 24px;font-size:15px;font-weight:700;cursor:pointer;flex:1;min-width:160px">🗓️ צור אירוע</button>
+    </div>
+    <div id="createEventResult" class="preview-box" style="margin-top:12px"></div>
+  </div>
+
+</div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -480,16 +591,22 @@ let currentTab = 'settings';
 function switchTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.tab-btn').forEach((b,i) => {
-    b.classList.toggle('active', (i===0 && tab==='settings') || (i===1 && tab==='visits'));
+    b.classList.toggle('active',
+      (i===0 && tab==='settings') ||
+      (i===1 && tab==='visits') ||
+      (i===2 && tab==='events')
+    );
   });
   document.getElementById('tab-settings').classList.toggle('active', tab==='settings');
   document.getElementById('tab-visits').classList.toggle('active', tab==='visits');
+  document.getElementById('tab-events').classList.toggle('active', tab==='events');
   if (tab === 'visits') {
     const mainId = document.getElementById('campaignId').value.trim();
     if (mainId && !document.getElementById('vCampaignId').value) {
       document.getElementById('vCampaignId').value = mainId;
     }
   }
+  if (tab === 'events') { initEventTab(); }
 }
 
 function showToast(msg, type = 'success') {
@@ -514,7 +631,6 @@ function selectType(el) {
   document.getElementById('timingSection').style.display = isCeremony ? 'none' : '';
   document.getElementById('ceremonySection').style.display = isCeremony ? '' : 'none';
   document.getElementById('windowsSection').style.display = isCeremony ? 'none' : '';
-  // Auto-load buildings when switching to ceremony if campaign ID is set
   if (isCeremony) {
     const cid = document.getElementById('campaignId').value.trim();
     if (cid && !document.getElementById('ceremonyBuildingsList').children.length) {
@@ -560,29 +676,24 @@ function getReps() {
   return reps;
 }
 
-// ── Ceremony buildings: loaded from Zoho only ──
 async function loadCeremonyBuildings() {
   const campaignId = document.getElementById('campaignId').value.trim();
   if (!campaignId) return showToast('הזן מזהה קמפיין תחילה', 'error');
-
   const btn = document.querySelector('.btn-load-zoho');
   const status = document.getElementById('ceremonyBuildingsStatus');
   btn.innerHTML = 'טוען...<span class="spinner"></span>';
   btn.disabled = true;
   status.textContent = '';
-
   try {
     const res = await fetch(`/api/scheduling/campaigns/${encodeURIComponent(campaignId)}/buildings?bust_cache=1`);
     const data = await res.json();
     const buildings = data.buildings || [];
-
     if (!buildings.length) {
       status.textContent = 'לא נמצאו בניינים ב-Zoho לקמפיין זה';
       document.getElementById('ceremonyBuildingsList').innerHTML =
         '<div class="notice warn">לא נמצאו בניינים ב-Zoho — ודא שהקמפיין מקושר לבניינים ב-CRM.</div>';
       return;
     }
-
     renderCeremonyBuildings(buildings);
     status.textContent = `${buildings.length} בניינים נטענו`;
     showToast(`${buildings.length} בניינים נטענו מ-Zoho`, 'success');
@@ -618,13 +729,7 @@ function getBuildings() {
     const nameEl = row.querySelector('.building-zoho-name');
     const address = nameEl ? nameEl.textContent.replace(/^🏢\s*/, '').trim() : `בניין ${idx+1}`;
     const stations = parseInt(row.querySelector('.b-stations')?.value) || 1;
-    return {
-      address,
-      label: address,
-      station_count: stations,
-      display_order: idx,
-      zoho_id: row.dataset.zohoId || null
-    };
+    return { address, label: address, station_count: stations, display_order: idx, zoho_id: row.dataset.zohoId || null };
   });
 }
 
@@ -642,10 +747,7 @@ async function saveCampaign() {
       const endTime = document.getElementById('ceremonyEnd').value;
       const slotDur = parseInt(document.getElementById('ceremonySlotDuration').value) || 15;
       const breakDur = parseInt(document.getElementById('ceremonyBreak').value) || 0;
-
       if (!ceremonyDate) { showToast('חובה לבחור תאריך כנס', 'error'); return; }
-
-      // Auto-load buildings if none rendered yet
       let buildings = getBuildings();
       if (!buildings.length) {
         showToast('טוען בניינים מ-Zoho...', 'success');
@@ -657,11 +759,9 @@ async function saveCampaign() {
             document.getElementById('ceremonyBuildingsStatus').textContent = `${data.buildings.length} בניינים נטענו`;
             buildings = getBuildings();
           }
-        } catch(e) { /* will fail below */ }
+        } catch(e) {}
       }
-
       if (!buildings.length) { showToast('לא נמצאו בניינים — טען בניינים מ-Zoho', 'error'); return; }
-
       await fetch(`/api/scheduling/campaign/${campaignId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project_id: parseInt(document.getElementById('projectId').value)||1, meeting_type: 'signing_ceremony', wa_language: document.getElementById('waLanguage').value, booking_link_expires_hours: parseInt(document.getElementById('bookingExpiry').value)||48, show_rep_name: document.getElementById('showRepName').value==='true' })
@@ -951,7 +1051,6 @@ async function createVisit() {
   const buffer  = parseInt(document.getElementById('vBuffer').value) || 5;
   const profs   = getProfessionals();
   if (!profs.length) return showToast('הוסף לפחות איש מקצוע אחד', 'error');
-
   const btn = document.querySelector('.btn-primary.purple');
   btn.innerHTML = 'יוצר ביקור...<span class="spinner"></span>'; btn.disabled = true;
   try {
@@ -979,6 +1078,232 @@ async function createVisit() {
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ══════════════════════════════════════════════════
+// TAB 3 — EVENTS (כנסים)
+// ══════════════════════════════════════════════════
+const EV_AUTH = 'Basic UVVBTlRVTTpkZDRhN2U5YS0xOWYyLTQzYjktOTM2Yy01YmQ0OTRlZWRjNWM=';
+let selectedEventId = null;
+let evCompounds = [];
+let evTabInited = false;
+
+async function initEventTab() {
+  if (evTabInited) return;
+  evTabInited = true;
+  try {
+    const res = await fetch('/events/zoho/compounds', { headers: { Authorization: EV_AUTH } });
+    const data = await res.json();
+    evCompounds = data.compounds || (Array.isArray(data) ? data : []);
+    const sel = document.getElementById('evCompound');
+    if (evCompounds.length) {
+      sel.innerHTML = '<option value="">-- הצג הכל --</option>' +
+        evCompounds.map(c => '<option value="' + escHtml(c.id||c.zoho_id||'') + '">' + escHtml(c.name||c.compound_name||c.id) + '</option>').join('');
+    } else {
+      sel.innerHTML = '<option value="">לא נמצאו מתחמים</option>';
+    }
+  } catch(e) {
+    document.getElementById('evCompound').innerHTML = '<option value="">שגיאה בטעינת מתחמים</option>';
+  }
+  loadEventsList();
+}
+
+async function loadEventsList() {
+  try {
+    const compoundId = document.getElementById('evCompound').value;
+    const url = compoundId ? '/events/?compound_id=' + encodeURIComponent(compoundId) : '/events/';
+    const res = await fetch(url, { headers: { Authorization: EV_AUTH } });
+    const data = await res.json();
+    const events = data.events || (Array.isArray(data) ? data : []);
+    renderEventsList(events);
+    document.getElementById('eventsListSection').style.display = '';
+  } catch(e) {
+    showToast('שגיאה בטעינת אירועים', 'error');
+  }
+}
+
+function renderEventsList(events) {
+  const list = document.getElementById('eventsList');
+  const countEl = document.getElementById('eventsCount');
+  countEl.textContent = events.length + ' אירועים';
+  if (!events.length) {
+    list.innerHTML = '<div class="empty-state">אין אירועים עדיין — צור אירוע חדש למטה</div>';
+    return;
+  }
+  const tLabel = { signing_ceremony:'כנס חתימות', consultation:'ייעוץ', appraiser:'שמאי', surveyor:'מודד', general:'כנס כללי' };
+  const tIcon  = { signing_ceremony:'✍️', consultation:'💬', appraiser:'🏠', surveyor:'📐', general:'📋' };
+  list.innerHTML = events.map(function(ev) {
+    var dateStr = ev.event_date ? new Date(ev.event_date).toLocaleDateString('he-IL') : '—';
+    var attendees = ev.attendees_count || ev.total_attendees || 0;
+    var confirmed = ev.confirmed_count || 0;
+    var isSelected = selectedEventId == ev.id;
+    return '<div class="visit-card" style="cursor:pointer;border-color:' + (isSelected?'#0d9488':'var(--border)') + ';transition:border-color .15s" onclick="selectEvent(' + ev.id + ',\'' + escHtml(ev.title) + '\')">' +
+      '<div class="visit-card-header">' +
+        '<div>' +
+          '<div class="visit-card-title">' + (tIcon[ev.event_type]||'📋') + ' ' + escHtml(ev.title) + '</div>' +
+          '<div class="visit-card-meta">📅 ' + dateStr + '  📍 ' + escHtml(ev.location||'—') + '  🏙️ ' + escHtml(ev.compound_name||'—') + '</div>' +
+        '</div>' +
+        '<div class="visit-card-badges">' +
+          '<span class="badge green">' + (tLabel[ev.event_type]||ev.event_type) + '</span>' +
+          (attendees ? '<span class="badge">' + attendees + ' דיירים</span>' : '') +
+          (confirmed ? '<span class="badge amber">' + confirmed + ' אישרו</span>' : '') +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function selectEvent(id, title) {
+  selectedEventId = id;
+  try {
+    const res = await fetch('/events/' + id, { headers: { Authorization: EV_AUTH } });
+    const data = await res.json();
+    const ev = data.event || data;
+    const stations = data.stations || [];
+    const dateStr = ev.event_date ? new Date(ev.event_date).toLocaleDateString('he-IL') : '—';
+    document.getElementById('eventDetailTitle').textContent = '📋 ' + escHtml(ev.title||title);
+    document.getElementById('btnEventReport').href = '/events/' + id + '/report';
+    var stHtml = '';
+    if (stations.length) {
+      stHtml = '<div class="sep"></div><div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">👤 עמדות</div>' +
+        stations.map(function(s) {
+          return '<div class="visit-prof-row" style="margin-bottom:6px">' +
+            '<div class="visit-prof-name">' + escHtml(s.pro_name) + ' <span style="color:var(--muted);font-size:11px">' + escHtml(s.pro_role||'') + '</span></div>' +
+            '<div class="visit-prof-stats">' +
+              '<span class="stat-chip open">פנוי: ' + (s.free_slots||0) + '</span>' +
+              (s.booked_slots ? '<span class="stat-chip booked">נקבע: ' + s.booked_slots + '</span>' : '') +
+            '</div>' +
+          '</div>';
+        }).join('');
+    }
+    document.getElementById('eventDetailBody').innerHTML =
+      '<div class="row" style="margin-bottom:14px">' +
+        '<div><div style="font-size:11px;color:var(--muted)">תאריך</div><div style="font-size:16px;font-weight:700;margin-top:3px">📅 ' + dateStr + '</div></div>' +
+        '<div><div style="font-size:11px;color:var(--muted)">מיקום</div><div style="font-size:16px;font-weight:700;margin-top:3px">📍 ' + escHtml(ev.location||'—') + '</div></div>' +
+      '</div>' +
+      '<div class="row" style="margin-bottom:8px">' +
+        '<div><div style="font-size:11px;color:var(--muted)">דיירים בסה"כ</div><div style="font-size:28px;font-weight:800;color:#2dd4bf">' + (data.attendees_count||0) + '</div></div>' +
+        '<div><div style="font-size:11px;color:var(--muted)">אישרו הגעה</div><div style="font-size:28px;font-weight:800;color:#34d399">' + (data.confirmed_count||0) + '</div></div>' +
+      '</div>' + stHtml;
+    document.getElementById('eventDetailSection').style.display = '';
+    document.getElementById('addStationSection').style.display = '';
+    document.getElementById('eventActionResult').style.display = 'none';
+    document.getElementById('eventDetailSection').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch(e) {
+    showToast('שגיאה בטעינת פרטי האירוע', 'error');
+  }
+}
+
+function closeEventDetail() {
+  selectedEventId = null;
+  document.getElementById('eventDetailSection').style.display = 'none';
+  document.getElementById('addStationSection').style.display = 'none';
+}
+
+async function importZohoResidents() {
+  if (!selectedEventId) return showToast('בחר אירוע תחילה', 'error');
+  var btn = event.target;
+  btn.innerHTML = 'מייבא...<span class="spinner"></span>'; btn.disabled = true;
+  try {
+    var res = await fetch('/events/' + selectedEventId + '/import-zoho', {
+      method: 'POST', headers: { Authorization: EV_AUTH, 'Content-Type': 'application/json' }, body: '{}'
+    });
+    var data = await res.json();
+    var box = document.getElementById('eventActionResult');
+    box.style.display = 'block';
+    if (data.success || typeof data.imported === 'number') {
+      box.textContent = '✅ ייבוא הושלם\nדיירים חדשים: ' + (data.imported||0) + '\nכבר קיימים: ' + (data.skipped||0) + '\nסה"כ: ' + (data.total||0);
+      showToast((data.imported||0) + ' דיירים יובאו מ-Zoho', 'success');
+      setTimeout(function(){ selectEvent(selectedEventId, ''); }, 400);
+    } else {
+      box.textContent = 'שגיאה: ' + (data.error||'לא ידוע');
+      showToast('שגיאה בייבוא', 'error');
+    }
+  } catch(e) { showToast('שגיאת רשת: ' + e.message, 'error'); }
+  finally { btn.innerHTML = '📥 ייבא דיירים מ-Zoho'; btn.disabled = false; }
+}
+
+async function sendEventNotifications() {
+  if (!selectedEventId) return showToast('בחר אירוע תחילה', 'error');
+  if (!confirm('לשלוח הזמנות WhatsApp לכל דיירי האירוע?')) return;
+  var btn = event.target;
+  btn.innerHTML = 'שולח...<span class="spinner"></span>'; btn.disabled = true;
+  try {
+    var res = await fetch('/events/' + selectedEventId + '/notify', {
+      method: 'POST', headers: { Authorization: EV_AUTH, 'Content-Type': 'application/json' }, body: '{}'
+    });
+    var data = await res.json();
+    var box = document.getElementById('eventActionResult');
+    box.style.display = 'block';
+    box.textContent = '📱 שליחה הושלמה\nנשלחו: ' + (data.sent||0) + '\nנכשלו: ' + (data.failed||0);
+    showToast((data.sent||0) + ' הזמנות נשלחו', 'success');
+  } catch(e) { showToast('שגיאת רשת: ' + e.message, 'error'); }
+  finally { btn.innerHTML = '📱 שלח הזמנות WA'; btn.disabled = false; }
+}
+
+async function addStationToEvent() {
+  if (!selectedEventId) return showToast('בחר אירוע תחילה', 'error');
+  var name = document.getElementById('stName').value.trim();
+  if (!name) return showToast('הזן שם המקצוען', 'error');
+  var role = document.getElementById('stRole').value.trim() || 'עורך דין';
+  var phone = document.getElementById('stPhone').value.trim() || null;
+  var email = document.getElementById('stEmail').value.trim() || null;
+  try {
+    var res = await fetch('/events/' + selectedEventId + '/stations', {
+      method: 'POST', headers: { Authorization: EV_AUTH, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pro_name: name, pro_role: role, pro_phone: phone, pro_email: email })
+    });
+    var data = await res.json();
+    var box = document.getElementById('addStationResult');
+    box.style.display = 'block';
+    if (data.id || data.station_id || data.success) {
+      box.textContent = '✅ עמדה נוספה — ' + name;
+      showToast('עמדה נוספה בהצלחה', 'success');
+      document.getElementById('stName').value = '';
+      document.getElementById('stPhone').value = '';
+      document.getElementById('stEmail').value = '';
+      setTimeout(function(){ selectEvent(selectedEventId, ''); }, 400);
+    } else {
+      box.textContent = 'שגיאה: ' + (data.error||'לא ידוע');
+      showToast('שגיאה בהוספת עמדה', 'error');
+    }
+  } catch(e) { showToast('שגיאת רשת: ' + e.message, 'error'); }
+}
+
+async function createEvent() {
+  var title = document.getElementById('evTitle').value.trim();
+  var type = document.getElementById('evType').value;
+  var date = document.getElementById('evDate').value;
+  var location = document.getElementById('evLocation').value.trim();
+  var compoundId = document.getElementById('evCompound').value;
+  if (!title) return showToast('חובה להזין כותרת', 'error');
+  if (!date) return showToast('חובה לבחור תאריך', 'error');
+  var compound = evCompounds.find(function(c){ return (c.id||c.zoho_id) == compoundId; });
+  var btn = document.getElementById('btnCreateEvent');
+  btn.innerHTML = 'יוצר...<span class="spinner"></span>'; btn.disabled = true;
+  try {
+    var res = await fetch('/events/', {
+      method: 'POST', headers: { Authorization: EV_AUTH, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title, event_type: type, event_date: date, location: location||null, zoho_compound_id: compoundId||null, compound_name: compound?(compound.name||compound.compound_name||null):null })
+    });
+    var data = await res.json();
+    var box = document.getElementById('createEventResult');
+    box.style.display = 'block';
+    var evId = data.id || data.event_id;
+    if (evId || data.success) {
+      box.textContent = '✅ אירוע נוצר! ID: ' + evId + '\n' + title + '\n📅 ' + date;
+      showToast('אירוע נוצר בהצלחה!', 'success');
+      document.getElementById('evTitle').value = '';
+      document.getElementById('evDate').value = '';
+      document.getElementById('evLocation').value = '';
+      loadEventsList();
+      if (evId) setTimeout(function(){ selectEvent(evId, title); }, 600);
+    } else {
+      box.textContent = 'שגיאה: ' + (data.error||'לא ידוע');
+      showToast('שגיאה ביצירת אירוע', 'error');
+    }
+  } catch(e) { showToast('שגיאת רשת: ' + e.message, 'error'); }
+  finally { btn.innerHTML = '🗓️ צור אירוע'; btn.disabled = false; }
 }
 
 // ── Init ──
