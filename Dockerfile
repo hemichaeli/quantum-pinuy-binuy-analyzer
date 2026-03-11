@@ -44,7 +44,7 @@ RUN npm install --omit=dev
 
 # Copy application code
 # Cache bust: 20260309210848
-RUN echo "cache-bust: 20260309210848"
+RUN echo "cache-bust: 20260311094619"
 COPY . .
 
 # Build-time patches (v4.24.2): fix column names in weeklyScanner kones query
