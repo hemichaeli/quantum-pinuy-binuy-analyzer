@@ -834,7 +834,8 @@ function generateDashboardHTML(stats) {
             if (oldList) oldList.style.display = 'none';
             gridContainer.style.display = '';
             const premiumColor = (pct) => parseFloat(pct) > 30 ? '#22c55e' : parseFloat(pct) > 15 ? '#f59e0b' : '#ef4444';
-            gridContainer.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">'
+            const urgencyColors = { 'דחוף': '#ef4444', 'ירושה': '#a855f7', 'כינוס': '#f97316', 'גירושין': '#ec4899', 'עוזב_ארץ': '#06b6d4' };
+            gridContainer.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;">'
                 + ads.map((ad, i) => {
                     const price = ad.price_current ? '\u20AA' + parseInt(ad.price_current).toLocaleString() : '\u2014';
                     const premNow = ad.premium_percent && parseFloat(ad.premium_percent) > 0 ? parseFloat(ad.premium_percent).toFixed(1) + '%' : null;
@@ -846,41 +847,69 @@ function generateDashboardHTML(stats) {
                     const ssiColor = ssi > 70 ? '#22c55e' : ssi > 40 ? '#f59e0b' : '#94a3b8';
                     const title = ad.title || ad.address || ('\u05de\u05d5\u05d3\u05e2\u05d4 #' + (i+1));
                     const city = ad.city || '';
-                    const rooms = ad.rooms ? ad.rooms + ' \u05d7\u05d3\u0027' : null;
+                    const rooms = ad.rooms ? ad.rooms + ' \u05d7\u05d3\'' : null;
                     const area = ad.area_sqm ? parseFloat(ad.area_sqm).toFixed(0) + ' \u05de"\u05e8' : null;
                     const floor = ad.floor != null ? '\u05e7\u05d5\u05de\u05d4 ' + ad.floor : null;
                     const source = ad.source || null;
-                    return '<div style="background:#1e293b;border-radius:12px;padding:16px;border:1px solid #334155;display:flex;flex-direction:column;gap:8px;">'
-                        + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
+                    // Enrichment fields
+                    const urgency = ad.gemini_urgency_flag && ad.gemini_urgency_flag !== 'null' ? ad.gemini_urgency_flag : null;
+                    const urgencyColor = urgency ? (urgencyColors[urgency] || '#f59e0b') : null;
+                    const hiddenInfo = ad.gemini_hidden_info && ad.gemini_hidden_info !== 'null' ? ad.gemini_hidden_info : null;
+                    const buildingAge = ad.building_age ? ad.building_age + ' שנה' : (ad.building_year ? 'נבנה ' + ad.building_year : null);
+                    const hasRenewal = ad.has_renewal_plan;
+                    const nearbyPlans = ad.nearby_plans ? (typeof ad.nearby_plans === 'string' ? JSON.parse(ad.nearby_plans) : ad.nearby_plans) : null;
+                    const avgPriceSqm = ad.avg_price_sqm_area ? '\u20AA' + parseInt(ad.avg_price_sqm_area).toLocaleString() + '/מ"ר' : null;
+                    const perplexityNotes = ad.perplexity_public_notes && ad.perplexity_public_notes !== 'null' ? ad.perplexity_public_notes : null;
+                    const isEnriched = !!ad.gemini_enriched_at;
+                    return '<div style="background:#1e293b;border-radius:12px;padding:16px;border:1px solid ' + (urgency ? urgencyColor : '#334155') + ';display:flex;flex-direction:column;gap:8px;position:relative;">'
+                        // Urgency badge
+                        + (urgency ? '<div style="position:absolute;top:-8px;right:12px;background:' + urgencyColor + ';color:#fff;font-size:11px;font-weight:700;padding:2px 10px;border-radius:10px;">⚡ ' + urgency + '</div>' : '')
+                        // Title + SSI
+                        + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;' + (urgency ? 'margin-top:8px;' : '') + '">'
                         + '<div style="font-weight:600;font-size:14px;color:#f1f5f9;line-height:1.3;flex:1;">' + title + '</div>'
                         + (ssi > 0 ? '<div style="background:rgba(0,0,0,0.3);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;color:' + ssiColor + ';white-space:nowrap;">SSI ' + ssi + '</div>' : '')
                         + '</div>'
+                        // City
                         + (city ? '<div style="font-size:13px;color:#94a3b8;">' + city + '</div>' : '')
+                        // Tags row
                         + '<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px;">'
                         + (rooms ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#cbd5e1;">' + rooms + '</span>' : '')
                         + (area ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#cbd5e1;">' + area + '</span>' : '')
                         + (floor ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#cbd5e1;">' + floor + '</span>' : '')
+                        + (buildingAge ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#94a3b8;">🏗 ' + buildingAge + '</span>' : '')
                         + (source ? '<span style="background:#0f172a;padding:3px 8px;border-radius:4px;color:#64748b;">' + source + '</span>' : '')
+                        + (hasRenewal ? '<span style="background:rgba(34,197,94,0.15);padding:3px 8px;border-radius:4px;color:#22c55e;font-weight:600;">♻️ פינוי-בינוי</span>' : '')
                         + '</div>'
+                        // Price row
                         + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">'
                         + '<div style="font-size:18px;font-weight:700;color:#fbbf24;">' + price + '</div>'
                         + '<div style="display:flex;gap:8px;font-size:12px;">'
                         + (premNow ? '<span style="color:' + premiumColor(ad.premium_percent) + ';">' + premNow + '</span>' : '')
                         + (premAfter ? '<span style="color:#60a5fa;">' + premAfter + '</span>' : '')
+                        + (avgPriceSqm ? '<span style="color:#94a3b8;font-size:11px;">' + avgPriceSqm + '</span>' : '')
                         + '</div>'
                         + '</div>'
+                        // Status
                         + (statusHe ? '<div style="font-size:11px;background:rgba(100,100,200,0.2);padding:3px 8px;border-radius:4px;display:inline-block;align-self:flex-start;color:#a5b4fc;">' + statusHe + '</div>' : '')
+                        // Hidden info (Gemini)
+                        + (hiddenInfo ? '<div style="font-size:12px;color:#a3e635;background:rgba(163,230,53,0.08);padding:6px 10px;border-radius:6px;border-left:3px solid #a3e635;">💡 ' + hiddenInfo + '</div>' : '')
+                        // Nearby plans (Perplexity)
+                        + (nearbyPlans && nearbyPlans.length > 0 ? '<div style="font-size:11px;color:#60a5fa;background:rgba(96,165,250,0.08);padding:6px 10px;border-radius:6px;border-left:3px solid #3b82f6;">📋 ' + nearbyPlans.slice(0,2).join(' | ') + '</div>' : '')
+                        // Perplexity notes
+                        + (perplexityNotes ? '<div style="font-size:11px;color:#94a3b8;background:rgba(148,163,184,0.06);padding:6px 10px;border-radius:6px;">🔍 ' + perplexityNotes + '</div>' : '')
+                        // Footer
                         + '<div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid #334155;">'
-                        + '<div style="font-size:11px;color:#64748b;">' + published + '</div>'
+                        + '<div style="font-size:11px;color:#64748b;">' + published + (isEnriched ? ' ✨' : '') + '</div>'
                         + '<div style="display:flex;gap:8px;">'
                         + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:#3b82f6;font-size:12px;text-decoration:none;">' + ad.phone + '</a>' : '')
-                        + (ad.url ? '<a href="' + ad.url + '" target="_blank" style="color:#3b82f6;font-size:12px;text-decoration:none;">&#128279; \u05e4\u05ea\u05d7</a>' : '')
+                        + (ad.url ? '<a href="' + ad.url + '" target="_blank" style="color:#3b82f6;font-size:12px;text-decoration:none;">&#128279; פתח</a>' : '')
                         + '</div>'
                         + '</div>'
                         + '</div>';
                 }).join('')
                 + '</div>';
         }
+
         let _adsSortField = 'created_at', _adsSortDir = 'desc', _adsData = [];
         function sortAdsBy(field) {
             if (_adsSortField === field) _adsSortDir = _adsSortDir === 'asc' ? 'desc' : 'asc';
