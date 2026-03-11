@@ -14,8 +14,8 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.91.0';
-const BUILD = '2026-03-11-v4.91.0-pre-register-auto-buildings';
+const VERSION = '4.92.0';
+const BUILD = '2026-03-11-v4.92.0-campaigns-wa-call-flow';
 
 async function runAutoMigrations() {
   try {
@@ -37,6 +37,17 @@ async function runSchedulingMigrations() {
       logger.info('[MIGRATIONS] Scheduling schema applied');
     }
   } catch (err) { logger.error('[MIGRATIONS] Scheduling schema failed:', err.message); }
+}
+
+async function runCampaignsMigration() {
+  try {
+    const migFile = path.join(__dirname, 'db', 'migrations', 'campaigns_schema.sql');
+    if (fs.existsSync(migFile)) {
+      const sql = fs.readFileSync(migFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] Campaigns schema applied');
+    }
+  } catch (err) { logger.error('[MIGRATIONS] Campaigns schema failed:', err.message); }
 }
 
 app.use(helmet({
@@ -67,7 +78,7 @@ const limiter = rateLimit({
     req.path.startsWith('/api/docs') || req.path.startsWith('/api/auto-contact') ||
     req.path.startsWith('/booking/') || req.path.startsWith('/cal/') || req.path.startsWith('/api/kones/') ||
     req.path.startsWith('/api/appointments/') || req.path.startsWith('/api/test/') ||
-    req.path.startsWith('/api/visits/'),
+    req.path.startsWith('/api/visits/') || req.path.startsWith('/api/campaigns/'),
   message: { error: 'Too many requests, please try again later' }
 });
 app.use('/api/', limiter);
@@ -120,6 +131,7 @@ function loadAllRoutes() {
     { path: '/api/analytics', file: 'routes/analyticsRoutes.js' },
     { path: '/api/users', file: 'routes/userRoutes.js' },
     { path: '/api/docs', file: 'routes/docsRoute.js' },
+    { path: '/api/campaigns', file: 'routes/campaignRoutes.js' },
   ];
 
   for (const { path: routePath, file } of routeFiles) {
@@ -260,6 +272,7 @@ app.get('/api/debug', async (req, res) => {
   try { const zcal = require('./services/zohoCalendarService'); zcalStatus = zcal.isConfigured() ? 'configured (Zoho OAuth)' : 'credentials missing'; } catch (e) { zcalStatus = 'service error'; }
   res.json({
     version: VERSION, build: BUILD, timestamp: new Date().toISOString(),
+    campaigns: 'active at /api/campaigns | followup cron: every 2min',
     campaign_admin_panel: 'active at GET /api/scheduling/admin',
     professional_visits: 'POST /api/scheduling/visits | POST /api/scheduling/pre-register (auto-fetches buildings from Zoho)',
     schedule_optimization: `active | ${JSON.stringify(optimizationStats)}`,
@@ -276,6 +289,7 @@ async function start() {
   logger.info(`=== QUANTUM ANALYZER ${VERSION} ===`);
   await runAutoMigrations();
   await runSchedulingMigrations();
+  await runCampaignsMigration();
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();
@@ -306,6 +320,27 @@ async function start() {
     cron.schedule('* * * * *', async () => { try { await pollIncomingWhatsApp(); } catch (e) { logger.warn('[IncomingWA] Cron error:', e.message); } });
     logger.info('[IncomingWA] ACTIVE - polling INFORU every 60s');
   } catch (e) { logger.warn('[IncomingWA] Failed to start:', e.message); }
+
+  // ── Campaign Follow-up Cron — every 2 minutes ──────────────────────────────
+  // Finds WA-sent leads with no reply after wa_wait_minutes → triggers Vapi call
+  try {
+    const cron = require('node-cron');
+    const axios = require('axios');
+    cron.schedule('*/2 * * * *', async () => {
+      try {
+        await axios.post(
+          `http://localhost:${PORT}/api/campaigns/followup/run`,
+          {},
+          { timeout: 30000 }
+        );
+      } catch (e) {
+        if (e.code !== 'ECONNREFUSED') {
+          logger.warn('[CampaignFollowup] Cron error:', e.message);
+        }
+      }
+    });
+    logger.info('[CampaignFollowup] ACTIVE - checking every 2 min');
+  } catch (e) { logger.warn('[CampaignFollowup] Failed to start:', e.message); }
 
   try {
     const cron = require('node-cron');
