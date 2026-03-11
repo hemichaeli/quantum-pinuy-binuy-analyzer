@@ -430,11 +430,16 @@ function generateDashboardHTML(stats) {
                     <option value="asc">עולה</option>
                 </select>
             </div>
-            <div class="actions-bar">
+            <div class="actions-bar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <button class="btn" data-onclick="loadAds()">🔍 טען מודעות</button>
                 <button class="btn btn-secondary" data-onclick="exportData('ads')">📊 ייצוא לאקסל</button>
+                <div style="margin-right:auto;display:flex;gap:4px;">
+                    <button id="ads-view-table" class="btn" style="padding:6px 12px;font-size:13px;background:#1e40af;" data-onclick="setAdsView('table')" title="תצוגת שורות">☰ שורות</button>
+                    <button id="ads-view-grid" class="btn btn-secondary" style="padding:6px 12px;font-size:13px;" data-onclick="setAdsView('grid')" title="תצוגת ריבועים">⊞ ריבועים</button>
+                </div>
             </div>
             <div id="ads-pagination" style="margin-bottom:8px;font-size:13px;color:#94a3b8;"></div>
+            <div id="ads-grid-container" style="display:none;padding:12px 0;"></div>
             <div style="overflow-x:auto;">
             <table id="ads-table" style="width:100%;border-collapse:collapse;font-size:13px;display:none;">
                 <thead>
@@ -826,9 +831,11 @@ function generateDashboardHTML(stats) {
             const tbody = document.getElementById('ads-tbody');
             const table = document.getElementById('ads-table');
             const oldList = document.getElementById('ads-list');
+            const gridContainer = document.getElementById('ads-grid-container');
             if (!tbody) return;
             table.style.display = '';
             oldList.style.display = 'none';
+            if (gridContainer) gridContainer.style.display = 'none';
             const premiumColor = (pct) => parseFloat(pct) > 30 ? '#22c55e' : parseFloat(pct) > 15 ? '#f59e0b' : '#ef4444';
             tbody.innerHTML = ads.map((ad, i) => {
                 const price = ad.price_current ? '\u20AA' + parseInt(ad.price_current).toLocaleString() : '—';
