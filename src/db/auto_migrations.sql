@@ -168,18 +168,6 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS inforu_password TEXT;
 
 -- ========================================================
 -- QUANTUM v4.90+ - Professional Visits (Appraiser / Surveyor)
---
--- professional_visits: ביקור של שמאי/מודד לבניין ספציפי
--- visit_professionals: השמאים/מודדים שמגיעים (עד 3)
--- meeting_slots:       slots נוצרים per-professional
--- bot_sessions:        מאוכלס מראש ע"י Zoho Webhook (pre-register)
---
--- זרימה:
---   1. Admin מגדיר ביקור → slots נוצרים אוטומטית
---   2. Zoho שולח WA לדיירים + קורא POST /api/scheduling/pre-register
---   3. pre-register מאכלס bot_sessions עם כתובת + בניין + campaign_buildings
---   4. דייר עונה → בוט בודק End_Date + Status → מציג slots של הבניין שלו
---   5. דייר ללא כתובת → בוט שואל לבחור מרשימת הבניינים
 -- ========================================================
 
 CREATE TABLE IF NOT EXISTS professional_visits (
@@ -187,8 +175,8 @@ CREATE TABLE IF NOT EXISTS professional_visits (
   campaign_id           TEXT NOT NULL,
   project_id            INTEGER REFERENCES projects(id),
   visit_type            TEXT NOT NULL CHECK (visit_type IN ('appraiser','surveyor')),
-  building_address      TEXT NOT NULL,       -- "סמילצ'נסקי 3"
-  city                  TEXT NOT NULL,       -- "ראשון לציון"
+  building_address      TEXT NOT NULL,
+  city                  TEXT NOT NULL,
   visit_date            DATE NOT NULL,
   start_time            TIME NOT NULL,
   end_time              TIME NOT NULL,
@@ -213,20 +201,12 @@ CREATE TABLE IF NOT EXISTS visit_professionals (
 
 CREATE INDEX IF NOT EXISTS idx_visit_professionals_visit ON visit_professionals(visit_id);
 
--- Link meeting_slots to a specific visit professional
 ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS visit_professional_id INTEGER REFERENCES visit_professionals(id);
--- Apartment number captured at booking time
 ALTER TABLE meeting_slots ADD COLUMN IF NOT EXISTS apartment_number TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_meeting_slots_visit_prof ON meeting_slots(visit_professional_id)
   WHERE visit_professional_id IS NOT NULL;
 
--- bot_sessions: pre-register fields
--- building_address: normalized building address matched to professional_visit
--- apartment_number: extracted from property_addresses ("דירה 9")
--- campaign_buildings: JSON array of all buildings in campaign (for select_building state)
--- campaign_end_date: End_Date from Zoho campaign (bot stops responding after this)
--- campaign_status: Status from Zoho campaign ('Active' / other)
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS building_address TEXT;
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS apartment_number TEXT;
 ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS campaign_buildings JSONB DEFAULT '[]';
@@ -235,3 +215,44 @@ ALTER TABLE bot_sessions ADD COLUMN IF NOT EXISTS campaign_status TEXT DEFAULT '
 
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_building_addr ON bot_sessions(building_address)
   WHERE building_address IS NOT NULL;
+
+-- ========================================================
+-- QUANTUM v4.92+ - Outreach Campaigns (WA→Call / Call-Only)
+-- ========================================================
+
+CREATE TABLE IF NOT EXISTS campaigns (
+  id              SERIAL PRIMARY KEY,
+  name            TEXT NOT NULL,
+  mode            TEXT NOT NULL DEFAULT 'wa_then_call' CHECK (mode IN ('wa_then_call', 'call_only')),
+  wa_wait_minutes INTEGER NOT NULL DEFAULT 60,
+  agent_name      TEXT NOT NULL DEFAULT 'רן',
+  status          TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'paused', 'completed')),
+  wa_message      TEXT,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS campaign_leads (
+  id                  SERIAL PRIMARY KEY,
+  campaign_id         INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  phone               TEXT NOT NULL,
+  name                TEXT,
+  source              TEXT,
+  lead_id             INTEGER REFERENCES leads(id),
+  status              TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','wa_sent','wa_replied','call_queued','call_initiated','call_done','failed','opted_out')),
+  wa_sent_at          TIMESTAMPTZ,
+  wa_replied_at       TIMESTAMPTZ,
+  call_queued_at      TIMESTAMPTZ,
+  call_initiated_at   TIMESTAMPTZ,
+  vapi_call_id        TEXT,
+  notes               TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(campaign_id, phone)
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_leads_campaign ON campaign_leads(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_leads_status    ON campaign_leads(status);
+CREATE INDEX IF NOT EXISTS idx_campaign_leads_wa_sent   ON campaign_leads(wa_sent_at) WHERE status = 'wa_sent';
