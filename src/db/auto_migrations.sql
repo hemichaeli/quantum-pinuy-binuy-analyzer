@@ -256,3 +256,18 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_campaign ON campaign_leads(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_status    ON campaign_leads(status);
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_wa_sent   ON campaign_leads(wa_sent_at) WHERE status = 'wa_sent';
+
+-- ========================================================
+-- QUANTUM v4.93+ - System Settings (WA Bot Escalation)
+-- ========================================================
+
+CREATE TABLE IF NOT EXISTS system_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  label      TEXT,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO system_settings (key, value, label)
+VALUES ('wa_bot_escalation_minutes', '60', 'זמן המתנה לאחר WA Bot לפני שיחה (0 = כבוי)')
+ON CONFLICT (key) DO NOTHING;
