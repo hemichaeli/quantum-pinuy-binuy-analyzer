@@ -30,7 +30,6 @@ function getClient() {
 
     const {
       GOOGLE_SERVICE_ACCOUNT_JSON,
-      // Support both naming conventions
       GOOGLE_CLIENT_EMAIL, GOOGLE_SA_EMAIL,
       GOOGLE_PRIVATE_KEY, GOOGLE_SA_PRIVATE_KEY
     } = process.env;
@@ -67,17 +66,121 @@ function getClient() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// CALENDAR MANAGEMENT
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Create a new Google Calendar.
+ * The service account owns the calendar — must then share it with real users.
+ *
+ * @param {string} name       - Calendar display name
+ * @param {string} [timezone] - Default 'Asia/Jerusalem'
+ * @returns {string|null}     - New calendar ID (ends with @group.calendar.google.com)
+ */
+async function createCalendar(name, timezone = 'Asia/Jerusalem') {
+  if (!getClient()) return null;
+  try {
+    const res = await calendar.calendars.insert({
+      resource: { summary: name, timeZone: timezone }
+    });
+    logger.info(`[GCal] Calendar created: "${name}" → ${res.data.id}`);
+    return res.data.id;
+  } catch (err) {
+    logger.warn(`[GCal] createCalendar failed for "${name}":`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Share a Google Calendar with a user (reader or writer).
+ *
+ * @param {string} calendarId - Google Calendar ID
+ * @param {string} email      - Email to share with
+ * @param {string} [role]     - 'reader' | 'writer' | 'owner' (default: 'reader')
+ * @returns {boolean}
+ */
+async function shareCalendar(calendarId, email, role = 'reader') {
+  if (!getClient()) return false;
+  try {
+    await calendar.acl.insert({
+      calendarId,
+      resource: { role, scope: { type: 'user', value: email } }
+    });
+    logger.info(`[GCal] Calendar ${calendarId} shared with ${email} as ${role}`);
+    return true;
+  } catch (err) {
+    logger.warn(`[GCal] shareCalendar failed for ${email}:`, err.message);
+    return false;
+  }
+}
+
+/**
+ * Delete a Google Calendar entirely.
+ *
+ * @param {string} calendarId
+ * @returns {boolean}
+ */
+async function deleteCalendar(calendarId) {
+  if (!getClient() || !calendarId) return false;
+  try {
+    await calendar.calendars.delete({ calendarId });
+    logger.info(`[GCal] Calendar deleted: ${calendarId}`);
+    return true;
+  } catch (err) {
+    logger.warn(`[GCal] deleteCalendar failed for ${calendarId}:`, err.message);
+    return false;
+  }
+}
+
+/**
+ * List all events in a calendar for a given day and delete them.
+ * Used to "clear" a building calendar after a ceremony.
+ *
+ * @param {string} calendarId
+ * @param {string} date - 'YYYY-MM-DD'
+ * @returns {number} count of deleted events
+ */
+async function clearCalendarDay(calendarId, date) {
+  if (!getClient() || !calendarId) return 0;
+  try {
+    const timeMin = new Date(`${date}T00:00:00+03:00`).toISOString();
+    const timeMax = new Date(`${date}T23:59:59+03:00`).toISOString();
+
+    const res = await calendar.events.list({
+      calendarId,
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      maxResults: 500
+    });
+
+    const events = res.data.items || [];
+    let deleted = 0;
+    for (const ev of events) {
+      try {
+        await calendar.events.delete({ calendarId, eventId: ev.id });
+        deleted++;
+      } catch (e) { /* skip */ }
+    }
+    logger.info(`[GCal] Cleared ${deleted} events from ${calendarId} on ${date}`);
+    return deleted;
+  } catch (err) {
+    logger.warn(`[GCal] clearCalendarDay failed:`, err.message);
+    return 0;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// EVENT MANAGEMENT
+// ─────────────────────────────────────────────────────────────
+
 /**
  * Create a calendar event.
  *
- * @param {string} calendarId - Google Calendar ID (e.g. "xxx@group.calendar.google.com" or "primary")
+ * @param {string} calendarId
  * @param {object} opts
- *   - title         {string}  Event title
- *   - startDatetime {string}  ISO datetime "2026-04-15T10:00:00"
- *   - durationMins  {number}  Duration in minutes (default 45)
- *   - description   {string}  Optional description
- *   - location      {string}  Optional location
- *   - attendeeEmail {string}  Optional attendee email
+ *   - title, startDatetime, durationMins, description, location, attendeeEmail
  * @returns {string|null} Google event ID
  */
 async function createEvent(calendarId, { title, startDatetime, durationMins = 45, description = '', location = '', attendeeEmail = null }) {
@@ -98,7 +201,7 @@ async function createEvent(calendarId, { title, startDatetime, durationMins = 45
         useDefault: false,
         overrides: [
           { method: 'popup', minutes: 60 },
-          { method: 'popup', minutes: 1440 } // 24h
+          { method: 'popup', minutes: 1440 }
         ]
       }
     };
@@ -142,11 +245,7 @@ async function deleteEvent(calendarId, eventId) {
 async function updateEvent(calendarId, eventId, updates) {
   if (!getClient() || !calendarId || !eventId) return false;
   try {
-    const res = await calendar.events.patch({
-      calendarId,
-      eventId,
-      resource: updates
-    });
+    const res = await calendar.events.patch({ calendarId, eventId, resource: updates });
     logger.info(`[GCal] Event updated: ${res.data.id}`);
     return true;
   } catch (err) {
@@ -156,7 +255,7 @@ async function updateEvent(calendarId, eventId, updates) {
 }
 
 /**
- * Test calendar connectivity - list events from a calendar
+ * Test calendar connectivity.
  */
 async function testCalendarAccess(calendarId) {
   if (!getClient()) return { ok: false, error: 'No credentials' };
@@ -172,15 +271,13 @@ async function testCalendarAccess(calendarId) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// CEREMONY & MEETING SLOT EVENTS
+// ─────────────────────────────────────────────────────────────
+
 /**
  * Create a booking event for a ceremony slot.
- * Resolves the correct calendar from station → project chain.
- *
- * @param {object} pool     - PostgreSQL pool
- * @param {object} slot     - ceremony slot row (has station_id, ceremony_id, slot_date, slot_time)
- * @param {string} contactName
- * @param {string} contactPhone
- * @returns {string|null}   Google event ID
+ * Uses station calendar → project calendar fallback.
  */
 async function createCeremonySlotEvent(pool, slot, contactName, contactPhone) {
   if (!getClient()) return null;
@@ -213,7 +310,7 @@ async function createCeremonySlotEvent(pool, slot, contactName, contactPhone) {
       return null;
     }
 
-    const timeStr = (slot.slot_time || '').substring(0, 5); // "HH:MM"
+    const timeStr = (slot.slot_time || '').substring(0, 5);
     const startDatetime = `${slot.slot_date}T${timeStr}:00`;
 
     const eventId = await createEvent(calendarId, {
@@ -302,6 +399,10 @@ module.exports = {
   createEvent,
   deleteEvent,
   updateEvent,
+  createCalendar,
+  shareCalendar,
+  deleteCalendar,
+  clearCalendarDay,
   createCeremonySlotEvent,
   createMeetingSlotEvent,
   testCalendarAccess,
