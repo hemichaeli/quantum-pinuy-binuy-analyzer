@@ -1,7 +1,7 @@
 /**
- * QUANTUM Event Admin UI — v1.0
+ * QUANTUM Event Admin UI — v1.2
  * Served at: GET /events/admin
- * Protected by: Basic Auth (same as event scheduler admin routes)
+ * Auth: custom HTML login form (no WWW-Authenticate header — avoids Chrome ERR_TOO_MANY_RETRIES)
  */
 
 const express = require('express');
@@ -9,16 +9,16 @@ const router  = express.Router();
 const pool    = require('../db/pool');
 const { logger } = require('../services/logger');
 
-function adminAuth(req, res, next) {
-  const expected = process.env.EVENT_BASIC_AUTH || 'Basic UVVBTlRVTTpkZDRhN2U5YS0xOWYyLTQzYjktOTM2Yy01YmQ0OTRlZWRjNWM=';
-  if ((req.headers['authorization'] || '') === expected) return next();
-  res.setHeader('WWW-Authenticate', 'Basic realm="QUANTUM Events"');
-  return res.status(401).send('<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8"><title>QUANTUM</title><style>body{font-family:sans-serif;background:#07090f;color:#e0e0e0;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}</style></head><body><h2 style="color:#3b82f6">QUANTUM</h2><p style="color:#475569">נדרשת הרשאת כניסה</p></body></html>');
+const EXPECTED_AUTH = process.env.EVENT_BASIC_AUTH || 'Basic UVVBTlRVTTpkZDRhN2U5YS0xOWYyLTQzYjktOTM2Yy01YmQ0OTRlZWRjNWM=';
+
+// ── JSON auth check (for fetch() calls from browser) ──────────────────────────
+function apiAuth(req, res, next) {
+  if ((req.headers['authorization'] || '') === EXPECTED_AUTH) return next();
+  return res.status(401).json({ success: false, error: 'Unauthorized' });
 }
 
-// ── Add attendee manually (called from admin UI) ──────────────────────────────
-
-router.post('/api/events/:id/attendees', adminAuth, async (req, res) => {
+// ── Add attendee manually ─────────────────────────────────────────────────────
+router.post('/:id/attendees', apiAuth, async (req, res) => {
   try {
     const { station_id, name, phone, unit_number, floor, building_name, compound_name } = req.body;
     if (!station_id || !name) return res.status(400).json({ success: false, error: 'station_id and name required' });
@@ -32,11 +32,9 @@ router.post('/api/events/:id/attendees', adminAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ── Admin UI ──────────────────────────────────────────────────────────────────
-
-router.get('/admin', adminAuth, (req, res) => {
+// ── Admin UI — NO server-side auth; login handled in JS via sessionStorage ────
+router.get('/admin', (req, res) => {
   const BASE = 'https://pinuy-binuy-analyzer-production.up.railway.app';
-  const AUTH = process.env.EVENT_BASIC_AUTH || 'Basic UVVBTlRVTTpkZDRhN2U5YS0xOWYyLTQzYjktOTM2Yy01YmQ0OTRlZWRjNWM=';
 
   res.type('html').send(`<!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -59,6 +57,22 @@ router.get('/admin', adminAuth, (req, res) => {
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);direction:rtl;min-height:100vh}
+
+/* Login screen */
+.login-screen{display:none;position:fixed;inset:0;background:var(--bg);z-index:9999;align-items:center;justify-content:center}
+.login-screen.show{display:flex}
+.login-card{background:var(--bg1);border:1px solid var(--border2);border-radius:14px;padding:32px 28px;width:92%;max-width:360px;text-align:center}
+.login-logo{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--cyan);letter-spacing:3px;margin-bottom:6px}
+.login-sub{font-size:11px;color:var(--text3);margin-bottom:24px}
+.login-field{display:flex;flex-direction:column;gap:5px;margin-bottom:14px;text-align:right}
+.login-field label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.7px}
+.login-field input{background:var(--bg2);border:1px solid var(--border2);border-radius:7px;padding:10px 12px;color:var(--text);font-size:13px;font-family:var(--sans);width:100%}
+.login-field input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-glow)}
+.login-btn{width:100%;padding:11px;background:var(--blue);color:#fff;border:none;border-radius:7px;font-size:14px;font-weight:700;font-family:var(--sans);cursor:pointer;margin-top:4px}
+.login-btn:hover{background:var(--blue-dark)}
+.login-err{color:#f87171;font-size:12px;margin-top:10px;min-height:18px}
+
+/* App layout */
 .shell{display:grid;grid-template-rows:52px 1fr;height:100vh;overflow:hidden}
 .topbar{background:var(--bg1);border-bottom:1px solid var(--border);padding:0 22px;display:flex;align-items:center;justify-content:space-between}
 .logo{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--cyan);letter-spacing:2px}
@@ -100,19 +114,14 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);direction:rt
 .bg{background:transparent;color:var(--text2);border:1px solid var(--border2)}.bg:hover:not(:disabled){background:var(--bg3)}
 .bs{background:var(--green-dark);color:#a7f3d0;border:1px solid var(--green)}.bs:hover:not(:disabled){background:#047857}
 .ba{background:var(--amber-dark);color:#fde68a;border:1px solid var(--amber)}.ba:hover:not(:disabled){background:#92400e}
-.bd{background:var(--red-dark);color:#fca5a5;border:1px solid var(--red)}.bd:hover:not(:disabled){background:#991b1b}
 .bsm{padding:5px 10px;font-size:11px;border-radius:5px}
 .fg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.fg3{grid-template-columns:1fr 1fr 1fr}
-.fg1{grid-template-columns:1fr}
 .fi{display:flex;flex-direction:column;gap:4px}
 .fi.s2{grid-column:span 2}
-.fi.s3{grid-column:span 3}
 label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.7px}
 input,select,textarea{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:8px 10px;color:var(--text);font-size:12px;font-family:var(--sans);width:100%;transition:border-color .15s}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-glow)}
 select option{background:var(--bg2)}
-textarea{resize:vertical;min-height:58px}
 table{width:100%;border-collapse:collapse;font-size:11px}
 th{background:var(--bg2);color:var(--text3);padding:8px 10px;text-align:right;border-bottom:1px solid var(--border);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
 td{padding:8px 10px;border-bottom:1px solid rgba(30,58,95,.25);vertical-align:middle}
@@ -121,7 +130,6 @@ tr:hover td{background:rgba(30,58,95,.12)}
 .mono{font-family:var(--mono);font-size:10px}
 .lb{display:flex;gap:7px;align-items:center;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;margin-bottom:12px}
 .lb code{font-family:var(--mono);font-size:10px;color:var(--cyan);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.div{border:none;border-top:1px solid var(--border);margin:18px 0}
 .sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .slabel{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
@@ -140,11 +148,26 @@ tr:hover td{background:rgba(30,58,95,.12)}
 </style>
 </head>
 <body>
-<div class="shell">
+
+<!-- Login Screen -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">QUANTUM</div>
+    <div class="login-sub">ניהול כנסים ואירועים</div>
+    <div class="login-field"><label>שם משתמש</label><input id="lu" value="QUANTUM" autocomplete="username"></div>
+    <div class="login-field"><label>סיסמה</label><input id="lp" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <button class="login-btn" onclick="doLogin()">כניסה ←</button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- App Shell -->
+<div class="shell" id="appShell" style="display:none">
 <div class="topbar">
   <div class="logo">QUANTUM <span>| ניהול כנסים</span></div>
-  <div style="display:flex;gap:7px">
+  <div style="display:flex;gap:7px;align-items:center">
     <button class="btn bp bsm" onclick="openModal('ne')">＋ כנס חדש</button>
+    <button class="btn bg bsm" onclick="doLogout()" title="התנתק" style="padding:5px 8px">⎋</button>
   </div>
 </div>
 <div class="main">
@@ -166,63 +189,123 @@ tr:hover td{background:rgba(30,58,95,.12)}
 <!-- New Event -->
 <div class="overlay" id="modal-ne"><div class="modal">
   <div class="mt">📅 כנס חדש</div>
-  <div class="fg"><div class="fi s2"><label>שם הכנס</label><input id="ne-t" placeholder="חתימות פינוי-בינוי — רחוב הרצל 12"></div>
-  <div class="fi"><label>סוג</label><select id="ne-tp"><option value="signing">חתימות</option><option value="survey">מדידות</option><option value="appraisal">שמאות</option><option value="other">אחר</option></select></div>
-  <div class="fi"><label>תאריך ושעה</label><input type="datetime-local" id="ne-d"></div>
-  <div class="fi s2"><label>מיקום</label><input id="ne-l" placeholder="כתובת מלאה"></div>
-  <div class="fi"><label>מתחם</label><input id="ne-c" placeholder="מתחם X"></div>
-  <div class="fi"><label>הערות</label><input id="ne-n"></div></div>
+  <div class="fg">
+    <div class="fi s2"><label>שם הכנס</label><input id="ne-t" placeholder="חתימות פינוי-בינוי — רחוב הרצל 12"></div>
+    <div class="fi"><label>סוג</label><select id="ne-tp"><option value="signing">חתימות</option><option value="survey">מדידות</option><option value="appraisal">שמאות</option><option value="other">אחר</option></select></div>
+    <div class="fi"><label>תאריך ושעה</label><input type="datetime-local" id="ne-d"></div>
+    <div class="fi s2"><label>מיקום</label><input id="ne-l" placeholder="כתובת מלאה"></div>
+    <div class="fi"><label>מתחם</label><input id="ne-c" placeholder="מתחם X"></div>
+    <div class="fi"><label>הערות</label><input id="ne-n"></div>
+  </div>
   <div class="ma"><button class="btn bg" onclick="closeModal('ne')">ביטול</button><button class="btn bp" onclick="createEvent()">✓ צור כנס</button></div>
 </div></div>
 
 <!-- New Station -->
 <div class="overlay" id="modal-ns"><div class="modal">
   <div class="mt">👤 הוסף עמדה</div>
-  <div class="fg"><div class="fi s2"><label>שם איש מקצוע</label><input id="ns-n" placeholder='עו"ד ישראל ישראלי'></div>
-  <div class="fi"><label>תפקיד</label><select id="ns-r"><option value="lawyer">עורך דין</option><option value="surveyor">מודד</option><option value="appraiser">שמאי</option><option value="other">אחר</option></select></div>
-  <div class="fi"><label>מספר עמדה</label><input type="number" id="ns-num" min="1" placeholder="1"></div>
-  <div class="fi"><label>טלפון (לWA)</label><input id="ns-p" placeholder="05X-XXXXXXX"></div>
-  <div class="fi"><label>אימייל</label><input id="ns-e" type="email"></div></div>
+  <div class="fg">
+    <div class="fi s2"><label>שם איש מקצוע</label><input id="ns-n" placeholder='עו"ד ישראל ישראלי'></div>
+    <div class="fi"><label>תפקיד</label><select id="ns-r"><option value="lawyer">עורך דין</option><option value="surveyor">מודד</option><option value="appraiser">שמאי</option><option value="other">אחר</option></select></div>
+    <div class="fi"><label>מספר עמדה</label><input type="number" id="ns-num" min="1" placeholder="1"></div>
+    <div class="fi"><label>טלפון (לWA)</label><input id="ns-p" placeholder="05X-XXXXXXX"></div>
+    <div class="fi"><label>אימייל</label><input id="ns-e" type="email"></div>
+  </div>
   <div class="ma"><button class="btn bg" onclick="closeModal('ns')">ביטול</button><button class="btn bp" onclick="addStation()">✓ הוסף עמדה</button></div>
 </div></div>
 
 <!-- Generate Slots -->
 <div class="overlay" id="modal-sl"><div class="modal">
   <div class="mt">⏱ slots — <span id="slName"></span></div>
-  <div class="fg"><div class="fi"><label>שעת התחלה</label><input type="datetime-local" id="sl-s" oninput="calcSlots()"></div>
-  <div class="fi"><label>שעת סיום</label><input type="datetime-local" id="sl-e" oninput="calcSlots()"></div>
-  <div class="fi"><label>משך (דקות)</label><input type="number" id="sl-d" value="15" min="5" max="120" oninput="calcSlots()"></div>
-  <div class="fi"><label id="sl-calc" style="color:var(--cyan);font-size:11px;align-self:flex-end;padding-bottom:10px"></label></div></div>
+  <div class="fg">
+    <div class="fi"><label>שעת התחלה</label><input type="datetime-local" id="sl-s" oninput="calcSlots()"></div>
+    <div class="fi"><label>שעת סיום</label><input type="datetime-local" id="sl-e" oninput="calcSlots()"></div>
+    <div class="fi"><label>משך (דקות)</label><input type="number" id="sl-d" value="15" min="5" max="120" oninput="calcSlots()"></div>
+    <div class="fi"><label id="sl-calc" style="color:var(--cyan);font-size:11px;align-self:flex-end;padding-bottom:10px"></label></div>
+  </div>
   <div class="ma"><button class="btn bg" onclick="closeModal('sl')">ביטול</button><button class="btn bp" onclick="genSlots()">✓ צור slots</button></div>
 </div></div>
 
 <!-- Add Attendee -->
 <div class="overlay" id="modal-aa"><div class="modal">
   <div class="mt">🏠 הוסף דייר/ת ידנית</div>
-  <div class="fg"><div class="fi s2"><label>שם מלא</label><input id="aa-n" placeholder="ישראל ישראלי"></div>
-  <div class="fi"><label>טלפון</label><input id="aa-p" placeholder="05X-XXXXXXX"></div>
-  <div class="fi"><label>מספר דירה</label><input id="aa-u" placeholder="12"></div>
-  <div class="fi"><label>קומה</label><input id="aa-f" placeholder="3"></div>
-  <div class="fi"><label>שם בניין</label><input id="aa-b" placeholder='בניין א'></div></div>
+  <div class="fg">
+    <div class="fi s2"><label>שם מלא</label><input id="aa-n" placeholder="ישראל ישראלי"></div>
+    <div class="fi"><label>טלפון</label><input id="aa-p" placeholder="05X-XXXXXXX"></div>
+    <div class="fi"><label>מספר דירה</label><input id="aa-u" placeholder="12"></div>
+    <div class="fi"><label>קומה</label><input id="aa-f" placeholder="3"></div>
+    <div class="fi"><label>שם בניין</label><input id="aa-b" placeholder='בניין א'></div>
+  </div>
   <div class="ma"><button class="btn bg" onclick="closeModal('aa')">ביטול</button><button class="btn bp" onclick="addAttendee()">✓ הוסף</button></div>
 </div></div>
 
 <!-- Notify -->
 <div class="overlay" id="modal-nt"><div class="modal">
   <div class="mt">📱 שליחת WhatsApp</div>
-  <p style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">שלח הודעת WA עם קישור אישור לדיירים ו/או קישור רשימת נוכחות לאנשי מקצוע.</p>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">שלח הודעת WA עם קישור אישור לדיירים ו/או קישור נוכחות לאנשי מקצוע.</p>
   <div class="fi"><label>שלח ל</label><select id="nt-t"><option value="attendees">דיירים בלבד</option><option value="pros">אנשי מקצוע בלבד</option><option value="all">כולם</option></select></div>
   <p style="font-size:10px;color:var(--text3);margin-top:8px">* נשלח רק לדיירים עם סטטוס ממתין שטרם קיבלו הודעה</p>
   <div class="ma"><button class="btn bg" onclick="closeModal('nt')">ביטול</button><button class="btn bs" onclick="sendNotify()">📤 שלח</button></div>
 </div></div>
 
 <script>
-const BASE='${BASE}', AUTH='${AUTH}';
+const BASE='${BASE}';
+const SS_KEY='q_event_auth';
+let AUTH=sessionStorage.getItem(SS_KEY)||'';
 let curEvId=null, curSid=null;
+
 const TYPE={signing:'חתימות',survey:'מדידות',appraisal:'שמאות',other:'אחר'};
 const ROLE={lawyer:'עורך דין',surveyor:'מודד',appraiser:'שמאי',other:'אחר'};
 const SL={pending:'ממתין',confirmed:'אישר',cancelled:'ביטל',arrived:'הגיע',no_show:'לא הגיע',rescheduled:'תיאם'};
 const SC={pending:'pg',confirmed:'pgr',cancelled:'pr',arrived:'pb',no_show:'pr',rescheduled:'pa'};
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+function showLogin(){
+  document.getElementById('loginScreen').classList.add('show');
+  document.getElementById('appShell').style.display='none';
+}
+function showApp(){
+  document.getElementById('loginScreen').classList.remove('show');
+  document.getElementById('appShell').style.display='grid';
+}
+
+async function doLogin(){
+  const u=document.getElementById('lu').value.trim();
+  const p=document.getElementById('lp').value;
+  const authHeader='Basic '+btoa(u+':'+p);
+  const errEl=document.getElementById('loginErr');
+  errEl.textContent='בודק...';
+  try{
+    const r=await fetch(BASE+'/events/',{headers:{'Authorization':authHeader}});
+    if(r.status===401){errEl.textContent='שם משתמש או סיסמה שגויים';return;}
+    AUTH=authHeader;
+    sessionStorage.setItem(SS_KEY,AUTH);
+    errEl.textContent='';
+    showApp();
+    loadEvents();
+  }catch(e){errEl.textContent='שגיאת רשת';}
+}
+
+function doLogout(){
+  sessionStorage.removeItem(SS_KEY);
+  AUTH='';
+  showLogin();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+(async function init(){
+  if(!AUTH){showLogin();return;}
+  // verify stored token still valid
+  try{
+    const r=await fetch(BASE+'/events/',{headers:{'Authorization':AUTH}});
+    if(r.status===401){showLogin();return;}
+    showApp();
+    loadEvents();
+  }catch(e){showLogin();}
+})();
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function toast(m,t='ok'){const el=document.getElementById('toast');el.textContent=m;el.className='toast show '+(t==='ok'?'tok':'terr');setTimeout(()=>el.classList.remove('show'),3500);}
 function openModal(id){document.getElementById('modal-'+id).classList.add('open');}
@@ -234,8 +317,11 @@ async function api(method,path,body){
   const opts={method,headers:{'Content-Type':'application/json','Authorization':AUTH}};
   if(body)opts.body=JSON.stringify(body);
   const r=await fetch(BASE+'/events'+path,opts);
+  if(r.status===401){doLogout();throw new Error('Unauthorized');}
   return r.json();
 }
+
+// ── Events list ───────────────────────────────────────────────────────────────
 
 async function loadEvents(){
   const el=document.getElementById('evList');
@@ -252,8 +338,10 @@ async function loadEvents(){
         \${e.confirmed_count?'<span class="pill pgr">'+e.confirmed_count+' אישרו</span>':''}
       </div>
     </div>\`).join('');
-  }catch(e){el.innerHTML='<div class="empty">שגיאה</div>';}
+  }catch(e){if(e.message!=='Unauthorized')el.innerHTML='<div class="empty">שגיאה</div>';}
 }
+
+// ── Event detail ──────────────────────────────────────────────────────────────
 
 async function loadEvent(id){
   curEvId=id;
@@ -297,7 +385,7 @@ async function loadEvent(id){
             <span class="pill \${fc?'pgr':'pr'}">\${fc} פנויים / \${(st.slots||[]).length} סה"כ</span>
           </div>
           <div class="ca">
-            <button class="btn bg bsm" onclick="openSlots(\${st.id},'\${st.pro_name.replace(/'/g,'\\\\\\'')}')">⏱ slots</button>
+            <button class="btn bg bsm" onclick="openSlots(\${st.id},'\${st.pro_name.replace(/'/g,&quot;\\\\'\&quot;)}')">⏱ slots</button>
             <button class="btn bg bsm" onclick="openAA(\${st.id})">＋ דייר</button>
             <button class="btn ba bsm" onclick="autoAssign(\${ev.id},\${st.id})">⚡ חלק</button>
           </div>
@@ -308,13 +396,11 @@ async function loadEvent(id){
             <a href="\${pl}" target="_blank" class="btn bg bsm" title="פתח">↗</a>
           </div>
           \${(st.attendees||[]).length?
-            \`<div style="overflow-x:auto"><table>
-              <thead><tr><th>שעה</th><th>שם</th><th>דירה</th><th>בניין</th><th>טלפון</th><th>סטטוס</th><th>WA</th></tr></thead>
-              <tbody>\${atRows}</tbody></table></div>\`
+            '<div style="overflow-x:auto"><table><thead><tr><th>שעה</th><th>שם</th><th>דירה</th><th>בניין</th><th>טלפון</th><th>סטטוס</th><th>WA</th></tr></thead><tbody>'+atRows+'</tbody></table></div>'
             :'<p style="font-size:11px;color:var(--text3);text-align:center;padding:12px 0">אין דיירים — הוסף ידנית</p>'}
         </div>
       </div>\`;
-    }).join('')||'<p style="font-size:11px;color:var(--text3);padding:4px 0">אין עמדות עדיין — הוסף עמדה ←</p>';
+    }).join('')||'<p style="font-size:11px;color:var(--text3);padding:4px 0">אין עמדות — הוסף עמדה ←</p>';
 
     mc.innerHTML=\`<div class="panel">
       <div class="ph">
@@ -335,8 +421,10 @@ async function loadEvent(id){
       <div class="sh"><span class="slabel">עמדות (\${(ev.stations||[]).length})</span></div>
       \${stHtml}
     </div>\`;
-  }catch(e){mc.innerHTML='<div class="panel"><p style="color:red">'+e.message+'</p></div>';}
+  }catch(e){if(e.message!=='Unauthorized')mc.innerHTML='<div class="panel"><p style="color:red">'+e.message+'</p></div>';}
 }
+
+// ── CRUD actions ──────────────────────────────────────────────────────────────
 
 async function createEvent(){
   const t=document.getElementById('ne-t').value.trim();
@@ -399,8 +487,6 @@ async function cpLink(url){
   try{await navigator.clipboard.writeText(url);toast('✅ קישור הועתק');}
   catch(e){toast('לא ניתן להעתיק','err');}
 }
-
-loadEvents();
 </script>
 </body></html>`);
 });
