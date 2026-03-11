@@ -1,7 +1,7 @@
 /**
  * QUANTUM Campaign Dashboard — UI Route
  * Hebrew RTL dashboard for managing outreach campaigns
- * Modes: WA→Call | Call Only
+ * Includes: Outbound Campaigns + WA Bot Inbound Escalation settings
  */
 
 const express = require('express');
@@ -52,6 +52,53 @@ router.get('/', (req, res) => {
     .stat-card .num { font-size: 26px; font-weight: 700; color: #4fc3f7; }
     .stat-card .lbl { font-size: 11px; color: #78909c; margin-top: 2px; }
 
+    /* WA Bot Escalation Card */
+    .escalation-card {
+      background: linear-gradient(135deg, #0d1117 0%, #0f1e2d 100%);
+      border: 1px solid #1e4a3f;
+      border-radius: 10px; padding: 20px; margin-bottom: 24px;
+    }
+    .escalation-card .card-title {
+      font-size: 15px; font-weight: 700; color: #4db6ac; margin-bottom: 4px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .escalation-card .card-sub {
+      font-size: 12px; color: #546e7a; margin-bottom: 18px;
+    }
+    .escalation-inner {
+      display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap;
+    }
+    .escalation-control { flex: 1; min-width: 260px; }
+    .escalation-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+    .esc-stat {
+      background: #0a1520; border: 1px solid #1e3a5f;
+      border-radius: 8px; padding: 10px 16px; text-align: center; min-width: 90px;
+    }
+    .esc-stat .n { font-size: 22px; font-weight: 700; color: #4db6ac; }
+    .esc-stat .l { font-size: 10px; color: #78909c; margin-top: 2px; }
+
+    .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .slider-row input[type=range] {
+      flex: 1; accent-color: #4db6ac; height: 4px; cursor: pointer;
+    }
+    .slider-val {
+      background: #0a1520; border: 1px solid #1e4a3f;
+      border-radius: 6px; padding: 6px 14px; font-size: 16px;
+      font-weight: 700; color: #4db6ac; min-width: 90px; text-align: center;
+    }
+    .slider-hint { font-size: 11px; color: #546e7a; margin-bottom: 14px; }
+    .esc-actions { display: flex; gap: 8px; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; padding: 3px 10px; border-radius: 10px; font-weight: 600;
+    }
+    .pill-active { background: #1b4a3f; color: #4db6ac; border: 1px solid #2d7a6a; }
+    .pill-disabled { background: #2a2a2a; color: #78909c; border: 1px solid #3a3a3a; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .dot-active { background: #4db6ac; animation: pulse 1.5s infinite; }
+    .dot-off { background: #546e7a; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
     /* Main layout */
     .grid { display: grid; grid-template-columns: 380px 1fr; gap: 20px; }
 
@@ -100,6 +147,8 @@ router.get('/', (req, res) => {
     }
     .btn-primary { background: #1565c0; color: #fff; }
     .btn-primary:hover { background: #1976d2; }
+    .btn-teal { background: #1b4a3f; color: #4db6ac; border: 1px solid #2d7a6a; }
+    .btn-teal:hover { background: #2d7a6a; color: #e0f7f4; }
     .btn-success { background: #1b5e20; color: #a5d6a7; border: 1px solid #2e7d32; }
     .btn-success:hover { background: #2e7d32; }
     .btn-danger { background: #3c1414; color: #ef9a9a; border: 1px solid #7f1616; font-size: 11px; padding: 6px 10px; }
@@ -143,11 +192,6 @@ router.get('/', (req, res) => {
     .leads-import textarea { min-height: 70px; font-family: monospace; font-size: 11px; }
     .hint { font-size: 10px; color: #546e7a; margin-top: 4px; }
 
-    /* Mode icon */
-    .mode-icon { font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
-    .wa-call .mode-icon::before { content: '💬→📞'; }
-    .call-only .mode-icon::before { content: '📞'; }
-
     .empty-state {
       text-align: center; padding: 40px 20px; color: #546e7a; font-size: 13px;
     }
@@ -168,6 +212,7 @@ router.get('/', (req, res) => {
 
     @media (max-width: 768px) {
       .grid { grid-template-columns: 1fr; }
+      .escalation-inner { flex-direction: column; }
     }
   </style>
 </head>
@@ -192,6 +237,47 @@ router.get('/', (req, res) => {
     <div class="stat-card"><div class="num" id="statCalls">-</div><div class="lbl">שיחות יזומו</div></div>
     <div class="stat-card"><div class="num" id="statReplied">-</div><div class="lbl">מענו</div></div>
   </div>
+
+  <!-- ══ WA Bot Escalation Card ══════════════════════════════════════════════ -->
+  <div class="escalation-card">
+    <div class="card-title">
+      🤖 WA Bot — הסלמה אוטומטית לשיחה
+      <span class="status-pill pill-disabled" id="escStatusPill">
+        <span class="dot dot-off" id="escDot"></span>
+        <span id="escStatusText">טוען...</span>
+      </span>
+    </div>
+    <div class="card-sub">
+      כשלקוח כותב ל-WA Bot ורן לא מקבל מענה — רן מתקשר אוטומטית אחרי X דקות
+    </div>
+    <div class="escalation-inner">
+      <div class="escalation-control">
+        <label style="font-size:12px;color:#90a4ae;margin-bottom:8px;display:block">
+          זמן המתנה לפני שיחה (0 = כבוי)
+        </label>
+        <div class="slider-row">
+          <input type="range" id="escSlider" min="0" max="240" step="5" value="60"
+            oninput="onSliderChange(this.value)">
+          <div class="slider-val" id="escSliderVal">60 דק'</div>
+        </div>
+        <div class="slider-hint" id="escSliderHint">
+          אחרי 60 דקות ללא מענה ב-WA — רן מתקשר
+        </div>
+        <div class="esc-actions">
+          <button class="btn btn-teal btn-sm" onclick="saveEscalation()">💾 שמור הגדרה</button>
+          <button class="btn btn-outline btn-sm" onclick="runEscalationNow()" id="runNowBtn">
+            ▶ הרץ עכשיו (בדיקה)
+          </button>
+        </div>
+      </div>
+      <div class="escalation-stats" id="escStats">
+        <div class="esc-stat"><div class="n" id="escStatPending">-</div><div class="l">ממתינים</div></div>
+        <div class="esc-stat"><div class="n" id="escStatCalled">-</div><div class="l">הועברו לשיחה</div></div>
+        <div class="esc-stat"><div class="n" id="escStatTimeout">-</div><div class="l">דקות המתנה</div></div>
+      </div>
+    </div>
+  </div>
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
 
   <div class="grid">
 
@@ -267,7 +353,85 @@ router.get('/', (req, res) => {
 <script>
   const API = '/api/campaigns';
   let selectedMode = 'wa_then_call';
+  let currentEscMinutes = 60;
 
+  // ── Escalation card ─────────────────────────────────────────────
+  async function loadEscalationSettings() {
+    try {
+      const data = await api(API + '/settings');
+      if (!data.success) return;
+      const m = parseInt(data.escalation_minutes) || 0;
+      currentEscMinutes = m;
+      document.getElementById('escSlider').value = m;
+      onSliderChange(m, false);
+      // stats
+      document.getElementById('escStatPending').textContent = data.stats?.pending_escalation ?? '-';
+      document.getElementById('escStatCalled').textContent  = data.stats?.escalated_total    ?? '-';
+      document.getElementById('escStatTimeout').textContent = m === 0 ? 'כבוי' : m;
+      // status pill
+      const pill = document.getElementById('escStatusPill');
+      const dot  = document.getElementById('escDot');
+      const txt  = document.getElementById('escStatusText');
+      if (m === 0) {
+        pill.className = 'status-pill pill-disabled';
+        dot.className  = 'dot dot-off';
+        txt.textContent = 'כבוי';
+      } else {
+        pill.className = 'status-pill pill-active';
+        dot.className  = 'dot dot-active';
+        txt.textContent = 'פעיל — ' + m + ' דק\\' המתנה';
+      }
+    } catch(e) {
+      console.warn('Escalation settings load failed:', e.message);
+    }
+  }
+
+  function onSliderChange(val, updateHint=true) {
+    val = parseInt(val);
+    const valEl  = document.getElementById('escSliderVal');
+    const hintEl = document.getElementById('escSliderHint');
+    valEl.textContent = val === 0 ? 'כבוי' : val + " דק'";
+    if (updateHint) {
+      if (val === 0) {
+        hintEl.textContent = 'הסלמה אוטומטית מבוטלת';
+      } else {
+        hintEl.textContent = 'אחרי ' + val + ' דקות ללא מענה ב-WA — רן מתקשר';
+      }
+    }
+  }
+
+  async function saveEscalation() {
+    const val = parseInt(document.getElementById('escSlider').value);
+    const data = await api(API + '/settings', 'PATCH', { wa_bot_escalation_minutes: val });
+    if (data.success) {
+      showToast(val === 0 ? 'הסלמה אוטומטית בוטלה' : 'נשמר! הסלמה אחרי ' + val + " דקות");
+      loadEscalationSettings();
+    } else {
+      showToast(data.error || 'שגיאה בשמירה', 'error');
+    }
+  }
+
+  async function runEscalationNow() {
+    const btn = document.getElementById('runNowBtn');
+    btn.disabled = true;
+    btn.textContent = 'מריץ...';
+    try {
+      const data = await api(API + '/escalation/run', 'POST');
+      if (data.success) {
+        const called = data.result?.called ?? 0;
+        showToast(called > 0 ? 'הועברו ' + called + ' ליידים לשיחה' : 'אין ליידים להסלמה כרגע');
+        loadEscalationSettings();
+      } else {
+        showToast(data.error || 'שגיאה', 'error');
+      }
+    } catch(e) {
+      showToast('שגיאת רשת', 'error');
+    }
+    btn.disabled = false;
+    btn.textContent = '▶ הרץ עכשיו (בדיקה)';
+  }
+
+  // ── Campaigns ───────────────────────────────────────────────────
   function setMode(mode) {
     selectedMode = mode;
     document.getElementById('modeWaCall').classList.toggle('active', mode === 'wa_then_call');
@@ -297,7 +461,6 @@ router.get('/', (req, res) => {
       const data = await api(API);
       const campaigns = data.campaigns || [];
 
-      // Update stats
       let waSent = 0, calls = 0, replied = 0, active = 0;
       campaigns.forEach(c => {
         waSent  += parseInt(c.wa_sent || 0);
@@ -318,7 +481,7 @@ router.get('/', (req, res) => {
 
       el.innerHTML = campaigns.map(c => {
         const modeLabel = c.mode === 'wa_then_call'
-          ? \`💬→📞 WA ואז שיחה (${c.wa_wait_minutes} דק')\`
+          ? \`💬→📞 WA ואז שיחה (\${c.wa_wait_minutes} דק')\`
           : '📞 שיחה ישירה';
         return \`
           <div class="campaign-item" id="camp-\${c.id}">
@@ -443,8 +606,10 @@ router.get('/', (req, res) => {
   }
 
   // Init
+  loadEscalationSettings();
   loadCampaigns();
-  setInterval(loadCampaigns, 30000); // auto-refresh every 30s
+  setInterval(loadCampaigns, 30000);
+  setInterval(loadEscalationSettings, 60000);
 </script>
 </body>
 </html>`);
