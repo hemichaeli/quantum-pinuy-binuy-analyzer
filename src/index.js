@@ -14,8 +14,8 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.92.0';
-const BUILD = '2026-03-11-v4.92.0-campaigns-wa-call-flow';
+const VERSION = '4.93.0';
+const BUILD = '2026-03-11-v4.93.0-wa-bot-ran-escalation';
 
 async function runAutoMigrations() {
   try {
@@ -271,8 +271,12 @@ app.get('/api/debug', async (req, res) => {
   try { const gcal = require('./services/googleCalendarService'); gcalStatus = gcal.isConfigured() ? `configured (${process.env.GOOGLE_SA_EMAIL || process.env.GOOGLE_CLIENT_EMAIL})` : 'credentials missing'; } catch (e) { gcalStatus = 'service error'; }
   let zcalStatus = 'not configured';
   try { const zcal = require('./services/zohoCalendarService'); zcalStatus = zcal.isConfigured() ? 'configured (Zoho OAuth)' : 'credentials missing'; } catch (e) { zcalStatus = 'service error'; }
+  let escalationStatus = 'not configured';
+  try { const { getEscalationMinutes } = require('./services/waBotEscalationService'); const m = await getEscalationMinutes(); escalationStatus = m === 0 ? 'disabled (0 min)' : `active (${m} min silence → Vapi call)`; } catch (e) { escalationStatus = 'error'; }
   res.json({
     version: VERSION, build: BUILD, timestamp: new Date().toISOString(),
+    wa_bot: 'רן מ-QUANTUM v7.0 | persona: רן | overlapping scripts with Vapi',
+    wa_bot_escalation: escalationStatus,
     campaigns: 'UI at /campaigns | API at /api/campaigns | followup cron: every 2min',
     campaign_admin_panel: 'active at GET /api/scheduling/admin',
     professional_visits: 'POST /api/scheduling/visits | POST /api/scheduling/pre-register (auto-fetches buildings from Zoho)',
@@ -323,7 +327,7 @@ async function start() {
   } catch (e) { logger.warn('[IncomingWA] Failed to start:', e.message); }
 
   // ── Campaign Follow-up Cron — every 2 minutes ──────────────────────────────
-  // Finds WA-sent leads with no reply after wa_wait_minutes → triggers Vapi call
+  // Outbound campaigns: WA-sent leads → Vapi call after wa_wait_minutes
   try {
     const cron = require('node-cron');
     const axios = require('axios');
@@ -342,6 +346,24 @@ async function start() {
     });
     logger.info('[CampaignFollowup] ACTIVE - checking every 2 min');
   } catch (e) { logger.warn('[CampaignFollowup] Failed to start:', e.message); }
+
+  // ── WA Bot Escalation Cron — every 5 minutes ──────────────────────────────
+  // Inbound bot leads: if silent after X min → רן calls via Vapi
+  try {
+    const cron = require('node-cron');
+    const { runEscalation } = require('./services/waBotEscalationService');
+    cron.schedule('*/5 * * * *', async () => {
+      try {
+        const result = await runEscalation();
+        if (result.called > 0) {
+          logger.info(`[WaBotEscalation] Escalated ${result.called} leads to Vapi`);
+        }
+      } catch (e) {
+        logger.warn('[WaBotEscalation] Cron error:', e.message);
+      }
+    });
+    logger.info('[WaBotEscalation] ACTIVE - checking every 5 min | רן calls silent WA leads');
+  } catch (e) { logger.warn('[WaBotEscalation] Failed to start:', e.message); }
 
   try {
     const cron = require('node-cron');
