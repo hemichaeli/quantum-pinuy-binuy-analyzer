@@ -293,3 +293,14 @@ ALTER TABLE listings ADD COLUMN IF NOT EXISTS perplexity_public_notes TEXT;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS perplexity_enriched_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_listings_gemini_enriched ON listings(gemini_enriched_at) WHERE gemini_enriched_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_listings_urgency_flag ON listings(gemini_urgency_flag) WHERE gemini_urgency_flag IS NOT NULL;
+
+-- Phone + Contact columns for listings table
+-- Added: 2026-03-11
+-- ============================================================
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS phone VARCHAR(30);
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS contact_name VARCHAR(200);
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS message_status VARCHAR(50) DEFAULT 'not_sent';
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS deal_status VARCHAR(50);
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS title TEXT;
+CREATE INDEX IF NOT EXISTS idx_listings_phone ON listings(phone) WHERE phone IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_listings_message_status ON listings(message_status);

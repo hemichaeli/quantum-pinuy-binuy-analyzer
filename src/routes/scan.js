@@ -844,6 +844,55 @@ router.post('/banknadlan', async (req, res) => {
   }
 });
 
+// POST /api/scan/full - Full scan across all platforms + phone enrichment
+router.post('/full', async (req, res) => {
+  try {
+    const { sources, enrichPhones = true, enrichAi = true, phoneLimit = 200, aiLimit = 50 } = req.body;
+    const scanLog = await pool.query(`INSERT INTO scan_logs (scan_type, status) VALUES ('full_scan', 'running') RETURNING *`);
+    const scanId = scanLog.rows[0].id;
+    res.json({ message: 'Full scan triggered', scan_id: scanId, sources: sources || 'all' });
+    (async () => {
+      try {
+        const { runFullScan } = require('../services/fullScanOrchestrator');
+        const results = await runFullScan({ sources, enrichPhones, enrichAi, phoneLimit, aiLimit });
+        await pool.query(
+          `UPDATE scan_logs SET status = 'completed', completed_at = NOW(), complexes_scanned = $1, summary = $2 WHERE id = $3`,
+          [
+            results.total_new + results.total_updated,
+            `Full scan: ${results.total_new} new, ${results.total_updated} updated, ${results.phone_enrichment?.enriched || 0} phones found`,
+            scanId
+          ]
+        );
+      } catch (err) {
+        await pool.query(`UPDATE scan_logs SET status = 'failed', completed_at = NOW(), errors = $1 WHERE id = $2`, [err.message, scanId]);
+        logger.error('[FullScan] Failed', { error: err.message });
+      }
+    })();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/scan/enrich-phones - Enrich existing listings with phone numbers
+router.post('/enrich-phones', async (req, res) => {
+  try {
+    const { limit = 200, source } = req.body;
+    const scanLog = await pool.query(`INSERT INTO scan_logs (scan_type, status) VALUES ('phone_enrichment', 'running') RETURNING *`);
+    const scanId = scanLog.rows[0].id;
+    res.json({ message: 'Phone enrichment triggered', scan_id: scanId });
+    (async () => {
+      try {
+        const { enrichAllPhones } = require('../services/phoneEnrichmentService');
+        const result = await enrichAllPhones({ limit, source });
+        await pool.query(
+          `UPDATE scan_logs SET status = 'completed', completed_at = NOW(), complexes_scanned = $1, summary = $2 WHERE id = $3`,
+          [result.total, `Phone enrichment: ${result.enriched}/${result.total} phones found`, scanId]
+        );
+      } catch (err) {
+        await pool.query(`UPDATE scan_logs SET status = 'failed', completed_at = NOW(), errors = $1 WHERE id = $2`, [err.message, scanId]);
+      }
+    })();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
 router.get('/:id', async (req, res) => {
   try {
