@@ -1083,7 +1083,7 @@ function generateDashboardHTML(stats) {
                 return va < vb ? 1 : va > vb ? -1 : 0;
             });
             const statusHe = { deposited: 'הופקדה', approved: 'אושרה', pre_deposit: 'להפקדה', planning: 'בתכנון', construction: 'בביצוע', declared: 'הוכרז', unknown: 'לא ידוע' };
-            const th = (label, field) => '<th style="padding:10px 12px;border-bottom:1px solid #334155;cursor:pointer;white-space:nowrap;" data-onclick="sortComplexesBy(\'' + field + '\')">' + label + ' <span style="color:' + (sf===field?'#fbbf24':'#475569') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
+            const th = (label, field) => '<th style="padding:10px 12px;border-bottom:1px solid #334155;cursor:pointer;white-space:nowrap;" data-sort="' + field + '" data-onclick="sortComplexesBy(this.dataset.sort)">' + label + ' <span style="color:' + (sf===field?'#fbbf24':'#475569') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
             container.innerHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;">'
                 + '<thead><tr style="background:#1e293b;color:#94a3b8;text-align:right;">'
                 + th('שם מתחם','name') + th('עיר','city') + th('סטטוס תכנון','status') + '<th style="padding:10px 12px;border-bottom:1px solid #334155;">סטטוס הפרוייקט</th>'
@@ -1194,7 +1194,7 @@ function generateDashboardHTML(stats) {
             });
             const statusLabel = { pending: 'ממתין', contacted: 'נוצר קשר', failed: 'נכשל', landline: 'קו ארץ', no_phone: 'אין טלפון' };
             const statusColors = { pending: '#f59e0b', contacted: '#22c55e', failed: '#ef4444', landline: '#6b7280', no_phone: '#374151' };
-            const th = (label, field) => '<th style="padding:10px 12px;border-bottom:1px solid #334155;cursor:pointer;white-space:nowrap;" data-onclick="sortKonesBy(\'' + field + '\')">' + label + ' <span style="color:' + (sf===field?'#fbbf24':'#475569') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
+            const th = (label, field) => '<th style="padding:10px 12px;border-bottom:1px solid #334155;cursor:pointer;white-space:nowrap;" data-sort="' + field + '" data-onclick="sortKonesBy(this.dataset.sort)">' + label + ' <span style="color:' + (sf===field?'#fbbf24':'#475569') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
             container.innerHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;">'
                 + '<thead><tr style="background:#1e293b;color:#94a3b8;text-align:right;">'
                 + th('כותרת','title') + th('כתובת','address') + th('עיר','city') + th('טלפון','phone') + th('מחיר','price') + th('סטטוס','contact_status')
@@ -1399,7 +1399,7 @@ function generateDashboardHTML(stats) {
             const stateHe = { confirmed: '✅ מאושר', pending: '⏳ ממתין', declined: '❌ סירב', cancelled: '🚫 בוטל', no_answer: '📵 לא ענה' };
             const langLabel = { he: '🇮🇱', ru: '🇷🇺' };
             const typeMap = { signing_ceremony: 'כנס חתימות', consultation: 'ייעוץ', appraiser: 'שמאי', surveyor: 'מודד', physical: 'פגישה' };
-            const th = (label, field) => '<th style="padding:10px 12px;border-bottom:1px solid #334155;cursor:pointer;white-space:nowrap;" data-onclick="sortSchedBy(\'' + field + '\')">' + label + ' <span style="color:' + (sf===field?'#fbbf24':'#475569') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
+            const th = (label, field) => '<th style="padding:10px 12px;border-bottom:1px solid #334155;cursor:pointer;white-space:nowrap;" data-sort="' + field + '" data-onclick="sortSchedBy(this.dataset.sort)">' + label + ' <span style="color:' + (sf===field?'#fbbf24':'#475569') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
             const rows_html = filtered.map(r => {
                 const phoneClean = (r.phone || '').replace(/\D/g,'');
                 const meetingType = r.meeting_type || r.campaign_meeting_type || '';
