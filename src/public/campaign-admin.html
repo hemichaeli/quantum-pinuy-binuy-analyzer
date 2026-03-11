@@ -55,7 +55,7 @@ input:focus,select:focus{border-color:var(--blue)}
 .btn-remove{background:#7f1d1d44;border:1px solid #7f1d1d;color:#f87171;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px}
 .buildings-list{display:flex;flex-direction:column;gap:10px}
 .building-row{background:var(--input-bg);border:1px solid var(--border);border-radius:12px;padding:14px}
-.building-header{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-bottom:10px}
+.building-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
 .badge{display:inline-flex;align-items:center;gap:4px;background:#1e3a5f;color:#60a5fa;border:1px solid #3b82f660;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600}
 .badge.purple{background:#2e1065;color:#a78bfa;border-color:#7c3aed60}
 .badge.green{background:#064e3b;color:#34d399;border-color:#059669}
@@ -64,6 +64,7 @@ input:focus,select:focus{border-color:var(--blue)}
 .notice{background:#1e3a5f22;border:1px solid #3b82f640;border-radius:10px;padding:12px 14px;font-size:13px;color:#93c5fd;margin-bottom:16px}
 .notice.warn{background:#78350f22;border-color:#92400e;color:#fbbf24}
 .notice.purple{background:#2e106522;border-color:#7c3aed40;color:#c4b5fd}
+.notice.success{background:#064e3b22;border-color:#059669;color:#34d399}
 .actions{display:flex;gap:12px;flex-wrap:wrap}
 .btn-primary{background:var(--blue);color:#fff;border:none;border-radius:12px;padding:13px 24px;font-size:15px;font-weight:700;cursor:pointer;flex:1;min-width:160px}
 .btn-primary:hover{background:var(--blue-dark)}
@@ -85,6 +86,19 @@ select option{background:#1e293b}
 .campaign-id-row input{flex:1}
 .btn-load{background:#1e293b;border:1.5px solid var(--border);color:var(--text);border-radius:10px;padding:10px 16px;cursor:pointer;font-size:13px;white-space:nowrap}
 .btn-load:hover{border-color:var(--blue)}
+
+/* Ceremony buildings from Zoho */
+.zoho-buildings-bar{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.btn-load-zoho{background:#1e3a5f;border:1.5px solid #3b82f660;color:#60a5fa;border-radius:10px;padding:9px 16px;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap;transition:all .15s}
+.btn-load-zoho:hover{background:#1e40af;border-color:var(--blue)}
+.zoho-buildings-status{font-size:12px;color:var(--muted)}
+.building-zoho-row{background:var(--input-bg);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;align-items:center;gap:14px}
+.building-zoho-info{flex:1}
+.building-zoho-name{font-size:14px;font-weight:700;color:var(--text)}
+.building-zoho-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.building-zoho-stations{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.building-zoho-stations label{margin:0;white-space:nowrap;font-size:12px;color:var(--muted)}
+.building-zoho-stations input{width:70px;text-align:center}
 
 /* Visit cards */
 .visits-grid{display:flex;flex-direction:column;gap:12px;margin-top:4px}
@@ -146,7 +160,7 @@ select option{background:#1e293b}
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════
-     TAB 1: הגדרות קמפיין (existing)
+     TAB 1: הגדרות קמפיין
      ══════════════════════════════════════════════════════════════ -->
 <div id="tab-settings" class="tab-pane active">
 <div class="container">
@@ -221,6 +235,7 @@ select option{background:#1e293b}
     <button class="btn-add" onclick="addRep()">+ הוסף נציג / שמאי / מודד</button>
   </div>
 
+  <!-- ═══ CEREMONY SECTION ═══ -->
   <div id="ceremonySection" class="section" style="display:none">
     <div class="section-title">✍️ הגדרות כנס חתימות</div>
     <div class="notice warn">כנס חתימות הוא אירוע חד-פעמי עם עמדות מקבילות לכל בניין.</div>
@@ -252,12 +267,26 @@ select option{background:#1e293b}
       <label>מרווח בין כניסות (דק')</label>
       <input type="number" id="ceremonyBreak" value="0" min="0" max="30">
     </div>
+
     <div class="sep"></div>
     <div class="section-title">🏢 בניינים ועמדות</div>
-    <div class="notice">כל בניין מקבל <strong>מספר עמדות עצמאיות</strong> — כל עמדה = עורך דין שחותם במקביל.</div>
-    <div id="buildingsList" class="buildings-list"></div>
-    <button class="btn-add" onclick="addBuilding()">+ הוסף בניין</button>
+    <div class="notice">
+      הבניינים נטענים אוטומטית מ-Zoho CRM לפי הקמפיין. לכל בניין — הגדר מספר עמדות (= עורכי דין חותמים במקביל).
+    </div>
+
+    <!-- Load from Zoho bar -->
+    <div class="zoho-buildings-bar">
+      <button class="btn-load-zoho" onclick="loadCeremonyBuildings()">
+        🔄 טען בניינים מ-Zoho
+      </button>
+      <span id="ceremonyBuildingsStatus" class="zoho-buildings-status"></span>
+    </div>
+
+    <!-- Buildings rendered here -->
+    <div id="ceremonyBuildingsList" class="buildings-list"></div>
+
   </div>
+  <!-- ═══ END CEREMONY ═══ -->
 
   <div id="windowsSection" class="section">
     <div class="section-title">📅 ימים ושעות זמינות</div>
@@ -331,7 +360,6 @@ select option{background:#1e293b}
 <div id="tab-visits" class="tab-pane">
 <div class="container">
 
-  <!-- Campaign ID for visits tab -->
   <div class="section">
     <div class="section-title">🎯 קמפיין</div>
     <div class="field">
@@ -350,7 +378,6 @@ select option{background:#1e293b}
     </div>
   </div>
 
-  <!-- Existing visits -->
   <div class="section" id="existingVisitsSection" style="display:none">
     <div class="section-title" style="justify-content:space-between">
       <span>📋 ביקורים קיימים</span>
@@ -361,7 +388,6 @@ select option{background:#1e293b}
     </div>
   </div>
 
-  <!-- New visit form -->
   <div class="section">
     <div class="section-title">➕ הוסף ביקור חדש</div>
     <div class="notice purple">
@@ -369,7 +395,6 @@ select option{background:#1e293b}
       כל איש מקצוע מקבל <strong>slots עצמאיים</strong> — דיירים מזמינים ישירות אצלו.
     </div>
 
-    <!-- Visit type -->
     <div class="field">
       <label>סוג ביקור</label>
       <div class="vtype-grid">
@@ -386,11 +411,9 @@ select option{background:#1e293b}
       </div>
     </div>
 
-    <!-- Building selector -->
     <div class="field">
       <label>בניין</label>
       <div id="buildingPickerSection">
-        <!-- Populated after loadVisits() or shown as text input -->
         <div id="buildingPicker" class="building-picker"></div>
         <input type="text" id="vBuildingManual" placeholder="או הזן כתובת ידנית: סמילצ'נסקי 3" style="margin-top:8px;display:none">
         <div class="hint">לאחר לחיצה על "טען ביקורים" — הבניינים הקשורים לקמפיין ב-Zoho יופיעו כאן לבחירה.</div>
@@ -402,7 +425,6 @@ select option{background:#1e293b}
       <input type="text" id="vCity" placeholder="ראשון לציון">
     </div>
 
-    <!-- Date & Times -->
     <div class="row3">
       <div class="field">
         <label>תאריך ביקור</label>
@@ -431,7 +453,6 @@ select option{background:#1e293b}
       </div>
     </div>
 
-    <!-- Professionals -->
     <div class="sep"></div>
     <div class="section-title">👤 אנשי מקצוע (עד 3)</div>
     <div class="notice purple">כל איש מקצוע מקבל slots עצמאיים — אם שניים מגיעים, שניהם פועלים במקביל.</div>
@@ -463,9 +484,7 @@ function switchTab(tab) {
   });
   document.getElementById('tab-settings').classList.toggle('active', tab==='settings');
   document.getElementById('tab-visits').classList.toggle('active', tab==='visits');
-
   if (tab === 'visits') {
-    // Sync campaign ID
     const mainId = document.getElementById('campaignId').value.trim();
     if (mainId && !document.getElementById('vCampaignId').value) {
       document.getElementById('vCampaignId').value = mainId;
@@ -481,11 +500,10 @@ function showToast(msg, type = 'success') {
 }
 
 // ══════════════════════════════════════════════════
-// TAB 1 — SETTINGS (original logic preserved)
+// TAB 1 — SETTINGS
 // ══════════════════════════════════════════════════
 let currentType = 'consultation';
 let repCount = 0;
-let buildingCount = 0;
 const DAY_NAMES = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
 
 function selectType(el) {
@@ -496,13 +514,17 @@ function selectType(el) {
   document.getElementById('timingSection').style.display = isCeremony ? 'none' : '';
   document.getElementById('ceremonySection').style.display = isCeremony ? '' : 'none';
   document.getElementById('windowsSection').style.display = isCeremony ? 'none' : '';
+  // Auto-load buildings when switching to ceremony if campaign ID is set
+  if (isCeremony) {
+    const cid = document.getElementById('campaignId').value.trim();
+    if (cid && !document.getElementById('ceremonyBuildingsList').children.length) {
+      loadCeremonyBuildings();
+    }
+  }
 }
 
 function toggleDay(btn) { btn.classList.toggle('active'); }
-
-function getActiveDays() {
-  return [...document.querySelectorAll('.day-btn.active')].map(b => parseInt(b.dataset.day));
-}
+function getActiveDays() { return [...document.querySelectorAll('.day-btn.active')].map(b => parseInt(b.dataset.day)); }
 function getAvailableWindows() {
   const days = getActiveDays();
   const start = document.getElementById('globalStart').value || '09:00';
@@ -538,45 +560,72 @@ function getReps() {
   return reps;
 }
 
-function addBuilding(address = '', label = '', stations = 2) {
-  buildingCount++;
-  const id = buildingCount;
-  const div = document.createElement('div');
-  div.className = 'building-row'; div.id = 'building-' + id;
-  div.innerHTML = `
-    <div class="building-header">
-      <span class="badge">🏢 בניין ${id}</span>
-      <div></div>
-      <button class="btn-remove" onclick="document.getElementById('building-${id}').remove()">✕ הסר</button>
-    </div>
-    <div class="row">
-      <div class="field" style="margin:0">
-        <label>כתובת</label>
-        <input type="text" placeholder="רח' בן-גוריון 15, רמלה" value="${address}" class="b-address">
+// ── Ceremony buildings: loaded from Zoho only ──
+async function loadCeremonyBuildings() {
+  const campaignId = document.getElementById('campaignId').value.trim();
+  if (!campaignId) return showToast('הזן מזהה קמפיין תחילה', 'error');
+
+  const btn = document.querySelector('.btn-load-zoho');
+  const status = document.getElementById('ceremonyBuildingsStatus');
+  btn.innerHTML = 'טוען...<span class="spinner"></span>';
+  btn.disabled = true;
+  status.textContent = '';
+
+  try {
+    const res = await fetch(`/api/scheduling/campaigns/${encodeURIComponent(campaignId)}/buildings?bust_cache=1`);
+    const data = await res.json();
+    const buildings = data.buildings || [];
+
+    if (!buildings.length) {
+      status.textContent = 'לא נמצאו בניינים ב-Zoho לקמפיין זה';
+      document.getElementById('ceremonyBuildingsList').innerHTML =
+        '<div class="notice warn">לא נמצאו בניינים ב-Zoho — ודא שהקמפיין מקושר לבניינים ב-CRM.</div>';
+      return;
+    }
+
+    renderCeremonyBuildings(buildings);
+    status.textContent = `${buildings.length} בניינים נטענו`;
+    showToast(`${buildings.length} בניינים נטענו מ-Zoho`, 'success');
+  } catch (err) {
+    status.textContent = 'שגיאה בטעינה מ-Zoho';
+    showToast('לא ניתן לטעון בניינים מ-Zoho', 'error');
+  } finally {
+    btn.innerHTML = '🔄 טען בניינים מ-Zoho';
+    btn.disabled = false;
+  }
+}
+
+function renderCeremonyBuildings(buildings) {
+  const list = document.getElementById('ceremonyBuildingsList');
+  list.innerHTML = buildings.map((b, idx) => `
+    <div class="building-zoho-row" data-zoho-id="${escHtml(b.id||'')}">
+      <div class="building-zoho-info">
+        <div class="building-zoho-name">🏢 ${escHtml(b.address || b.name || `בניין ${idx+1}`)}</div>
+        <div class="building-zoho-sub">Zoho ID: ${escHtml(b.id||'—')}</div>
       </div>
-      <div class="field" style="margin:0">
-        <label>תווית</label>
-        <input type="text" placeholder="בניין א'" value="${label}" class="b-label">
+      <div class="building-zoho-stations">
+        <label>עמדות:</label>
+        <input type="number" value="2" min="1" max="20" class="b-stations">
       </div>
     </div>
-    <div class="field" style="margin-top:10px">
-      <label>מספר עמדות</label>
-      <input type="number" value="${stations}" min="1" max="20" class="b-stations">
-    </div>
-  `;
-  document.getElementById('buildingsList').appendChild(div);
+  `).join('');
 }
 
 function getBuildings() {
-  const rows = document.querySelectorAll('.building-row');
-  const buildings = [];
-  rows.forEach((row, idx) => {
-    const address = row.querySelector('.b-address').value.trim();
-    const label = row.querySelector('.b-label').value.trim();
-    const stations = parseInt(row.querySelector('.b-stations').value) || 1;
-    buildings.push({ address: address || `בניין ${idx+1}`, label: label || `בניין ${idx+1}`, station_count: stations, display_order: idx });
+  const rows = document.querySelectorAll('.building-zoho-row');
+  if (!rows.length) return [];
+  return Array.from(rows).map((row, idx) => {
+    const nameEl = row.querySelector('.building-zoho-name');
+    const address = nameEl ? nameEl.textContent.replace(/^🏢\s*/, '').trim() : `בניין ${idx+1}`;
+    const stations = parseInt(row.querySelector('.b-stations')?.value) || 1;
+    return {
+      address,
+      label: address,
+      station_count: stations,
+      display_order: idx,
+      zoho_id: row.dataset.zohoId || null
+    };
   });
-  return buildings;
 }
 
 async function saveCampaign() {
@@ -593,9 +642,26 @@ async function saveCampaign() {
       const endTime = document.getElementById('ceremonyEnd').value;
       const slotDur = parseInt(document.getElementById('ceremonySlotDuration').value) || 15;
       const breakDur = parseInt(document.getElementById('ceremonyBreak').value) || 0;
-      const buildings = getBuildings();
+
       if (!ceremonyDate) { showToast('חובה לבחור תאריך כנס', 'error'); return; }
-      if (!buildings.length) { showToast('הוסף לפחות בניין אחד', 'error'); return; }
+
+      // Auto-load buildings if none rendered yet
+      let buildings = getBuildings();
+      if (!buildings.length) {
+        showToast('טוען בניינים מ-Zoho...', 'success');
+        try {
+          const res = await fetch(`/api/scheduling/campaigns/${encodeURIComponent(campaignId)}/buildings`);
+          const data = await res.json();
+          if (data.buildings?.length) {
+            renderCeremonyBuildings(data.buildings);
+            document.getElementById('ceremonyBuildingsStatus').textContent = `${data.buildings.length} בניינים נטענו`;
+            buildings = getBuildings();
+          }
+        } catch(e) { /* will fail below */ }
+      }
+
+      if (!buildings.length) { showToast('לא נמצאו בניינים — טען בניינים מ-Zoho', 'error'); return; }
+
       await fetch(`/api/scheduling/campaign/${campaignId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project_id: parseInt(document.getElementById('projectId').value)||1, meeting_type: 'signing_ceremony', wa_language: document.getElementById('waLanguage').value, booking_link_expires_hours: parseInt(document.getElementById('bookingExpiry').value)||48, show_rep_name: document.getElementById('showRepName').value==='true' })
@@ -626,7 +692,7 @@ async function saveCampaign() {
           const slotsRes = await fetch(`/api/scheduling/campaign/${campaignId}/generate-slots`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from_date: fmt(tomorrow), to_date: fmt(nextMonth), representatives: reps }) });
           const slotsData = await slotsRes.json();
           document.getElementById('previewBox').style.display = 'block';
-          document.getElementById('previewBox').textContent = `✅ הגדרות נשמרו\n📅 Slots נוצרו: ${slotsData.inserted} (דילוג: ${slotsData.skipped})\n📆 טווח: ${slotsData.from} — ${slotsData.to}\n⏱️ ${slotsData.slot_duration_minutes} דק' + ${slotsData.buffer_minutes} דק' מרווח\n👥 נציגים: ${reps.map(r=>r.name+(r.weight>1?` (x${r.weight})`:'')). join(', ')}`;
+          document.getElementById('previewBox').textContent = `✅ הגדרות נשמרו\n📅 Slots נוצרו: ${slotsData.inserted} (דילוג: ${slotsData.skipped})\n📆 טווח: ${slotsData.from} — ${slotsData.to}\n⏱️ ${slotsData.slot_duration_minutes} דק' + ${slotsData.buffer_minutes} דק' מרווח\n👥 נציגים: ${reps.map(r=>r.name+(r.weight>1?` (x${r.weight})`:'')).join(', ')}`;
         } else {
           document.getElementById('previewBox').style.display = 'block';
           document.getElementById('previewBox').textContent = `✅ הגדרות נשמרו\n\nכדי ליצור slots, הוסף נציג אחד לפחות ושמור שוב.`;
@@ -689,7 +755,7 @@ async function loadCampaign() {
 // ══════════════════════════════════════════════════
 let currentVType = 'appraiser';
 let profCount = 0;
-let campaignBuildings = [];  // loaded from Zoho
+let campaignBuildings = [];
 
 function selectVType(el) {
   document.querySelectorAll('.vtype-btn').forEach(b => b.classList.remove('active'));
@@ -697,44 +763,31 @@ function selectVType(el) {
   currentVType = el.dataset.vtype;
 }
 
-// ── Load visits + buildings for campaign ──
 async function loadVisits() {
   const campaignId = document.getElementById('vCampaignId').value.trim();
   if (!campaignId) return showToast('הזן מזהה קמפיין', 'error');
-
-  // Load existing visits
   try {
     const res = await fetch(`/api/scheduling/visits?campaign_id=${encodeURIComponent(campaignId)}`);
     const data = await res.json();
     renderVisits(data.visits || []);
     document.getElementById('existingVisitsSection').style.display = '';
-  } catch (e) {
-    showToast('שגיאה בטעינת ביקורים', 'error');
-  }
-
-  // Load Zoho buildings
+  } catch (e) { showToast('שגיאה בטעינת ביקורים', 'error'); }
   try {
     const res = await fetch(`/api/scheduling/campaigns/${encodeURIComponent(campaignId)}/buildings`);
     const data = await res.json();
     campaignBuildings = data.buildings || [];
     renderBuildingPicker(campaignBuildings);
-  } catch (e) {
-    // Zoho not available — show manual input
-    campaignBuildings = [];
-    renderBuildingPicker([]);
-  }
+  } catch (e) { campaignBuildings = []; renderBuildingPicker([]); }
 }
 
 function renderBuildingPicker(buildings) {
   const picker = document.getElementById('buildingPicker');
   const manual = document.getElementById('vBuildingManual');
-
   if (!buildings.length) {
     picker.innerHTML = '<div class="no-buildings-hint">לא נמצאו בניינים מ-Zoho — הזן כתובת ידנית למטה</div>';
     manual.style.display = '';
     return;
   }
-
   manual.style.display = 'none';
   picker.innerHTML = buildings.map((b, i) => `
     <label class="building-option" onclick="selectBuilding(this)">
@@ -745,8 +798,6 @@ function renderBuildingPicker(buildings) {
       </div>
     </label>
   `).join('');
-
-  // Mark first as selected visually
   const first = picker.querySelector('.building-option');
   if (first) first.classList.add('selected');
 }
@@ -757,10 +808,8 @@ function selectBuilding(el) {
 }
 
 function getSelectedBuilding() {
-  // From radio buttons
   const radio = document.querySelector('input[name="vBuilding"]:checked');
   if (radio) return radio.value;
-  // From manual input
   return document.getElementById('vBuildingManual').value.trim();
 }
 
@@ -768,21 +817,14 @@ function renderVisits(visits) {
   const list = document.getElementById('visitsList');
   const count = document.getElementById('visitsCount');
   count.textContent = `${visits.length} ביקורים`;
-
-  if (!visits.length) {
-    list.innerHTML = '<div class="empty-state">אין ביקורים עדיין לקמפיין זה</div>';
-    return;
-  }
-
+  if (!visits.length) { list.innerHTML = '<div class="empty-state">אין ביקורים עדיין לקמפיין זה</div>'; return; }
   const typeLabel = { appraiser: 'שמאי', surveyor: 'מודד' };
   const typeIcon  = { appraiser: '🏠', surveyor: '📐' };
-
   list.innerHTML = visits.map(v => {
     const profs = (v.professionals || []).filter(p => p.name);
     const totalOpen   = profs.reduce((s,p) => s + (parseInt(p.slots_open)||0), 0);
     const totalBooked = profs.reduce((s,p) => s + (parseInt(p.slots_booked)||0), 0);
     const dateStr = v.visit_date ? new Date(v.visit_date).toLocaleDateString('he-IL') : '';
-
     return `
       <div class="visit-card">
         <div class="visit-card-header">
@@ -813,17 +855,14 @@ function renderVisits(visits) {
   }).join('');
 }
 
-// ── Visit report popup ──
 async function showVisitReport(visitId, buildingAddr) {
   try {
     const res = await fetch(`/api/scheduling/visits/${visitId}/report`);
     const data = await res.json();
     if (!data.visit) return showToast('דוח לא זמין', 'error');
-
     let text = `דוח ביקור — ${buildingAddr}\n`;
     text += `📅 ${data.visit.visit_date}\n`;
     text += `סה"כ slots: ${data.summary.total} | נקבעו: ${data.summary.booked} | פתוחים: ${data.summary.open}\n\n`;
-
     for (const [profName, slots] of Object.entries(data.report || {})) {
       text += `👤 ${profName}\n`;
       slots.forEach(s => {
@@ -835,17 +874,13 @@ async function showVisitReport(visitId, buildingAddr) {
       });
       text += '\n';
     }
-
     const box = document.getElementById('visitResult');
     box.style.display = 'block';
     box.textContent = text;
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  } catch (e) {
-    showToast('שגיאה בטעינת דוח', 'error');
-  }
+  } catch (e) { showToast('שגיאה בטעינת דוח', 'error'); }
 }
 
-// ── Professionals form ──
 function addProfForm(name='', phone='') {
   const existing = document.querySelectorAll('.prof-form-row').length;
   if (existing >= 3) { showToast('מקסימום 3 אנשי מקצוע לביקור', 'error'); return; }
@@ -878,15 +913,13 @@ function addProfForm(name='', phone='') {
 
 function removeProf(id) {
   document.getElementById(id)?.remove();
-  // Re-number
   document.querySelectorAll('.prof-form-row .prof-num').forEach((el,i) => { el.textContent = i+1; });
   updateAddProfBtn();
 }
 
 function updateAddProfBtn() {
   const count = document.querySelectorAll('.prof-form-row').length;
-  const btn = document.getElementById('btnAddProf');
-  btn.style.display = count >= 3 ? 'none' : '';
+  document.getElementById('btnAddProf').style.display = count >= 3 ? 'none' : '';
 }
 
 function getProfessionals() {
@@ -901,83 +934,46 @@ function getProfessionals() {
   return profs;
 }
 
-// ── Create visit ──
 async function createVisit() {
   const campaignId = document.getElementById('vCampaignId').value.trim();
   if (!campaignId) return showToast('הזן מזהה קמפיין', 'error');
-
   const building = getSelectedBuilding();
   if (!building) return showToast('בחר/הזן כתובת בניין', 'error');
-
   const city = document.getElementById('vCity').value.trim();
   if (!city) return showToast('הזן עיר', 'error');
-
   const visitDate  = document.getElementById('vDate').value;
   if (!visitDate) return showToast('בחר תאריך ביקור', 'error');
-
   const startTime  = document.getElementById('vStart').value;
   const endTime    = document.getElementById('vEnd').value;
   if (!startTime || !endTime) return showToast('הזן שעות ביקור', 'error');
   if (endTime <= startTime) return showToast('שעת סיום חייבת להיות אחרי שעת התחלה', 'error');
-
-  const slotDur    = parseInt(document.getElementById('vSlotDuration').value) || 30;
-  const buffer     = parseInt(document.getElementById('vBuffer').value) || 5;
-  const profs      = getProfessionals();
+  const slotDur = parseInt(document.getElementById('vSlotDuration').value) || 30;
+  const buffer  = parseInt(document.getElementById('vBuffer').value) || 5;
+  const profs   = getProfessionals();
   if (!profs.length) return showToast('הוסף לפחות איש מקצוע אחד', 'error');
 
   const btn = document.querySelector('.btn-primary.purple');
   btn.innerHTML = 'יוצר ביקור...<span class="spinner"></span>'; btn.disabled = true;
-
   try {
     const res = await fetch('/api/scheduling/visits', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        campaign_id: campaignId,
-        project_id: parseInt(document.getElementById('vProjectId').value) || 1,
-        visit_type: currentVType,
-        building_address: building,
-        city,
-        visit_date: visitDate,
-        start_time: startTime,
-        end_time: endTime,
-        slot_duration_minutes: slotDur,
-        buffer_minutes: buffer,
-        professionals: profs
-      })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaign_id: campaignId, project_id: parseInt(document.getElementById('vProjectId').value)||1, visit_type: currentVType, building_address: building, city, visit_date: visitDate, start_time: startTime, end_time: endTime, slot_duration_minutes: slotDur, buffer_minutes: buffer, professionals: profs })
     });
     const data = await res.json();
-
     if (data.success) {
       let summary = `✅ ביקור נוצר בהצלחה! (ID: ${data.visit_id})\n`;
-      summary += `🏢 בניין: ${data.building_address}\n`;
-      summary += `📅 תאריך: ${data.visit_date}\n`;
-      summary += `📊 סה"כ slots: ${data.total_slots}\n\n`;
-      data.professionals?.forEach(p => {
-        summary += `👤 ${p.professional}\n`;
-        summary += `   slots: ${p.slots_created} | ראשון: ${p.first_slot} | אחרון: ${p.last_slot}\n\n`;
-      });
+      summary += `🏢 בניין: ${data.building_address}\n📅 תאריך: ${data.visit_date}\n📊 סה"כ slots: ${data.total_slots}\n\n`;
+      data.professionals?.forEach(p => { summary += `👤 ${p.professional}\n   slots: ${p.slots_created} | ראשון: ${p.first_slot} | אחרון: ${p.last_slot}\n\n`; });
       const box = document.getElementById('visitResult');
-      box.style.display = 'block';
-      box.textContent = summary;
+      box.style.display = 'block'; box.textContent = summary;
       showToast(`ביקור נוצר — ${data.total_slots} slots`, 'success');
-
-      // Reload visits list
       loadVisits();
-
-      // Reset form
       document.getElementById('profFormList').innerHTML = '';
-      profCount = 0;
-      updateAddProfBtn();
+      profCount = 0; updateAddProfBtn();
       document.getElementById('vDate').value = '';
-    } else {
-      showToast('שגיאה: ' + (data.error||'לא ידוע'), 'error');
-    }
-  } catch (err) {
-    showToast('שגיאת רשת: ' + err.message, 'error');
-  } finally {
-    btn.innerHTML = '✅ צור ביקור + Slots'; btn.disabled = false;
-  }
+    } else { showToast('שגיאה: ' + (data.error||'לא ידוע'), 'error'); }
+  } catch (err) { showToast('שגיאת רשת: ' + err.message, 'error'); }
+  finally { btn.innerHTML = '✅ צור ביקור + Slots'; btn.disabled = false; }
 }
 
 function escHtml(str) {
