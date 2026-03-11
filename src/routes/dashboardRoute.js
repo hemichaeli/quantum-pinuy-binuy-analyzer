@@ -381,11 +381,9 @@ function generateDashboardHTML(stats) {
             <h2>⚡ פעולות מהירות</h2>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
                 <button class="btn btn-intel" data-onclick="loadMorningIntelligence()">🧠 ינטליגנציה יומית</button>
-                <button class="btn" data-onclick="runAction('scan-yad2')">🏠 סרוק יד2</button>
-                <button class="btn" data-onclick="runAction('scan-facebook')">📱 סרוק פייסבוק</button>
+                <button class="btn btn-green" data-onclick="runAllScrapers()" style="font-weight:700;font-size:15px;">🔍 בצע סריקה</button>
                 <button class="btn" data-onclick="refreshStats()">🔄 רענן נתונים</button>
                 <button class="btn btn-secondary" data-onclick="window.open('/api/docs','_blank')">📋 API Docs</button>
-                <button class="btn btn-secondary" data-onclick="window.open('/sandbox','_blank')">🧪 Sandbox</button>
             </div>
         </div>
 
@@ -397,9 +395,9 @@ function generateDashboardHTML(stats) {
             <div id="morning-content"><div class="loading">טוען...</div></div>
         </div>
 
-        <div class="section">
+        <div class="section" style="max-width:50%;">
             <h2>📊 סטטוס מערכת</h2>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
                 <div class="data-item"><h3>📾 סריקה אוטומטית</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">פעיל</span></span></div></div></div>
                 <div class="data-item"><h3>📱 WhatsApp</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">מחובר</span></span></div></div></div>
                 <div class="data-item"><h3>📆 Auto Contact</h3><div class="data-meta"><div class="data-meta-item"><span class="data-meta-label">סטטוס:</span><span class="data-meta-value"><span class="status-badge status-qualified">פעיל (כל 30 דק)</span></span></div></div></div>
