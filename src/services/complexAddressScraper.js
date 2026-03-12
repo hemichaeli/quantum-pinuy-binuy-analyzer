@@ -19,8 +19,9 @@ const pool = require('../db/pool');
 const { logger } = require('./logger');
 
 const PERPLEXITY_API = 'https://api.perplexity.ai/chat/completions';
-const DELAY_MS = 3000; // delay between complex scans
-const ENRICH_DELAY_MS = 2000; // delay between enrichments
+const DELAY_MS = 500;  // delay between batches
+const ENRICH_DELAY_MS = 1000; // delay between enrichments
+const BATCH_SIZE = 10; // parallel requests per batch
 
 // Sources to search
 const SOURCES = ['homeless', 'yad1', 'winwin'];
@@ -304,24 +305,33 @@ async function scanAll(options = {}) {
     return { total: 0, inserted: 0, updated: 0, results: [] };
   }
 
-  logger.info(`[ComplexScraper] Starting scan of ${complexes.length} complexes (Homeless + Yad1 + Winwin)`);
+  logger.info(`[ComplexScraper] Starting scan of ${complexes.length} complexes in batches of ${BATCH_SIZE} (Homeless + Yad1 + Winwin)`);
 
   let totalInserted = 0, totalUpdated = 0;
   const results = [];
 
-  for (let i = 0; i < complexes.length; i++) {
-    try {
-      const result = await scanComplex(complexes[i]);
-      totalInserted += result.inserted;
-      totalUpdated += result.updated;
-      results.push(result);
-    } catch (err) {
-      logger.error(`[ComplexScraper] Error for complex ${complexes[i].id}: ${err.message}`);
-      results.push({ complex_id: complexes[i].id, name: complexes[i].name, error: err.message });
+  // Process in parallel batches
+  for (let i = 0; i < complexes.length; i += BATCH_SIZE) {
+    const batch = complexes.slice(i, i + BATCH_SIZE);
+    logger.info(`[ComplexScraper] Processing batch ${Math.floor(i/BATCH_SIZE)+1}/${Math.ceil(complexes.length/BATCH_SIZE)} (complexes ${i+1}-${Math.min(i+BATCH_SIZE, complexes.length)})`);
+
+    const batchResults = await Promise.allSettled(
+      batch.map(complex => scanComplex(complex))
+    );
+
+    for (const br of batchResults) {
+      if (br.status === 'fulfilled') {
+        totalInserted += br.value.inserted || 0;
+        totalUpdated += br.value.updated || 0;
+        results.push(br.value);
+      } else {
+        logger.error(`[ComplexScraper] Batch error: ${br.reason?.message}`);
+        results.push({ error: br.reason?.message });
+      }
     }
 
-    // Delay between complexes to avoid rate limiting
-    if (i < complexes.length - 1) {
+    // Small delay between batches
+    if (i + BATCH_SIZE < complexes.length) {
       await new Promise(r => setTimeout(r, DELAY_MS));
     }
   }
