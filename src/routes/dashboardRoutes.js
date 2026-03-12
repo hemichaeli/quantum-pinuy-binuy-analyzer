@@ -1,5 +1,5 @@
 /**
- * QUANTUM Dashboard API Routes
+ * QUANTUM Dashboard API Routes v2.1
  * HTML is served from /dashboard (dashboardRoute.js -> src/views/dashboard.html)
  * This file provides all the DATA API endpoints used by the dashboard.
  */
@@ -24,7 +24,7 @@ router.get('/ads/all', async (req, res) => {
         l.*,
         c.name as complex_name,
         c.city as complex_city,
-        c.iai_score,
+        c.iai_score as complex_iai_score,
         l.asking_price as price,
         CASE 
           WHEN l.asking_price > 0 AND c.iai_score > 0 
@@ -61,10 +61,9 @@ router.get('/ads/all', async (req, res) => {
       LIMIT 1000
     `);
     
-    // Calculate premium amount
     const listings = rows.map(row => ({
       ...row,
-      premium_amount: row.potential_price - row.price
+      premium_amount: (row.potential_price || 0) - (row.price || 0)
     }));
     
     res.json({ ads: listings });
@@ -98,27 +97,21 @@ router.get('/ads/stats', async (req, res) => {
   }
 });
 
-// API: All Messages (Mock data - replace with real message integration)
+// API: All Messages (Mock)
 router.get('/messages/all', async (req, res) => {
   try {
-    const messages = [
-      { id: 1, platform: 'WhatsApp', sender: 'דוד כהן', content: 'שלום, מעוניין לשמוע על דירות בתל אביב בטווח של 2.5-3 מיליון', status: 'new', date: new Date(), phone: '050-1234567' },
-      { id: 2, platform: 'Email', sender: 'שרה לוי', content: 'בדקתי את הפרויקט שהצעתם בהרצליה, נשמע מעניין. מתי נוכל לקבוע פגישה?', status: 'read', date: new Date(Date.now() - 3600000), email: 'sarah.levi@email.com' },
-      { id: 3, platform: 'WhatsApp', sender: 'מיכאל שחר', content: 'תודה על המידע. אשמח לקבל עוד פרטים על התהליך המשפטי', status: 'replied', date: new Date(Date.now() - 7200000), phone: '052-9876543' }
-    ];
-    res.json({ messages });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+    res.json({ messages: [
+      { id: 1, platform: 'WhatsApp', sender: 'דוד כהן', content: 'שלום, מעוניין לשמוע על דירות בתל אביב', status: 'new', date: new Date(), phone: '050-1234567' },
+      { id: 2, platform: 'Email', sender: 'שרה לוי', content: 'בדקתי את הפרויקט שהצעתם, נשמע מעניין', status: 'read', date: new Date(Date.now() - 3600000), email: 'sarah@email.com' }
+    ]});
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Messages Statistics  
 router.get('/messages/stats', async (req, res) => {
   try {
-    res.json({ new: Math.floor(Math.random() * 30) + 10, whatsapp: Math.floor(Math.random() * 50) + 20, email: Math.floor(Math.random() * 20) + 5, response_rate: Math.floor(Math.random() * 30) + 60 });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+    res.json({ new: 15, whatsapp: 40, email: 10, response_rate: 70 });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: All Complexes with comprehensive data
@@ -126,60 +119,44 @@ router.get('/complexes/all', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT id, name, city, existing_units, planned_units, iai_score, status, updated_at, address, developer, approval_date, signature_percent
-      FROM complexes 
-      ORDER BY iai_score DESC NULLS LAST, updated_at DESC
-      LIMIT 1000
+      FROM complexes ORDER BY iai_score DESC NULLS LAST, updated_at DESC LIMIT 1000
     `);
     res.json({ complexes: rows });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: All Buyers/Leads (Mock)
 router.get('/buyers/all', async (req, res) => {
   try {
-    const buyers = [
-      { id: 1, name: 'אברהם כהן', phone: '050-1234567', email: 'avraham.cohen@email.com', status: 'qualified', source: 'website', budget: 2800000, last_contact: new Date(), notes: 'מחפש דירת 4 חדרים בתל אביב' },
-      { id: 2, name: 'רחל לוי', phone: '052-7654321', email: 'rachel.levy@email.com', status: 'negotiating', source: 'whatsapp', budget: 3200000, last_contact: new Date(Date.now() - 86400000), notes: 'במו"מ על פרויקט בהרצליה' },
-      { id: 3, name: 'יוסף דוד', phone: '054-9876543', email: 'yosef.david@email.com', status: 'new', source: 'facebook', budget: 2100000, last_contact: new Date(Date.now() - 172800000), notes: 'ליד חדש מפייסבוק' }
-    ];
-    res.json({ buyers });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+    res.json({ buyers: [
+      { id: 1, name: 'אברהם כהן', phone: '050-1234567', status: 'qualified', budget: 2800000, last_contact: new Date() },
+      { id: 2, name: 'רחל לוי', phone: '052-7654321', status: 'negotiating', budget: 3200000, last_contact: new Date(Date.now() - 86400000) }
+    ]});
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: News Feed
 router.get('/news', async (req, res) => {
   try {
-    const news = [
-      { id: 1, type: 'ad', title: 'מודעה חדשה נוספה', description: 'דירת 4 חדרים בתל אביב - ₪2.8M', timestamp: new Date(), icon: 'home' },
-      { id: 2, type: 'lead', title: 'ליד חדש התקבל', description: 'קונה פוטנציאלי בהרצליה עם תקציב ₪3.2M', timestamp: new Date(Date.now() - 1800000), icon: 'person_add' },
-      { id: 3, type: 'complex', title: 'עדכון מתחם', description: 'פרויקט "הנחל" - אושרה תוכנית חדשה', timestamp: new Date(Date.now() - 3600000), icon: 'domain' }
-    ];
-    res.json({ news });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+    res.json({ news: [
+      { id: 1, type: 'ad', title: 'מודעה חדשה', description: 'דירת 4 חדרים בתל אביב - ₪2.8M', timestamp: new Date(), icon: 'home' },
+      { id: 2, type: 'lead', title: 'ליד חדש', description: 'קונה פוטנציאלי עם תקציב ₪3.2M', timestamp: new Date(Date.now() - 1800000), icon: 'person_add' }
+    ]});
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Call Statistics
 router.get('/calls/stats', async (req, res) => {
   try {
     res.json({ today: { total: 12, answered: 8, missed: 4, leads_generated: 3 }, week: { total: 67, answered: 45, missed: 22, leads_generated: 15 }, month: { total: 289, answered: 201, missed: 88, leads_generated: 67 } });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // API: Lead Statistics
 router.get('/leads/stats', async (req, res) => {
   try {
     res.json({ total: 156, new_this_month: 23, converted: 12, active: 89, conversion_rate: 7.7 });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ===== EXISTING ENDPOINTS =====
@@ -195,8 +172,7 @@ router.get('/complex/:id', async (req, res) => {
 
 // API: Get listings with filters — supports outreach tab params
 // Params: city, complex_slug, source, sort, limit, is_active,
-//         min_rooms, max_rooms, min_price, max_price,
-//         min_ssi, min_iai, message_status
+//         min_rooms, max_rooms, min_price, max_price, min_ssi, min_iai, message_status
 router.get('/listings', async (req, res) => {
   try {
     const {
@@ -209,7 +185,6 @@ router.get('/listings', async (req, res) => {
     const params = [];
     const conditions = [];
 
-    // is_active: default true if not specified or if 'true'
     if (is_active === 'false') {
       conditions.push(`l.is_active = false`);
     } else {
@@ -253,10 +228,9 @@ router.get('/listings', async (req, res) => {
       conditions.push(`c.iai_score >= $${params.length}`);
     }
 
-    // message_status filter with Hebrew/English normalization
+    // message_status filter — normalize Hebrew/English values
     if (message_status) {
       if (message_status === 'none') {
-        // Not contacted: NULL, Hebrew default, or explicit 'none'
         conditions.push(`(l.message_status IS NULL OR l.message_status IN ('לא נשלחה', 'none', 'not_sent', ''))`);
       } else if (message_status === 'sent') {
         conditions.push(`l.message_status IN ('sent', 'נשלחה')`);
@@ -282,18 +256,19 @@ router.get('/listings', async (req, res) => {
     const orderBy = sortMap[sort] || sortMap.iai;
     const lim = Math.min(parseInt(limit) || 200, 500);
 
+    // l.iai_score exists in listings, c.iai_score in complexes — alias to avoid ambiguity
     const query = `
       SELECT
         l.id, l.address, l.title, l.city, l.rooms, l.asking_price, l.area_sqm,
         l.ssi_score, l.iai_score, l.message_status, l.contact_attempts,
         l.last_message_sent_at, l.last_reply_at, l.deal_status, l.source,
-        l.phone AS phone,
+        l.phone,
         l.contact_name,
         l.created_at,
-        c.name  AS complex_name,
-        c.city  AS complex_city,
-        c.slug  AS complex_slug,
-        c.id    AS cid,
+        c.name   AS complex_name,
+        c.city   AS complex_city,
+        c.slug   AS complex_slug,
+        c.id     AS cid,
         c.iai_score AS complex_iai,
         c.status AS complex_status,
         c.developer
@@ -327,7 +302,7 @@ router.post('/listings/message-sent', express.json(), async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// API: Get committees (complexes ordered by date)
+// API: Get committees
 router.get('/committees', async (req, res) => {
   try {
     const { rows } = await pool.query(`SELECT id, name as complex_name, city, status, approval_date as date, deposit_date, plan_number FROM complexes ORDER BY approval_date DESC NULLS LAST, updated_at DESC LIMIT 200`);
@@ -469,7 +444,7 @@ router.get('/scheduling/overview', async (req, res) => {
   }
 });
 
-// API: Manually trigger enrichment for unenriched listings
+// API: Manually trigger enrichment
 router.post('/ads/enrich', async (req, res) => {
   try {
     const limit = parseInt(req.body?.limit) || 20;
@@ -485,7 +460,7 @@ router.post('/ads/enrich/:id', async (req, res) => {
   try {
     const { enrichListing } = require('../services/adEnrichmentService');
     const { rows } = await pool.query(
-      'SELECT l.*, c.iai_score FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id WHERE l.id = $1',
+      'SELECT l.*, c.iai_score AS complex_iai FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id WHERE l.id = $1',
       [req.params.id]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Listing not found' });
@@ -496,13 +471,12 @@ router.post('/ads/enrich/:id', async (req, res) => {
   }
 });
 
-// API: Update phone number for a listing (used by Chrome Extension)
+// API: Update phone for a listing
 router.post('/ads/update-phone', express.json(), async (req, res) => {
   try {
     const { source_url, source_listing_id, phone, contact_name, source } = req.body;
     if (!phone) return res.status(400).json({ error: 'phone is required' });
     let result = { rowCount: 0, rows: [] };
-    // Try by source_listing_id + source
     if (source_listing_id && source) {
       const r = await pool.query(
         `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), last_seen = CURRENT_DATE
@@ -512,24 +486,12 @@ router.post('/ads/update-phone', express.json(), async (req, res) => {
       );
       if (r.rowCount > 0) result = r;
     }
-    // Try by exact URL
     if (result.rowCount === 0 && source_url) {
       const r = await pool.query(
         `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), last_seen = CURRENT_DATE
          WHERE url = $3 AND (phone IS NULL OR phone = '')
          RETURNING id, source, source_listing_id, phone, contact_name`,
         [phone, contact_name || null, source_url]
-      );
-      if (r.rowCount > 0) result = r;
-    }
-    // Try by partial URL (strip query params)
-    if (result.rowCount === 0 && source_url) {
-      const urlBase = source_url.split('?')[0];
-      const r = await pool.query(
-        `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), last_seen = CURRENT_DATE
-         WHERE url LIKE $3 AND (phone IS NULL OR phone = '')
-         RETURNING id, source, source_listing_id, phone, contact_name`,
-        [phone, contact_name || null, `${urlBase}%`]
       );
       if (r.rowCount > 0) result = r;
     }
@@ -574,4 +536,3 @@ router.post('/ads/bulk-insert', express.json(), async (req, res) => {
 });
 
 module.exports = router;
-// force redeploy Wed Mar 11 21:01:56 EDT 2026
