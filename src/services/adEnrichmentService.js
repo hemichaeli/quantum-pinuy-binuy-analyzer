@@ -82,13 +82,18 @@ async function enrichWithPerplexity(listing) {
   const address = listing.exact_address_enriched || listing.address || '';
   const city = listing.city || '';
 
+  const descSnippet = listing.description_snippet || listing.title || '';
+  const priceInfo = listing.asking_price ? `מחיר מבוקש: ${Number(listing.asking_price).toLocaleString()} ₪` : '';
   const prompt = `חפש מידע על הנכס בכתובת: ${address}, ${city}, ישראל.
+${priceInfo}
+תיאור המודעה: ${descSnippet}
 
 אני צריך:
 1. גיל הבניין (שנת בנייה)
 2. תוכניות בינוי/פינוי-בינוי/תמ"א בסביבה (500 מטר)
 3. עסקאות נדל"ן אחרונות בבניין או ברחוב (12 חודשים אחרונים)
-4. מידע ציבורי נוסף על הנכס
+4. ניתוח מוטיבציית המוכר — האם יש סימנים לדחיפות (ירושה, גירושין, כינוס נכסים, עוזב ארץ, מחיר נמוך מהשוק)
+5. מידע ציבורי נוסף על הנכס
 
 החזר JSON בלבד:
 {
@@ -98,6 +103,10 @@ async function enrichWithPerplexity(listing) {
   "has_renewal_plan": true/false,
   "recent_transactions": [{"date": "YYYY-MM", "price": מחיר, "sqm": שטח}] או [],
   "avg_price_sqm_area": מחיר ממוצע למ"ר באזור או null,
+  "seller_motivation_score": 0-100 (0=לא לחוץ, 100=לחוץ מאוד),
+  "seller_motivation_reason": "הסבר קצר מדוע המוכר לחוץ או null",
+  "price_vs_market": "below/at/above",
+  "price_discount_pct": אחוז הנחה מהשוק (מספר שלילי=מעל שוק) או null,
   "public_notes": "מידע נוסף רלוונטי או null",
   "data_quality": "high/medium/low"
 }`;
@@ -161,6 +170,10 @@ async function saveEnrichment(listingId, geminiData, perplexityData) {
     if (perplexityData.recent_transactions?.length > 0) updates.recent_transactions = JSON.stringify(perplexityData.recent_transactions);
     if (perplexityData.avg_price_sqm_area) updates.avg_price_sqm_area = perplexityData.avg_price_sqm_area;
     if (perplexityData.public_notes) updates.perplexity_public_notes = perplexityData.public_notes;
+    if (perplexityData.seller_motivation_score != null) updates.seller_motivation_score = perplexityData.seller_motivation_score;
+    if (perplexityData.seller_motivation_reason) updates.seller_motivation_reason = perplexityData.seller_motivation_reason;
+    if (perplexityData.price_vs_market) updates.price_vs_market = perplexityData.price_vs_market;
+    if (perplexityData.price_discount_pct != null) updates.price_discount_pct = perplexityData.price_discount_pct;
     updates.perplexity_enriched_at = new Date();
   }
 

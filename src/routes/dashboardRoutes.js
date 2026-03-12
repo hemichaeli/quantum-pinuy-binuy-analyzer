@@ -268,6 +268,7 @@ router.post('/ads/bulk-insert', express.json(), async (req, res) => {
     const { listings } = req.body;
     if (!Array.isArray(listings)) return res.status(400).json({ error: 'listings array required' });
     let inserted = 0, updated = 0;
+    const newListingIds = [];
     for (const l of listings) {
       if (!l.source || !l.url) continue;
       try {
@@ -275,10 +276,33 @@ router.post('/ads/bulk-insert', express.json(), async (req, res) => {
           `INSERT INTO listings (source,source_listing_id,url,phone,contact_name,asking_price,rooms,area_sqm,floor,address,city,description_snippet,first_seen,last_seen,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_DATE,CURRENT_DATE,TRUE) ON CONFLICT (source,source_listing_id) DO UPDATE SET phone=COALESCE(EXCLUDED.phone,listings.phone), contact_name=COALESCE(EXCLUDED.contact_name,listings.contact_name), asking_price=COALESCE(EXCLUDED.asking_price,listings.asking_price), last_seen=CURRENT_DATE RETURNING id,(xmax=0) as is_new`,
           [l.source, l.source_listing_id||l.url, l.url, l.phone||null, l.contact_name||null, l.price?parseFloat(l.price):null, l.rooms?parseFloat(l.rooms):null, l.area?parseFloat(l.area):null, l.floor?parseInt(l.floor):null, l.address||null, l.city||null, (l.description||'').substring(0,500)]
         );
-        if (r.rows[0]?.is_new) inserted++; else updated++;
+        if (r.rows[0]?.is_new) { inserted++; newListingIds.push(r.rows[0].id); } else updated++;
       } catch(e) {}
     }
     res.json({ success: true, inserted, updated, total: listings.length });
+    // Trigger async Perplexity+Gemini enrichment for newly inserted listings (non-blocking)
+    if (newListingIds.length > 0) {
+      setImmediate(async () => {
+        try {
+          const { enrichListing } = require('../services/adEnrichmentService');
+          for (const lid of newListingIds) {
+            try {
+              const { rows } = await pool.query(
+                `SELECT l.id, l.address, l.city, l.asking_price, l.area_sqm, l.rooms, l.floor,
+                        l.description_snippet, l.title, l.source, l.phone,
+                        COALESCE(c.iai_score, 0) as iai_score
+                 FROM listings l
+                 LEFT JOIN complexes c ON l.complex_id = c.id
+                 WHERE l.id = $1`, [lid]
+              );
+              if (rows[0]) {
+                await enrichListing(rows[0]);
+              }
+            } catch(e) { /* ignore per-listing errors */ }
+          }
+        } catch(e) { /* ignore enrichment errors */ }
+      });
+    }
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

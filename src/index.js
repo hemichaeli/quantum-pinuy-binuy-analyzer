@@ -69,6 +69,16 @@ async function runEventsMigration() {
     }
   } catch (err) { logger.error('[MIGRATIONS] Events schema failed:', err.message); }
 }
+async function runEnrichmentMigration() {
+  try {
+    const migFile = path.join(__dirname, 'db', 'migrations', '009_listing_enrichment_columns.sql');
+    if (fs.existsSync(migFile)) {
+      const sql = fs.readFileSync(migFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] Enrichment columns (009) applied');
+    }
+  } catch (err) { logger.error('[MIGRATIONS] Enrichment migration failed:', err.message); }
+}
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -333,6 +343,7 @@ async function start() {
   await runSchedulingMigrations();
   await runCampaignsMigration();
   await runEventsMigration();
+  await runEnrichmentMigration();
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();
