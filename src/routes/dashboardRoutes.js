@@ -541,4 +541,81 @@ router.post('/ads/enrich/:id', async (req, res) => {
   }
 });
 
+// API: Update phone number for a listing (used by Chrome Extension)
+router.post('/ads/update-phone', express.json(), async (req, res) => {
+  try {
+    const { source_url, source_listing_id, phone, contact_name, source } = req.body;
+    if (!phone) return res.status(400).json({ error: 'phone is required' });
+    let result = { rowCount: 0, rows: [] };
+    // Try by source_listing_id + source
+    if (source_listing_id && source) {
+      const r = await pool.query(
+        `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), last_seen = CURRENT_DATE
+         WHERE source = $3 AND source_listing_id = $4 AND (phone IS NULL OR phone = '')
+         RETURNING id, source, source_listing_id, phone, contact_name`,
+        [phone, contact_name || null, source, source_listing_id]
+      );
+      if (r.rowCount > 0) result = r;
+    }
+    // Try by exact URL
+    if (result.rowCount === 0 && source_url) {
+      const r = await pool.query(
+        `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), last_seen = CURRENT_DATE
+         WHERE url = $3 AND (phone IS NULL OR phone = '')
+         RETURNING id, source, source_listing_id, phone, contact_name`,
+        [phone, contact_name || null, source_url]
+      );
+      if (r.rowCount > 0) result = r;
+    }
+    // Try by partial URL (strip query params)
+    if (result.rowCount === 0 && source_url) {
+      const urlBase = source_url.split('?')[0];
+      const r = await pool.query(
+        `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), last_seen = CURRENT_DATE
+         WHERE url LIKE $3 AND (phone IS NULL OR phone = '')
+         RETURNING id, source, source_listing_id, phone, contact_name`,
+        [phone, contact_name || null, `${urlBase}%`]
+      );
+      if (r.rowCount > 0) result = r;
+    }
+    res.json({ success: true, updated: result.rowCount, rows: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Bulk insert/update listings from Chrome Extension
+router.post('/ads/bulk-insert', express.json(), async (req, res) => {
+  try {
+    const { listings } = req.body;
+    if (!listings || !Array.isArray(listings)) return res.status(400).json({ error: 'listings array required' });
+    let inserted = 0, updated = 0;
+    for (const l of listings) {
+      const { source, source_listing_id, url, phone, contact_name, price, rooms, area, floor, address, city, description } = l;
+      if (!source || !url) continue;
+      const sid = source_listing_id || url;
+      try {
+        const r = await pool.query(
+          `INSERT INTO listings (source, source_listing_id, url, phone, contact_name, asking_price, rooms, area_sqm, floor, address, city, description_snippet, first_seen, last_seen, is_active)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_DATE,CURRENT_DATE,TRUE)
+           ON CONFLICT (source, source_listing_id) DO UPDATE SET
+             phone = COALESCE(EXCLUDED.phone, listings.phone),
+             contact_name = COALESCE(EXCLUDED.contact_name, listings.contact_name),
+             asking_price = COALESCE(EXCLUDED.asking_price, listings.asking_price),
+             last_seen = CURRENT_DATE
+           RETURNING id, (xmax = 0) as is_new`,
+          [source, sid, url, phone||null, contact_name||null,
+           price ? parseFloat(price) : null, rooms ? parseFloat(rooms) : null,
+           area ? parseFloat(area) : null, floor ? parseInt(floor) : null,
+           address||null, city||null, (description||'').substring(0,500)]
+        );
+        if (r.rows[0]?.is_new) inserted++; else updated++;
+      } catch(e) { /* skip individual errors */ }
+    }
+    res.json({ success: true, inserted, updated, total: listings.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
