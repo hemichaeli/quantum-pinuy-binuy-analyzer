@@ -14,8 +14,8 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.96.0';
-const BUILD = '2026-03-12-v4.96.0-outreach-tab';
+const VERSION = '4.96.1';
+const BUILD = '2026-03-12-v4.96.1-no-reply-flow';
 
 async function runAutoMigrations() {
   try {
@@ -93,6 +93,7 @@ const limiter = rateLimit({
   skip: (req) =>
     req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' ||
     req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') ||
+    req.path.startsWith('/api/vapi/book-slot') ||
     req.path.startsWith('/api/scheduling/') || req.path.startsWith('/api/backup/') ||
     req.path.startsWith('/api/notifications/') || req.path.startsWith('/api/search/') ||
     req.path.startsWith('/api/docs') || req.path.startsWith('/api/auto-contact') ||
@@ -238,6 +239,7 @@ const VAPI_AGENT_IDS = [
   process.env.VAPI_ASSISTANT_REMINDER,
   process.env.VAPI_ASSISTANT_COLD,
   process.env.VAPI_ASSISTANT_INBOUND,
+  process.env.VAPI_ASSISTANT_SCHEDULING,
 ];
 
 async function checkVapiKeytermsSupport() {
@@ -251,7 +253,7 @@ async function checkVapiKeytermsSupport() {
     const resp = await axios.patch(`https://api.vapi.ai/assistant/${testId}`, testBody, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
     const returned = resp.data?.transcriber?.keyterms;
     if (Array.isArray(returned) && returned.length > 0) {
-      logger.info('[VapiKeyterms] SUPPORTED! Applying keyterms to all 5 agents...');
+      logger.info('[VapiKeyterms] SUPPORTED! Applying keyterms to all agents...');
       const fullBody = { transcriber: { provider: 'deepgram', model: 'nova-3', language: 'he', keyterms: VAPI_QUANTUM_KEYTERMS } };
       for (const agentId of VAPI_AGENT_IDS) {
         if (!agentId) continue;
@@ -302,15 +304,19 @@ app.get('/api/debug', async (req, res) => {
   try { const { rows } = await pool.query('SELECT COUNT(*) AS total FROM quantum_events'); eventStats = { total_events: parseInt(rows[0].total) }; } catch (e) {}
   let outreachStats = {};
   try { const { rows } = await pool.query(`SELECT COUNT(*) FILTER (WHERE message_status='sent') as wa_sent, COUNT(*) FILTER (WHERE message_status='replied') as replied FROM listings WHERE is_active=TRUE`); outreachStats = rows[0]; } catch (e) {}
+  let noReplyStats = {};
+  try { const { rows } = await pool.query(`SELECT reminder_type, status, COUNT(*) FROM reminder_queue WHERE reminder_type LIKE 'no_reply%' GROUP BY reminder_type, status ORDER BY reminder_type, status`); noReplyStats = rows; } catch (e) {}
   res.json({
     version: VERSION, build: BUILD, timestamp: new Date().toISOString(),
     wa_bot: 'רן מ-QUANTUM v7.0 | persona: רן | overlapping scripts with Vapi',
     wa_bot_escalation: escalationStatus,
+    no_reply_flow: 'active | R1(24h) → R2(48h) → Vapi call(72h) | configurable per campaign',
     campaigns: 'UI at /campaigns | API at /api/campaigns | followup cron: every 2min',
     event_scheduler: `active | Admin UI at /events/admin | API at /events | ${JSON.stringify(eventStats)}`,
     outreach: `active | POST /api/outreach/send | ${JSON.stringify(outreachStats)}`,
     professional_visits: 'POST /api/scheduling/visits | POST /api/scheduling/pre-register',
     schedule_optimization: `active | ${JSON.stringify(optimizationStats)}`,
+    no_reply_queue: noReplyStats,
     google_calendar: gcalStatus,
     zoho_calendar: zcalStatus,
     incoming_whatsapp_poll: 'active - every 60s via INFORU PullData',
@@ -420,7 +426,7 @@ async function start() {
 
   try { const { processReminderQueue } = require('./jobs/reminderJob'); const cron = require('node-cron');
     cron.schedule('* * * * *', async () => { try { await processReminderQueue(); } catch (e) {} });
-    logger.info('Reminder queue: ACTIVE');
+    logger.info('Reminder queue: ACTIVE (includes no-reply flow)');
   } catch (e) {}
 
   try {
