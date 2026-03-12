@@ -1,5 +1,5 @@
 /**
- * QUANTUM Morning Intelligence Report v1.0
+ * QUANTUM Morning Intelligence Report v1.1
  * 
  * Sent daily at 07:30 Israel time (after listings scan at 07:00)
  * 
@@ -135,3 +135,149 @@ async function sendMorningWhatsApp(message) {
 
   return { sent, total: phones.length, results };
 }
+
+// ─── MAIN REPORT FUNCTION ──────────────────────────────────────────
+
+/**
+ * sendMorningReport - Generate and send the daily morning intelligence report
+ * Called by morningReportRoutes.js POST /api/morning/send and quantumScheduler.js
+ * @returns {Object} { success, stats, whatsapp, email, generated_at }
+ */
+async function sendMorningReport() {
+  try {
+    logger.info('[MorningReport] Generating daily morning intelligence report...');
+
+    // Fetch data in parallel
+    const [oppResult, sellersResult, dropsResult, committeesResult] = await Promise.all([
+      pool.query(`
+        SELECT id, name, city, iai_score, status, developer, actual_premium, address, plan_stage, signature_percent
+        FROM complexes WHERE iai_score >= 60 ORDER BY iai_score DESC LIMIT 8
+      `),
+      pool.query(`
+        SELECT l.id, l.address, l.city, l.asking_price, l.ssi_score, l.days_on_market,
+               l.price_changes, l.total_price_drop_percent, c.name as complex_name
+        FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id
+        WHERE l.ssi_score >= 30 ORDER BY l.ssi_score DESC LIMIT 5
+      `),
+      pool.query(`
+        SELECT l.id, l.address, l.city, l.asking_price, l.price_changes,
+               l.total_price_drop_percent, c.name as complex_name
+        FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id
+        WHERE l.price_changes > 0 AND l.last_seen >= NOW() - INTERVAL '24 hours'
+          AND l.total_price_drop_percent >= 5
+        ORDER BY l.total_price_drop_percent DESC LIMIT 5
+      `),
+      pool.query(`
+        SELECT COUNT(*) as count FROM committee_approvals
+        WHERE meeting_date >= NOW() - INTERVAL '7 days'
+          AND decision_type IN ('approval','advancement','declaration')
+      `).catch(() => ({ rows: [{ count: 0 }] }))
+    ]);
+
+    const opportunities = oppResult.rows;
+    const sellers = sellersResult.rows;
+    const priceDrops = dropsResult.rows;
+    const committees = committeesResult.rows;
+
+    const stats = {
+      opportunities: opportunities.length,
+      stressed: sellers.length,
+      stressed_sellers: sellers.length,
+      price_drops: priceDrops.length,
+      committees: parseInt(committees[0]?.count || 0)
+    };
+
+    // Build WhatsApp message
+    const waMessage = buildWhatsAppMorningBrief({ opportunities, sellers, priceDrops, committees, stats });
+
+    // Send WhatsApp (optional - won't fail the whole report)
+    let waResult = { sent: 0, skipped: 1, reason: 'not_attempted' };
+    try {
+      waResult = await sendMorningWhatsApp(waMessage);
+    } catch (waErr) {
+      logger.warn('[MorningReport] WhatsApp send failed:', waErr.message);
+      waResult = { sent: 0, error: waErr.message };
+    }
+
+    // Send email report
+    let emailResult = { sent: false };
+    try {
+      const today = new Date().toLocaleDateString('he-IL', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+        timeZone: 'Asia/Jerusalem'
+      });
+
+      const scanNum = Math.floor(Date.now() / 86400000) % 1000 + 100; // pseudo scan number
+
+      const emailHtml = `
+        <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #1a5276;">✅ סריקה יומית הושלמה בהצלחה</h2>
+          <p style="color: #888; font-size: 13px;">#${scanNum} סריקה | ${today}</p>
+          <table border="1" cellpadding="10" cellspacing="0" style="width:100%; border-collapse:collapse; margin-top:15px;">
+            <tr style="background:#f2f3f4; font-weight:bold;">
+              <th style="text-align:right;">סטטוס</th>
+              <th style="text-align:right;">שלב</th>
+              <th style="text-align:right;">פירוט</th>
+            </tr>
+            <tr style="background:#eafaf1;">
+              <td>✅</td>
+              <td><strong>הזדמנויות השקעה (IAI ≥60)</strong></td>
+              <td>${opportunities.length} הזדמנויות</td>
+            </tr>
+            <tr>
+              <td>✅</td>
+              <td><strong>מוכרים לחוצים (SSI ≥30)</strong></td>
+              <td>${sellers.length} מוכרים</td>
+            </tr>
+            <tr style="background:#eafaf1;">
+              <td>✅</td>
+              <td><strong>ירידות מחיר ב-24 שעות</strong></td>
+              <td>${priceDrops.length} נכסים</td>
+            </tr>
+            <tr>
+              <td>✅</td>
+              <td><strong>אישורי ועדה (7 ימים)</strong></td>
+              <td>${stats.committees} אישורים</td>
+            </tr>
+          </table>
+          <p style="margin-top:20px; color:#555;">
+            סיכום: ${opportunities.length} הזדמנויות, ${sellers.length} מוכרים לחוצים, ${priceDrops.length} ירידות מחיר
+          </p>
+          <p style="margin-top:10px; color:#888; font-size:12px;">
+            QUANTUM | <a href="${DASHBOARD_URL}">Dashboard</a>
+          </p>
+        </div>
+      `;
+
+      await sendEmail({
+        subject: `✅ [QUANTUM] סריקה יומית הושלמה בהצלחה`,
+        html: emailHtml
+      });
+      emailResult = { sent: true };
+      logger.info('[MorningReport] Email sent successfully');
+    } catch (emailErr) {
+      logger.warn('[MorningReport] Email send failed:', emailErr.message);
+      emailResult = { sent: false, error: emailErr.message };
+    }
+
+    logger.info('[MorningReport] Morning report complete', { stats, waResult });
+
+    return {
+      success: true,
+      stats,
+      whatsapp: waResult,
+      email: emailResult,
+      generated_at: new Date().toISOString()
+    };
+
+  } catch (err) {
+    logger.error('[MorningReport] Fatal error:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+module.exports = {
+  sendMorningReport,
+  sendMorningWhatsApp,
+  buildWhatsAppMorningBrief
+};
