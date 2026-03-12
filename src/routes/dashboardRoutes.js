@@ -36,7 +36,7 @@ router.get('/ads/all', async (req, res) => {
           THEN (c.iai_score * 0.3)
           ELSE 20
         END as premium_percent,
-        l.contact_phone as phone,
+        l.phone,
         l.created_at as date,
         l.title,
         l.address,
@@ -80,7 +80,7 @@ router.get('/ads/stats', async (req, res) => {
       pool.query('SELECT COUNT(*) as count FROM listings WHERE is_active = true'),
       pool.query(`SELECT COUNT(*) as count FROM listings WHERE is_active = true AND created_at >= NOW() - INTERVAL '24 hours'`),
       pool.query('SELECT AVG(asking_price) as avg FROM listings WHERE is_active = true AND asking_price > 0'),
-      pool.query('SELECT COUNT(*) as count FROM listings WHERE is_active = true AND contact_phone IS NOT NULL'),
+      pool.query('SELECT COUNT(*) as count FROM listings WHERE is_active = true AND phone IS NOT NULL'),
       pool.query(`SELECT COUNT(*) as count FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id WHERE l.is_active = true AND c.iai_score > 80`)
     ]);
 
@@ -287,7 +287,7 @@ router.get('/listings', async (req, res) => {
         l.id, l.address, l.title, l.city, l.rooms, l.asking_price, l.area_sqm,
         l.ssi_score, l.iai_score, l.message_status, l.contact_attempts,
         l.last_message_sent_at, l.last_reply_at, l.deal_status, l.source,
-        l.contact_phone AS phone,
+        l.phone AS phone,
         l.contact_name,
         l.created_at,
         c.name  AS complex_name,
