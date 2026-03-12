@@ -1,17 +1,19 @@
-// Yad1.co.il Content Script - Phone Extractor v2
-// Yad1 blocks server-side requests (Radware Bot Manager)
-// This extension runs in the real browser and bypasses bot protection
+// Winwin.co.il Content Script - Phone Extractor v1
+// Winwin blocks server-side requests (timeout)
+// This extension runs in the real browser
 
 (function() {
   'use strict';
   
-  const SOURCE = 'yad1';
+  const SOURCE = 'winwin';
   let scraped = false;
   let phoneRevealed = false;
   
   function getListingId() {
     const url = window.location.href;
-    let match = url.match(/\/item\/(\d+)/);
+    let match = url.match(/\/nadlan\/[^/]+\/(\d+)/);
+    if (match) return match[1];
+    match = url.match(/\/item\/(\d+)/);
     if (match) return match[1];
     match = url.match(/\/listing\/(\d+)/);
     if (match) return match[1];
@@ -27,7 +29,7 @@
     window.fetch = function(url, options) {
       const urlStr = typeof url === 'string' ? url : (url?.url || '');
       return origFetch.apply(this, arguments).then(response => {
-        if (urlStr.includes('phone') || urlStr.includes('contact') || urlStr.includes('seller') || urlStr.includes('reveal')) {
+        if (urlStr.includes('phone') || urlStr.includes('contact') || urlStr.includes('seller')) {
           response.clone().json().then(data => {
             const phone = data.phone || data.phoneNumber || data.contactPhone || 
                           (data.data && (data.data.phone || data.data.phoneNumber));
@@ -35,7 +37,7 @@
             if (phone && !phoneRevealed) {
               phoneRevealed = true;
               const listingId = getListingId();
-              console.log('[YAD1] Phone from API:', phone);
+              console.log('[WINWIN] Phone from API:', phone);
               chrome.runtime.sendMessage({
                 type: 'PHONE_FOUND',
                 data: { source: SOURCE, source_listing_id: listingId, url: window.location.href, phone, contact_name: name || null }
@@ -46,42 +48,17 @@
         return response;
       });
     };
-    
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url, ...args) {
-      this._url = url;
-      return origOpen.apply(this, [method, url, ...args]);
-    };
-    XMLHttpRequest.prototype.send = function(body) {
-      this.addEventListener('load', function() {
-        if (this._url && (this._url.includes('phone') || this._url.includes('contact'))) {
-          try {
-            const data = JSON.parse(this.responseText);
-            const phone = data.phone || data.phoneNumber || data.contactPhone;
-            if (phone && !phoneRevealed) {
-              phoneRevealed = true;
-              const listingId = getListingId();
-              chrome.runtime.sendMessage({
-                type: 'PHONE_FOUND',
-                data: { source: SOURCE, source_listing_id: listingId, url: window.location.href, phone }
-              });
-            }
-          } catch(e) {}
-        }
-      });
-      return origSend.apply(this, arguments);
-    };
   }
   
   function clickPhoneButton() {
-    const allBtns = document.querySelectorAll('button, a, [role="button"], [class*="phone"], [class*="contact"]');
+    const allBtns = document.querySelectorAll('button, a, [role="button"]');
     for (const btn of allBtns) {
       const text = btn.textContent.trim();
-      if ((text.includes('טלפון') || text.includes('חייג') || text.includes('הצג מספר') || text.includes('הצג טלפון')) && 
+      if ((text.includes('טלפון') || text.includes('חייג') || text.includes('הצג מספר') || 
+           text.includes('הצג טלפון') || text.includes('לחץ לטלפון')) && 
           !btn.dataset.clicked) {
         btn.dataset.clicked = 'true';
-        console.log('[YAD1] Clicking phone button:', text);
+        console.log('[WINWIN] Clicking phone button:', text);
         btn.click();
         return true;
       }
@@ -99,7 +76,7 @@
     if (phones && phones.length > 0) {
       phoneRevealed = true;
       const phone = phones[0].replace(/\s/g, '-');
-      console.log('[YAD1] Phone visible:', phone);
+      console.log('[WINWIN] Phone visible:', phone);
       chrome.runtime.sendMessage({
         type: 'PHONE_FOUND',
         data: { source: SOURCE, source_listing_id: listingId, url: window.location.href, phone }
@@ -131,7 +108,7 @@
     const floorMatch = document.body.innerText.match(/קומה[:\s]+(\d+)/);
     if (floorMatch) data.floor = parseInt(floorMatch[1]);
     
-    console.log('[YAD1] Sending listing:', data);
+    console.log('[WINWIN] Sending listing:', data);
     chrome.runtime.sendMessage({ type: 'LISTING_FOUND', data });
   }
   
@@ -139,7 +116,7 @@
     const listingId = getListingId();
     if (!listingId) return;
     
-    console.log('[YAD1] Initializing for listing:', listingId);
+    console.log('[WINWIN] Initializing for listing:', listingId);
     interceptPhoneAPI();
     
     await new Promise(r => setTimeout(r, 1500));
