@@ -12,8 +12,53 @@
 
 const pool = require('../db/pool');
 const { logger } = require('./logger');
-const { sendEmail, NOTIFICATION_EMAILS } = require('./notificationService');
 const axios = require('axios');
+
+// Email recipients
+const PERSONAL_EMAIL = process.env.PERSONAL_EMAIL || 'hemi.michaeli@gmail.com';
+const OFFICE_EMAIL = process.env.OFFICE_EMAIL || 'Office@u-r-quantum.com';
+const NOTIFICATION_EMAILS = [PERSONAL_EMAIL, OFFICE_EMAIL].filter(Boolean);
+
+/**
+ * Send email via Resend HTTP API
+ */
+async function sendEmail({ subject, html }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    logger.warn('[MorningReport] RESEND_API_KEY not set - skipping email');
+    return { sent: false, error: 'RESEND_API_KEY not set' };
+  }
+  const fromAddress = process.env.EMAIL_FROM || 'QUANTUM <onboarding@resend.dev>';
+  let lastError = null;
+  let sent = 0;
+  for (const to of NOTIFICATION_EMAILS) {
+    try {
+      const response = await axios.post('https://api.resend.com/emails', {
+        from: fromAddress,
+        to: [to],
+        subject,
+        html
+      }, {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      });
+      if (response.data?.id) {
+        logger.info(`[MorningReport] Email sent to ${to}: ${response.data.id}`);
+        sent++;
+      } else {
+        lastError = `Resend error: ${JSON.stringify(response.data)}`;
+        logger.warn(`[MorningReport] Email failed to ${to}:`, lastError);
+      }
+    } catch (err) {
+      lastError = err.message;
+      logger.warn(`[MorningReport] Email error to ${to}:`, err.message);
+    }
+  }
+  return sent > 0 ? { sent: true, count: sent } : { sent: false, error: lastError };
+}
 
 const DASHBOARD_URL = 'https://pinuy-binuy-analyzer-production.up.railway.app/api/dashboard';
 const INFORU_CAPI_BASE = 'https://capi.inforu.co.il/api/v2';
