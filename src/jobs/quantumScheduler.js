@@ -395,6 +395,32 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
+  // Facebook Marketplace Scan: Every 3 days at 05:00 (Apify - before complex scan)
+  schedulerState.scheduledTasks.push(
+    cron.schedule('0 5 */3 * *', async () => {
+      if (!isEnrichmentDay()) return;
+      logger.info('[SCHEDULER] Facebook Marketplace scan (Apify - every 3 days)');
+      try {
+        const fbScraper = require('../services/facebookScraper');
+        const result = await fbScraper.scanAll({ staleOnly: false, limit: 34 });
+        logger.info(`[SCHEDULER] FB Marketplace done: ${result.succeeded}/${result.total} cities, ${result.totalNew} new, ${result.totalMatched} matched`);
+      } catch (e) { logger.warn('[SCHEDULER] FB Marketplace scan failed', { error: e.message }); }
+    }, { timezone: 'Asia/Jerusalem' })
+  );
+
+  // Facebook Groups Scan: Daily 05:30 (Perplexity - pinuy-binuy groups)
+  schedulerState.scheduledTasks.push(
+    cron.schedule('30 5 * * *', async () => {
+      if (!isEnrichmentDay()) return;
+      logger.info('[SCHEDULER] Facebook Groups scan (Perplexity - pinuy-binuy groups)');
+      try {
+        const fbGroups = require('../services/facebookGroupsScraper');
+        const result = await fbGroups.scanAll();
+        logger.info(`[SCHEDULER] FB Groups done: ${result.total_inserted} new, ${result.total_updated} updated across ${result.total_groups} groups`);
+      } catch (e) { logger.warn('[SCHEDULER] FB Groups scan failed', { error: e.message }); }
+    }, { timezone: 'Asia/Jerusalem' })
+  );
+
   // Morning Intelligence Report: Daily 07:30 (after listings scan at 07:00)
   schedulerState.scheduledTasks.push(
     cron.schedule('30 7 * * *', async () => {

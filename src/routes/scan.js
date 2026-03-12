@@ -1017,6 +1017,58 @@ router.post('/enrich-ads', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/scan/facebook-groups - Async Perplexity scan of pinuy-binuy FB groups
+router.post('/facebook-groups', async (req, res) => {
+  try {
+    const { groupIds = null } = req.body;
+    const scanLog = await pool.query(`INSERT INTO scan_logs (scan_type, status) VALUES ('facebook_groups', 'running') RETURNING *`);
+    const scanId = scanLog.rows[0].id;
+    res.json({ message: 'Facebook groups scan started', scan_id: scanId, groups: groupIds || 'all' });
+    (async () => {
+      try {
+        const fbGroups = require('../services/facebookGroupsScraper');
+        const result = await fbGroups.scanAll({ groupIds, scanId });
+        await pool.query(
+          `UPDATE scan_logs SET status = 'completed', completed_at = NOW(),
+           new_listings = $1, summary = $2 WHERE id = $3`,
+          [result.total_inserted,
+           `FB Groups: ${result.total_inserted} new, ${result.total_updated} updated across ${result.total_groups} groups`,
+           scanId]
+        );
+      } catch (err) {
+        await pool.query(`UPDATE scan_logs SET status = 'failed', completed_at = NOW(), errors = $1 WHERE id = $2`, [err.message, scanId]);
+        logger.error('[facebook-groups] Failed', { error: err.message });
+      }
+    })();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/scan/facebook-marketplace - Async Apify scan of FB Marketplace
+router.post('/facebook-marketplace', async (req, res) => {
+  try {
+    const { limit = 34, staleOnly = false, city = null } = req.body;
+    const scanLog = await pool.query(`INSERT INTO scan_logs (scan_type, status) VALUES ('facebook_marketplace', 'running') RETURNING *`);
+    const scanId = scanLog.rows[0].id;
+    res.json({ message: 'Facebook Marketplace scan started', scan_id: scanId, limit, staleOnly });
+    (async () => {
+      try {
+        const fbScraper = require('../services/facebookScraper');
+        const result = await fbScraper.scanAll({ staleOnly, limit, city });
+        await pool.query(
+          `UPDATE scan_logs SET status = 'completed', completed_at = NOW(),
+           new_listings = $1, summary = $2 WHERE id = $3`,
+          [result.totalNew,
+           `FB Marketplace: ${result.totalNew} new, ${result.totalMatched} matched across ${result.succeeded}/${result.total} cities`,
+           scanId]
+        );
+      } catch (err) {
+        await pool.query(`UPDATE scan_logs SET status = 'failed', completed_at = NOW(), errors = $1 WHERE id = $2`, [err.message, scanId]);
+        logger.error('[facebook-marketplace] Failed', { error: err.message });
+      }
+    })();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
 router.get('/:id', async (req, res) => {
   try {
