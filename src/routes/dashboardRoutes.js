@@ -273,7 +273,7 @@ router.post('/ads/bulk-insert', express.json(), async (req, res) => {
       if (!l.source || !l.url) continue;
       try {
         const r = await pool.query(
-          `INSERT INTO listings (source,source_listing_id,url,phone,contact_name,asking_price,rooms,area_sqm,floor,address,city,description_snippet,first_seen,last_seen,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_DATE,CURRENT_DATE,TRUE) ON CONFLICT (source,source_listing_id) DO UPDATE SET phone=COALESCE(EXCLUDED.phone,listings.phone), contact_name=COALESCE(EXCLUDED.contact_name,listings.contact_name), asking_price=COALESCE(EXCLUDED.asking_price,listings.asking_price), last_seen=CURRENT_DATE RETURNING id,(xmax=0) as is_new`,
+          `INSERT INTO listings (source,source_listing_id,url,phone,contact_name,asking_price,rooms,area_sqm,floor,address,city,description_snippet,first_seen,last_seen,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_DATE,CURRENT_DATE,TRUE) ON CONFLICT (source,source_listing_id) WHERE source_listing_id IS NOT NULL DO UPDATE SET phone=COALESCE(EXCLUDED.phone,listings.phone), contact_name=COALESCE(EXCLUDED.contact_name,listings.contact_name), asking_price=COALESCE(EXCLUDED.asking_price,listings.asking_price), last_seen=CURRENT_DATE RETURNING id,(xmax=0) as is_new`,
           [l.source, l.source_listing_id||l.url, l.url, l.phone||null, l.contact_name||null, l.price?parseFloat(l.price):null, l.rooms?parseFloat(l.rooms):null, l.area?parseFloat(l.area):null, l.floor?parseInt(l.floor):null, l.address||null, l.city||null, (l.description||'').substring(0,500)]
         );
         if (r.rows[0]?.is_new) { inserted++; newListingIds.push(r.rows[0].id); } else updated++;
@@ -316,7 +316,7 @@ router.get('/ads/diag', async (req, res) => {
     const ts = Date.now();
     let insertErr = null, insertResult = null;
     try {
-      const r = await pool.query(`INSERT INTO listings (source,source_listing_id,url,description_snippet,first_seen,last_seen,is_active) VALUES ($1,$2,$3,$4,CURRENT_DATE,CURRENT_DATE,TRUE) ON CONFLICT (source,source_listing_id) DO UPDATE SET last_seen=CURRENT_DATE RETURNING id,(xmax=0) as is_new`, ['diag_test', `diag_${ts}`, `https://diag.test/${ts}`, 'test']);
+      const r = await pool.query(`INSERT INTO listings (source,source_listing_id,url,description_snippet,first_seen,last_seen,is_active) VALUES ($1,$2,$3,$4,CURRENT_DATE,CURRENT_DATE,TRUE) ON CONFLICT (source,source_listing_id) WHERE source_listing_id IS NOT NULL DO UPDATE SET last_seen=CURRENT_DATE RETURNING id,(xmax=0) as is_new`, ['diag_test', `diag_${ts}`, `https://diag.test/${ts}`, 'test']);
       insertResult = r.rows[0];
     } catch(e) { insertErr = e.message; }
     res.json({ unique_index_exists: idx.rows.length > 0, columns: cols.rows.map(r=>r.column_name), insert_test: insertResult, insert_error: insertErr });
