@@ -286,6 +286,43 @@
                 <div style="position:relative;height:220px;"><canvas id="chart-donut"></canvas></div>
             </div>
         </div>
+        <!-- Source breakdown charts + QR generator -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+            <div class="section">
+                <h2 style="text-align:center;font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">📊 מודעות לפי מקור (6 חודשים)</h2>
+                <div style="position:relative;height:180px;"><canvas id="chart-listings-source"></canvas></div>
+            </div>
+            <div class="section">
+                <h2 style="text-align:center;font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">📊 לידים לפי מקור + פלאיירים</h2>
+                <div style="position:relative;height:180px;"><canvas id="chart-leads-source"></canvas></div>
+            </div>
+        </div>
+
+        <!-- QR Campaign Generator -->
+        <div class="section" style="margin-bottom:16px;">
+            <h2 style="font-size:13px;margin-bottom:10px;">📷 יצירת לינק QR לקמפיין פלאייר</h2>
+            <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+                <div style="flex:1;min-width:180px;">
+                    <label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:4px;">שם קמפיין / שכונה</label>
+                    <input id="qr-campaign-name" type="text" placeholder="לדוגמא: TLV_Ramat_Aviv_Q2" style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:7px 10px;color:var(--text-primary);font-size:12px;">
+                </div>
+                <button class="btn btn-primary" onclick="generateQRLink()" style="padding:7px 16px;font-size:12px;white-space:nowrap;">🔗 צור לינק</button>
+            </div>
+            <div id="qr-result" style="margin-top:10px;display:none;">
+                <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                    <div id="qr-code-img" style="width:80px;height:80px;background:#fff;border-radius:4px;display:flex;align-items:center;justify-content:center;"></div>
+                    <div style="flex:1;">
+                        <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">לינק לשיתוף בפלאייר:</div>
+                        <div id="qr-link-text" style="font-size:11px;color:#4ecdc4;word-break:break-all;"></div>
+                        <div style="margin-top:6px;display:flex;gap:6px;">
+                            <button class="btn btn-secondary" onclick="copyQRLink()" style="padding:3px 10px;font-size:11px;">📋 העתק</button>
+                            <button class="btn btn-secondary" onclick="downloadQR()" style="padding:3px 10px;font-size:11px;">⬇️ הורד QR</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="section" id="morning-section" style="margin-top:16px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
                 <h2 style="margin:0;">🧠 דוח אינטליגנציה יומי</h2>
@@ -677,6 +714,7 @@
             setTimeout(loadMorningIntelligence, 800);
             setInterval(checkReminders, 60000);
             setTimeout(initDashboardCharts, 250);
+            setTimeout(initSourceCharts, 500);
 
             document.querySelectorAll('.nav-tab[data-tab]').forEach(function(el) {
                 el.addEventListener('click', function() {
@@ -1899,6 +1937,101 @@
                     }
                 });
             }
+        }
+
+        // -- SOURCE BREAKDOWN CHARTS --
+        async function initSourceCharts() {
+            try {
+                // Listings by source
+                const lsData = await fetchJSON('/api/chart/listings-by-source').catch(() => null);
+                if (lsData && lsData.data && lsData.data.length > 0) {
+                    const months = [...new Set(lsData.data.map(r => r.sort_key))].sort();
+                    const sources = [...new Set(lsData.data.map(r => r.source))];
+                    const colors = ['#4ecdc4','#e8b84b','#a78bfa','#f87171','#34d399','#60a5fa','#fb923c'];
+                    const datasets = sources.map((src, i) => ({
+                        label: src,
+                        data: months.map(m => { const r = lsData.data.find(d => d.sort_key===m && d.source===src); return r ? parseInt(r.count) : 0; }),
+                        backgroundColor: colors[i % colors.length] + '99',
+                        borderColor: colors[i % colors.length],
+                        borderWidth: 1.5
+                    }));
+                    const cLS = document.getElementById('chart-listings-source');
+                    if (cLS && !cLS._ci) {
+                        cLS._ci = new Chart(cLS, {
+                            type: 'bar',
+                            data: { labels: months, datasets },
+                            options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ labels:{ color:'#9aa0b0', font:{size:10} } } }, scales:{ x:{ stacked:true, ticks:{color:'#9aa0b0',font:{size:9}} }, y:{ stacked:true, ticks:{color:'#9aa0b0',font:{size:9}} } } }
+                        });
+                    }
+                } else {
+                    const cLS = document.getElementById('chart-listings-source');
+                    if (cLS) cLS.parentElement.innerHTML = '<div style="color:#9aa0b0;font-size:11px;text-align:center;padding:20px;">אין נתונים עדיין</div>';
+                }
+
+                // Leads by source
+                const ldData = await fetchJSON('/api/chart/leads-by-source').catch(() => null);
+                if (ldData && ldData.data && ldData.data.length > 0) {
+                    const months = [...new Set(ldData.data.map(r => r.sort_key))].sort();
+                    const sources = [...new Set(ldData.data.map(r => r.source))];
+                    const colors = ['#4ecdc4','#e8b84b','#a78bfa','#f87171','#34d399','#60a5fa'];
+                    const datasets = sources.map((src, i) => ({
+                        label: src === 'flyer' ? '📄 פלאייר' : src === 'website' ? '🌐 אתר' : src === 'whatsapp' ? '📱 WhatsApp' : src,
+                        data: months.map(m => { const r = ldData.data.find(d => d.sort_key===m && d.source===src); return r ? parseInt(r.count) : 0; }),
+                        backgroundColor: colors[i % colors.length] + '99',
+                        borderColor: colors[i % colors.length],
+                        borderWidth: 1.5
+                    }));
+                    const cLD = document.getElementById('chart-leads-source');
+                    if (cLD && !cLD._ci) {
+                        cLD._ci = new Chart(cLD, {
+                            type: 'bar',
+                            data: { labels: months, datasets },
+                            options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ labels:{ color:'#9aa0b0', font:{size:10} } } }, scales:{ x:{ stacked:true, ticks:{color:'#9aa0b0',font:{size:9}} }, y:{ stacked:true, ticks:{color:'#9aa0b0',font:{size:9}} } } }
+                        });
+                    }
+                    // Show campaign breakdown if flyer leads exist
+                    if (ldData.campaigns && ldData.campaigns.length > 0) {
+                        const cLD = document.getElementById('chart-leads-source');
+                        if (cLD) {
+                            const info = document.createElement('div');
+                            info.style.cssText = 'font-size:10px;color:#9aa0b0;margin-top:4px;text-align:center;';
+                            info.textContent = '📄 פלאיירים: ' + ldData.campaigns.map(c => c.campaign + ' (' + c.count + ')').join(' | ');
+                            cLD.parentElement.appendChild(info);
+                        }
+                    }
+                } else {
+                    const cLD = document.getElementById('chart-leads-source');
+                    if (cLD) cLD.parentElement.innerHTML = '<div style="color:#9aa0b0;font-size:11px;text-align:center;padding:20px;">אין נתונים עדיין</div>';
+                }
+            } catch(e) { console.warn('Source charts error:', e); }
+        }
+
+        // -- QR GENERATOR --
+        let _qrLink = '';
+        async function generateQRLink() {
+            const name = document.getElementById('qr-campaign-name').value.trim();
+            if (!name) { alert('נא להזין שם קמפיין'); return; }
+            try {
+                const data = await fetchJSON('/api/campaign/generate-link', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ campaign_name: name }) });
+                if (!data.success) throw new Error(data.error);
+                _qrLink = data.link;
+                document.getElementById('qr-link-text').textContent = data.link;
+                // Generate QR using free API
+                const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=' + encodeURIComponent(data.link);
+                const img = document.createElement('img');
+                img.src = qrUrl; img.style.cssText = 'width:76px;height:76px;border-radius:2px;';
+                const qrDiv = document.getElementById('qr-code-img');
+                qrDiv.innerHTML = ''; qrDiv.appendChild(img);
+                document.getElementById('qr-result').style.display = 'block';
+            } catch(e) { alert('שגיאה: ' + e.message); }
+        }
+        function copyQRLink() {
+            if (_qrLink) { navigator.clipboard.writeText(_qrLink).then(() => alert('הלינק הועתק!')); }
+        }
+        function downloadQR() {
+            if (!_qrLink) return;
+            const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(_qrLink);
+            const a = document.createElement('a'); a.href = qrUrl; a.download = 'qr_campaign.png'; a.click();
         }
 
         // -- UTILITIES --

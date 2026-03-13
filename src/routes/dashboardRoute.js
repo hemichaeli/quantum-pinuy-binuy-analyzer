@@ -263,6 +263,68 @@ router.get('/api/chart/listings-monthly', async (req, res) => {
   }
 });
 
+// Listings by source per month (last 6 months)
+router.get('/api/chart/listings-by-source', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS sort_key,
+        COALESCE(source, 'unknown') AS source,
+        COUNT(*) AS count
+      FROM listings
+      WHERE created_at >= NOW() - INTERVAL '6 months'
+      GROUP BY DATE_TRUNC('month', created_at), source
+      ORDER BY DATE_TRUNC('month', created_at) ASC, source
+    `).catch(() => ({ rows: [] }));
+    res.json({ success: true, data: result.rows });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Leads by source per month (last 6 months)
+router.get('/api/chart/leads-by-source', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS sort_key,
+        COALESCE(utm_source, source, 'website') AS source,
+        COUNT(*) AS count
+      FROM website_leads
+      WHERE created_at >= NOW() - INTERVAL '6 months'
+      GROUP BY DATE_TRUNC('month', created_at), COALESCE(utm_source, source, 'website')
+      ORDER BY DATE_TRUNC('month', created_at) ASC
+    `).catch(() => ({ rows: [] }));
+    // Also get campaign breakdown
+    const campaigns = await pool.query(`
+      SELECT
+        COALESCE(campaign_tag, 'ללא קמפיין') AS campaign,
+        COUNT(*) AS count
+      FROM website_leads
+      WHERE utm_source = 'flyer' AND created_at >= NOW() - INTERVAL '90 days'
+      GROUP BY campaign_tag
+      ORDER BY count DESC
+    `).catch(() => ({ rows: [] }));
+    res.json({ success: true, data: result.rows, campaigns: campaigns.rows });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// QR campaign link generator
+router.post('/api/campaign/generate-link', async (req, res) => {
+  try {
+    const { campaign_name, base_url } = req.body;
+    if (!campaign_name) return res.status(400).json({ success: false, error: 'campaign_name required' });
+    const slug = campaign_name.replace(/\s+/g, '_').replace(/[^\w\u0590-\u05FF-]/g, '').substring(0, 40);
+    const siteBase = base_url || process.env.SITE_URL || 'https://quantum-nadlan.co.il';
+    const link = `${siteBase}/?src=flyer&campaign=${encodeURIComponent(slug)}`;
+    res.json({ success: true, link, campaign_tag: slug });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 router.get('/api/trello/board', async (req, res) => {
     try {
         const trelloService = require('../services/trelloService');
