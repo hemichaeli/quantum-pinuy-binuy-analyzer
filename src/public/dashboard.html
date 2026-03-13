@@ -313,7 +313,8 @@
 
         <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px;margin-top:16px;">
             <div class="section">
-                <h2 style="text-align:center;font-size:14px;font-weight:600;color:var(--text-primary);letter-spacing:0.5px;margin-bottom:14px;">📈 מודעות חדשות לאורך זמן</h2>
+                <h2 style="text-align:center;font-size:14px;font-weight:600;color:var(--text-primary);letter-spacing:0.5px;margin-bottom:4px;">📈 מודעות חדשות לאורך זמן</h2>
+                <p style="text-align:center;font-size:11px;color:var(--text-muted);margin-bottom:12px;">קו ירוק = מודעות שנסרקו | קו אפור = לידים שנרשמו | ציר X = חודשים | ציר Y = כמות</p>
                 <div style="position:relative;height:220px;"><canvas id="chart-views-leads"></canvas></div>
             </div>
             <div class="section">
@@ -411,11 +412,13 @@
                         <th onclick="sortAdsBy('title')" data-sort-field="title">Property</th>
                         <th onclick="sortAdsBy('complex_status')" data-sort-field="complex_status">Status</th>
                         <th>Performance Trend</th>
-                        <th onclick="sortAdsBy('asking_price')" data-sort-field="asking_price">Price</th>
-                        <th onclick="sortAdsBy('premium_percent')" data-sort-field="premium_percent">פרמייה</th>
+                        <th onclick="sortAdsBy('asking_price')" data-sort-field="asking_price">מחיר קנייה</th>
+                        <th onclick="sortAdsBy('premium_percent')" data-sort-field="premium_percent">פרמייה %</th>
+                        <th title="מחיר מכירה מוערך אחרי הפרויקט">מחיר מכירה מוערך</th>
+                        <th title="רווח פוטנציאלי בשקלים" style="color:var(--green);">דלתא ₪</th>
                         <th onclick="sortAdsBy('area_sqm')" data-sort-field="area_sqm">שטח</th>
                         <th onclick="sortAdsBy('rooms')" data-sort-field="rooms">חדרים</th>
-                        <th onclick="sortAdsBy('ssi_score')" data-sort-field="ssi_score">SSI</th>
+                        <th onclick="sortAdsBy('ssi_score')" data-sort-field="ssi_score" title="Seller Stress Index — ציון לחץ מוכר (0-100)">SSI ⓘ</th>
                         <th>טלפון</th>
                         <th>Actions</th>
                     </tr>
@@ -1047,9 +1050,11 @@
                     + '<td>' + miniSparkline(sparkColor) + '</td>'
                     + '<td style="color:var(--text-primary);font-weight:600;font-size:14px;">' + price + '</td>'
                     + '<td style="color:' + premNowColor + ';font-weight:600;">' + premNow + '</td>'
+                    + '<td style="color:var(--blue);font-weight:600;font-size:13px;">' + (ad.estimated_sale_price ? '\u20AA' + parseInt(ad.estimated_sale_price).toLocaleString() : '\u2014') + '</td>'
+                    + '<td style="color:var(--green);font-weight:700;font-size:13px;">' + (ad.profit_delta_ils && parseFloat(ad.profit_delta_ils) > 0 ? '+\u20AA' + parseInt(ad.profit_delta_ils).toLocaleString() : '\u2014') + '</td>'
                     + '<td>' + (ad.area_sqm ? parseFloat(ad.area_sqm).toFixed(0) + ' מ"ר' : '\u2014') + '</td>'
                     + '<td>' + (ad.rooms || '\u2014') + '</td>'
-                    + '<td style="color:' + ssiColor + ';font-weight:600;">' + (ssi || '\u2014') + '</td>'
+                    + '<td style="color:' + ssiColor + ';font-weight:600;" title="SSI: ' + ssi + ' | זמן: ' + (ad.ssi_time_score||0) + ' | מחיר: ' + (ad.ssi_price_score||0) + ' | אינדיקטורים: ' + (ad.ssi_indicator_score||0) + '">' + (ssi || '\u2014') + '</td>'
                     + '<td>' + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:var(--blue);font-size:12px;">' + ad.phone + '</a>' : '<span style="color:var(--text-muted);font-size:11px;">אין</span>') + '</td>'
                     + '<td><div style="display:flex;gap:6px;">'
                     + '<button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;" onclick="return false">ערוך</button>'

@@ -124,7 +124,17 @@ router.get('/api/ads', async (req, res) => {
                    GREATEST(c.deposit_date, c.approval_date, c.permit_date, c.declaration_date) as complex_status_date,
                    NULL::numeric as avg_price_sqm,
                    l.phone, l.message_status as contact_status, l.deal_status,
-                   l.created_at, l.url, l.ssi_score
+                   l.created_at, l.url, l.ssi_score,
+                   -- Estimated sale price after project (using avg premium)
+                   CASE WHEN l.asking_price > 0 AND (c.theoretical_premium_min IS NOT NULL OR c.theoretical_premium_max IS NOT NULL)
+                        THEN ROUND(l.asking_price * (1 + (COALESCE(c.theoretical_premium_min,0) + COALESCE(c.theoretical_premium_max,0)) / 200.0))
+                        ELSE NULL END as estimated_sale_price,
+                   -- Profit delta in ₪
+                   CASE WHEN l.asking_price > 0 AND (c.theoretical_premium_min IS NOT NULL OR c.theoretical_premium_max IS NOT NULL)
+                        THEN ROUND(l.asking_price * (COALESCE(c.theoretical_premium_min,0) + COALESCE(c.theoretical_premium_max,0)) / 200.0)
+                        ELSE NULL END as profit_delta_ils,
+                   -- SSI breakdown
+                   l.ssi_time_score, l.ssi_price_score, l.ssi_indicator_score
             FROM listings l
             LEFT JOIN complexes c ON l.complex_id = c.id
             WHERE l.is_active = TRUE AND l.asking_price > 0`;
