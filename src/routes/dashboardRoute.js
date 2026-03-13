@@ -1549,7 +1549,7 @@ function generateDashboardHTML(stats) {
                 if (res.ok) {
                     const d = await res.json();
                     const r = d.result || {};
-                    alert('✅ Auto Contact הופעל!\n\nנוצר קשר: ' + (r.contacted||0) + '\nקווי ארץ (נדרשת שיחה): ' + (r.skipped_landline||0) + '\nאין טלפון: ' + (r.skipped_no_phone||0) + '\nנכשל: ' + (r.failed||0));
+                    alert('✅ Auto Contact הופעל!\\n\\nנוצר קשר: ' + (r.contacted||0) + '\\nקווי ארץ (נדרשת שיחה): ' + (r.skipped_landline||0) + '\\nאין טלפון: ' + (r.skipped_no_phone||0) + '\\nנכשל: ' + (r.failed||0));
                     loadKones();
                 } else throw new Error('HTTP ' + res.status);
             } catch (e) { alert('❌ נכשל: ' + e.message); }
@@ -1610,14 +1610,14 @@ function generateDashboardHTML(stats) {
 
         // ── FULL SCAN (includes enrichment) ──────────────────────────
         async function runFullScan() {
-            if (!confirm('להפעיל סריקה מלאה כולל Enrichment (טלפון + AI)?\nהתהליך עשוי לקחת מספר דקות.')) return;
+            if (!confirm('להפעיל סריקה מלאה כולל Enrichment (טלפון + AI)?\\nהתהליך עשוי לקחת מספר דקות.')) return;
             const btn = document.querySelector('[data-onclick="runFullScan()"]');
             if (btn) { btn.textContent = '⏳ סורק...'; btn.disabled = true; }
             try {
                 const res = await fetch('/api/scan/full', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 50 }) });
                 const d = await res.json();
                 if (res.ok) {
-                    alert('✅ סריקה מלאה הושלמה!\n\nמודעות חדשות: ' + (d.newListings||0) + '\nהועשרו: ' + (d.enriched||0) + '\nטלפונים נמצאו: ' + (d.phones||0));
+                    alert('✅ סריקה מלאה הושלמה!\\n\\nמודעות חדשות: ' + (d.newListings||0) + '\\nהועשרו: ' + (d.enriched||0) + '\\nטלפונים נמצאו: ' + (d.phones||0));
                     refreshStats();
                 } else throw new Error(d.error || 'HTTP ' + res.status);
             } catch (e) { alert('❌ שגיאה: ' + e.message); }
