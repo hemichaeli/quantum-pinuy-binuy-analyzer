@@ -1565,7 +1565,7 @@ function generateDashboardHTML(stats) {
                 if (res.ok) {
                     const d = await res.json();
                     const r = d.result || {};
-                    alert('✅ Auto Contact הופעל!\n\nנוצר קשר: ' + (r.contacted||0) + '\nקווי ארץ (נדרשת שיחה): ' + (r.skipped_landline||0) + '\nאין טלפון: ' + (r.skipped_no_phone||0) + '\nנכשל: ' + (r.failed||0));
+                    alert('✅ Auto Contact הופעל! נוצר=' + (r.contacted||0) + ' | ארץ=' + (r.skipped_landline||0) + ' | ללא=' + (r.skipped_no_phone||0) + ' | נכשל=' + (r.failed||0));
                     loadKones();
                 } else throw new Error('HTTP ' + res.status);
             } catch (e) { alert('❌ נכשל: ' + e.message); }
@@ -1625,14 +1625,14 @@ function generateDashboardHTML(stats) {
         }
 
         async function runFullScan() {
-            if (!confirm('להפעיל סריקה מלאה כולל Enrichment (טלפון + AI)?\nהתהליך עשוי לקחת מספר דקות.')) return;
+            if (!confirm('להפעיל סריקה מלאה כולל Enrichment (טלפון + AI)?')) return;
             const btn = document.querySelector('[data-onclick="runFullScan()"]');
             if (btn) { btn.textContent = '⏳ סורק...'; btn.disabled = true; }
             try {
                 const res = await fetch('/api/scan/full', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 50 }) });
                 const d = await res.json();
                 if (res.ok) {
-                    alert('✅ סריקה מלאה הושלמה!\n\nמודעות חדשות: ' + (d.newListings||0) + '\nהועשרו: ' + (d.enriched||0) + '\nטלפונים נמצאו: ' + (d.phones||0));
+                    alert('✅ סריקה הושלמה: ' + (d.newListings||0) + ' חדשות | ' + (d.enriched||0) + ' הועשרו | ' + (d.phones||0) + ' טלפונים');
                     refreshStats();
                 } else throw new Error(d.error || 'HTTP ' + res.status);
             } catch (e) { alert('❌ שגיאה: ' + e.message); }
@@ -1786,7 +1786,7 @@ function generateDashboardHTML(stats) {
             const typeMap = { signing_ceremony: 'כנס חתימות', consultation: 'ייעוץ', appraiser: 'שמאי', surveyor: 'מודד', physical: 'פגישה' };
             const th = (label, field) => '<th data-sort="' + field + '" data-onclick="sortSchedBy(this.dataset.sort)">' + label + ' <span style="color:' + (sf===field?'var(--gold)':'var(--text-muted)') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
             const rows_html = filtered.map(r => {
-                const phoneClean = (r.phone || '').replace(/\D/g,'');
+                const phoneClean = (r.phone || '').replace(/\\D/g,'');
                 const meetingType = r.meeting_type || r.campaign_meeting_type || '';
                 const stColor = stateColors[r.state] || 'var(--text-muted)';
                 const stHe = stateHe[r.state] || (r.state || '\u2014');
@@ -2183,4 +2183,4 @@ function generateDashboardHTML(stats) {
 }
 
 module.exports = router;
-// v5.1.0 - Chart.js area/radar/donut charts + hotfix Fri Mar 13 2026
+// v5.1.1 - fix broken buttons: removed newlines from alert/confirm strings in template literal
