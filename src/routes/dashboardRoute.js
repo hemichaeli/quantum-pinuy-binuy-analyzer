@@ -847,7 +847,7 @@ function generateDashboardHTML(stats) {
                     const ssiColor = ssi > 70 ? '#22c55e' : ssi > 40 ? '#f59e0b' : '#94a3b8';
                     const title = ad.title || ad.address || ('\u05de\u05d5\u05d3\u05e2\u05d4 #' + (i+1));
                     const city = ad.city || '';
-                    const rooms = ad.rooms ? ad.rooms + ' \u05d7\u05d3\'' : null;
+                    const rooms = ad.rooms ? ad.rooms + ' חדר' : null;
                     const area = ad.area_sqm ? parseFloat(ad.area_sqm).toFixed(0) + ' \u05de"\u05e8' : null;
                     const floor = ad.floor != null ? '\u05e7\u05d5\u05de\u05d4 ' + ad.floor : null;
                     const source = ad.source || null;
