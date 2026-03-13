@@ -606,6 +606,7 @@ async function runMasterPipeline(options = {}) {
   const result = {
     started_at: new Date().toISOString(),
     phase1_scrapers: null,
+    phase1b_phones: null,
     phase2_statutory: null,
     phase3_synthesis: null,
     phase4_iai: null,
@@ -628,6 +629,17 @@ async function runMasterPipeline(options = {}) {
     result.phase1_scrapers = await runAllScrapers();
     logger.info(`[MasterPipeline] PHASE 1 complete: ${result.phase1_scrapers.totalNew} new, ${result.phase1_scrapers.totalUpdated} updated`);
 
+    // ── PHASE 1b: Phone reveal (yad2 + all sources without phone) ─────────
+    logger.info('[MasterPipeline] PHASE 1b: Revealing phone numbers...');
+    try {
+      const { revealPhonesForAllYad2 } = require('../services/yad2PhoneReveal');
+      result.phase1b_phones = await revealPhonesForAllYad2({ limit: 300 });
+      logger.info(`[MasterPipeline] PHASE 1b complete: ${result.phase1b_phones.enriched}/${result.phase1b_phones.total} phones revealed`);
+    } catch (phoneErr) {
+      logger.warn(`[MasterPipeline] PHASE 1b phone reveal failed (non-fatal): ${phoneErr.message}`);
+      result.phase1b_phones = { enriched: 0, total: 0, error: phoneErr.message };
+    }
+
     // ── PHASE 2: Statutory enrichment (Perplexity + Gemini) ───────────────
     logger.info('[MasterPipeline] PHASE 2: Statutory enrichment...');
     result.phase2_statutory = await runStatutoryEnrichment();
@@ -648,6 +660,7 @@ async function runMasterPipeline(options = {}) {
 
     const summary = `Pipeline complete in ${Math.round(result.duration_ms / 1000)}s: ` +
       `${result.phase1_scrapers.totalNew} new listings | ` +
+      `${(result.phase1b_phones||{}).enriched||0} phones revealed | ` +
       `${result.phase2_statutory.enriched} statutory enriched | ` +
       `${result.phase3_synthesis.synthesized} synthesized`;
 
