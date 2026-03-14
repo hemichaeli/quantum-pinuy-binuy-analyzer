@@ -147,8 +147,9 @@ router.get('/api/ads', async (req, res) => {
         if (phoneFilter === 'yes') query += ` AND l.phone IS NOT NULL AND l.phone != ''`;
         else if (phoneFilter === 'no') query += ` AND (l.phone IS NULL OR l.phone = '')`;
         if (contactStatus) { query += ` AND l.message_status = $${n}`; params.push(contactStatus); n++; }
-        const validSort = ['address', 'city', 'asking_price', 'created_at', 'ssi_score', 'area_sqm', 'rooms', 'floor'];
-        const sortField = validSort.includes(sortBy) ? `l.${sortBy}` : 'l.created_at';
+        const validSort = ['address', 'city', 'asking_price', 'created_at', 'ssi_score', 'area_sqm', 'rooms', 'floor', 'estimated_sale_price', 'profit_delta_ils'];
+        const computedSorts = { estimated_sale_price: 'estimated_sale_price', profit_delta_ils: 'profit_delta_ils' };
+        const sortField = computedSorts[sortBy] ? computedSorts[sortBy] : (validSort.includes(sortBy) ? `l.${sortBy}` : 'l.created_at');
         const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
         const offset = (parseInt(page) - 1) * parseInt(limit);
         query += ` ORDER BY ${sortField} ${order} LIMIT $${n} OFFSET $${n + 1}`;
@@ -612,7 +613,9 @@ function generateDashboardHTML(stats) {
                         <th data-onclick="sortAdsBy('complex_status')" data-sort-field="complex_status">Status</th>
                         <th>Performance Trend</th>
                         <th data-onclick="sortAdsBy('asking_price')" data-sort-field="asking_price">Price</th>
-                        <th data-onclick="sortAdsBy('premium_percent')" data-sort-field="premium_percent">פרמייה</th>
+                        <th data-onclick="sortAdsBy('premium_percent')" data-sort-field="premium_percent">% פרמייה</th>
+                        <th data-onclick="sortAdsBy('estimated_sale_price')" data-sort-field="estimated_sale_price">מחיר מכירה</th>
+                        <th data-onclick="sortAdsBy('profit_delta_ils')" data-sort-field="profit_delta_ils">דלתא ₪</th>
                         <th data-onclick="sortAdsBy('area_sqm')" data-sort-field="area_sqm">שטח</th>
                         <th data-onclick="sortAdsBy('rooms')" data-sort-field="rooms">חדרים</th>
                         <th data-onclick="sortAdsBy('ssi_score')" data-sort-field="ssi_score">SSI</th>
@@ -1248,6 +1251,8 @@ function generateDashboardHTML(stats) {
                     + '<td>' + miniSparkline(sparkColor) + '</td>'
                     + '<td style="color:var(--text-primary);font-weight:600;font-size:14px;">' + price + '</td>'
                     + '<td style="color:' + premNowColor + ';font-weight:600;">' + premNow + '</td>'
+                    + '<td style="color:var(--text-primary);font-size:12px;">' + (ad.estimated_sale_price ? '\u20AA' + parseInt(ad.estimated_sale_price).toLocaleString() : '\u2014') + '</td>'
+                    + '<td style="color:' + (ad.profit_delta_ils && parseFloat(ad.profit_delta_ils) > 0 ? 'var(--green)' : 'var(--text-muted)') + ';font-size:12px;font-weight:600;">' + (ad.profit_delta_ils && parseFloat(ad.profit_delta_ils) > 0 ? '+\u20AA' + parseInt(ad.profit_delta_ils).toLocaleString() : '\u2014') + '</td>'
                     + '<td>' + (ad.area_sqm ? parseFloat(ad.area_sqm).toFixed(0) + ' מ"ר' : '\u2014') + '</td>'
                     + '<td>' + (ad.rooms || '\u2014') + '</td>'
                     + '<td style="color:' + ssiColor + ';font-weight:600;">' + (ssi || '\u2014') + '</td>'
