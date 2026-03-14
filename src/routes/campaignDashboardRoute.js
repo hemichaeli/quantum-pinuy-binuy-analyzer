@@ -479,8 +479,8 @@ textarea{resize:vertical;min-height:80px}
           '<div style="font-size:10px;color:#546e7a">תזכורת</div>' +
         '</div>' +
         '<div class="form-group" style="margin:0">' +
-          '<label>Template ID (אינפוריו) <span style="color:#ef5350">*</span></label>' +
-          '<input type="text" id="' + prefix + 'ReminderTpl' + i + '" value="' + existingVal + '" placeholder="מספר תבנית מאושרת מטא" required style="border-color:#1e4a3f">' +
+          '<label>INFORU Template ID <span style="color:#ef5350">*</span></label>' +
+          '<input type="text" id="' + prefix + 'ReminderTpl' + i + '" value="' + existingVal + '" placeholder="מספר התבנית באינפוריו" required style="border-color:#1e4a3f"> +
         '</div>' +
       '</div>';
     }
