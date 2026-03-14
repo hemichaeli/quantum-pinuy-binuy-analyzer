@@ -396,6 +396,17 @@ async function start() {
     logger.info('[CampaignFollowup] ACTIVE - checking every 2 min');
   } catch (e) { logger.warn('[CampaignFollowup] Failed to start:', e.message); }
 
+  // Campaign Flow Engine v5.0 — WA reminders (Meta templates) + call escalation
+  try {
+    const cron = require('node-cron');
+    const { runCampaignFlowEngine } = require('./cron/campaignFlowEngine');
+    cron.schedule('*/5 * * * *', async () => {
+      try { await runCampaignFlowEngine(); }
+      catch (e) { logger.warn('[CampaignFlowEngine] Cron error:', e.message); }
+    });
+    logger.info('[CampaignFlowEngine] ACTIVE - WA reminders + call escalation every 5 min');
+  } catch (e) { logger.warn('[CampaignFlowEngine] Failed to start:', e.message); }
+
   try {
     const cron = require('node-cron');
     const { runEscalation } = require('./services/waBotEscalationService');

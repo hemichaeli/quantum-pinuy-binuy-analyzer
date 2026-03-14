@@ -629,4 +629,131 @@ router.get('/:id/stats', async (req, res) => {
   }
 });
 
+// ─── Campaign Flow Engine API ────────────────────────────────────────────────
+
+// GET /api/campaigns/:id/funnel  — live funnel stats for a campaign
+router.get('/:id/funnel', async (req, res) => {
+  try {
+    const { getCampaignFunnel } = require('../cron/campaignFlowEngine');
+    const funnel = await getCampaignFunnel(parseInt(req.params.id));
+    res.json({ success: true, funnel });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/campaigns/:id/flow-log  — recent flow log entries
+router.get('/:id/flow-log', async (req, res) => {
+  try {
+    const { getCampaignFlowLog } = require('../cron/campaignFlowEngine');
+    const limit = parseInt(req.query.limit) || 50;
+    const log = await getCampaignFlowLog(parseInt(req.params.id), limit);
+    res.json({ success: true, log });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/campaigns/:id/leads-detail  — leads with flow_stage for dashboard
+router.get('/:id/leads-detail', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, phone, name, city, source,
+             flow_stage, reminder_count, call_attempt_count,
+             wa_sent_at, wa_replied_at,
+             reminder1_sent_at, reminder2_sent_at,
+             call1_initiated_at, call2_initiated_at,
+             last_activity_at, zoho_contact_id, notes
+      FROM campaign_leads
+      WHERE campaign_id = $1
+      ORDER BY created_at DESC
+      LIMIT 500
+    `, [req.params.id]);
+    res.json({ success: true, leads: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/:id/flow-settings  — update flow settings for a campaign
+router.post('/:id/flow-settings', async (req, res) => {
+  try {
+    const {
+      zoho_campaign_id,
+      max_wa_reminders, wa_reminder_delay_hours,
+      reminder1_template_id, reminder2_template_id,
+      max_call_attempts, call_delay_after_wa_hours,
+      call_retry_delay_hours, flow_enabled
+    } = req.body;
+    await pool.query(`
+      UPDATE campaigns SET
+        zoho_campaign_id          = COALESCE($1,  zoho_campaign_id),
+        max_wa_reminders          = COALESCE($2,  max_wa_reminders),
+        wa_reminder_delay_hours   = COALESCE($3,  wa_reminder_delay_hours),
+        reminder1_template_id     = COALESCE($4,  reminder1_template_id),
+        reminder2_template_id     = COALESCE($5,  reminder2_template_id),
+        max_call_attempts         = COALESCE($6,  max_call_attempts),
+        call_delay_after_wa_hours = COALESCE($7,  call_delay_after_wa_hours),
+        call_retry_delay_hours    = COALESCE($8,  call_retry_delay_hours),
+        flow_enabled              = COALESCE($9,  flow_enabled),
+        updated_at                = NOW()
+      WHERE id = $10
+    `, [
+      zoho_campaign_id || null,
+      max_wa_reminders != null ? parseInt(max_wa_reminders) : null,
+      wa_reminder_delay_hours != null ? parseInt(wa_reminder_delay_hours) : null,
+      reminder1_template_id || null,
+      reminder2_template_id || null,
+      max_call_attempts != null ? parseInt(max_call_attempts) : null,
+      call_delay_after_wa_hours != null ? parseInt(call_delay_after_wa_hours) : null,
+      call_retry_delay_hours != null ? parseInt(call_retry_delay_hours) : null,
+      flow_enabled != null ? Boolean(flow_enabled) : null,
+      req.params.id
+    ]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/:id/leads/:leadId/mark-replied  — manual WA reply mark
+router.post('/:id/leads/:leadId/mark-replied', async (req, res) => {
+  try {
+    await pool.query(`
+      UPDATE campaign_leads
+      SET flow_stage = 'replied', wa_replied_at = COALESCE(wa_replied_at, NOW()),
+          last_activity_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND campaign_id = $2
+    `, [req.params.leadId, req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/:id/leads/:leadId/mark-converted  — manual conversion
+router.post('/:id/leads/:leadId/mark-converted', async (req, res) => {
+  try {
+    await pool.query(`
+      UPDATE campaign_leads
+      SET flow_stage = 'converted', last_activity_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND campaign_id = $2
+    `, [req.params.leadId, req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/flow-engine/run  — manual trigger (admin)
+router.post('/flow-engine/run', async (req, res) => {
+  try {
+    const { runCampaignFlowEngine } = require('../cron/campaignFlowEngine');
+    runCampaignFlowEngine().catch(e => logger.error('[FlowEngine] Manual run error:', e.message));
+    res.json({ success: true, message: 'Flow engine triggered' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
