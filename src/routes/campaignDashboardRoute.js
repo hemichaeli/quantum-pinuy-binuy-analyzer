@@ -214,24 +214,17 @@ textarea{resize:vertical;min-height:80px}
             </div>
             <div class="flow-section">
               <div class="flow-section-title">📱 תזכורות WhatsApp</div>
-              <div class="flow-grid">
+              <div class="flow-grid" style="margin-bottom:12px">
                 <div class="form-group">
-                  <label>מקסימום תזכורות WA</label>
-                  <input type="number" id="bMaxReminders" value="2" min="0" max="5">
+                  <label>מספר תזכורות WA</label>
+                  <input type="number" id="bMaxReminders" value="2" min="0" max="5" oninput="renderReminderRows('b')">
                 </div>
                 <div class="form-group">
                   <label>השהיה בין תזכורות (שעות)</label>
                   <input type="number" id="bReminderDelay" value="24" min="1" max="168">
                 </div>
               </div>
-              <div class="form-group">
-                <label>Template ID — תזכורת 1 (מאינפוריו)</label>
-                <input type="text" id="bReminder1Id" placeholder="למשל: 159175">
-              </div>
-              <div class="form-group">
-                <label>Template ID — תזכורת 2 (מאינפוריו)</label>
-                <input type="text" id="bReminder2Id" placeholder="למשל: 159176">
-              </div>
+              <div id="bReminderRows"></div>
             </div>
             <div class="flow-section">
               <div class="flow-section-title">📞 שיחות טלפון (Vapi)</div>
@@ -472,6 +465,29 @@ textarea{resize:vertical;min-height:80px}
     }).catch(function() { el.innerHTML = '<div style="color:#546e7a;font-size:12px">לא ניתן לטעון נתוני זרימה</div>'; });
   }
 
+  // Dynamic reminder rows renderer (prefix = 'b' for builder, 'fs-ID' for flow settings)
+  window.renderReminderRows = function(prefix, count, existingTemplates) {
+    var n = count != null ? count : parseInt(document.getElementById(prefix + 'MaxReminders').value) || 0;
+    var container = document.getElementById(prefix + 'ReminderRows');
+    if (!container) return;
+    var html = '';
+    for (var i = 1; i <= n; i++) {
+      var existingVal = (existingTemplates && existingTemplates[i]) ? escHtml(existingTemplates[i]) : '';
+      html += '<div style="display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:end;margin-bottom:10px;background:#0d1a2a;border:1px solid #1e4a3f;border-radius:7px;padding:10px">' +
+        '<div style="text-align:center;min-width:60px">' +
+          '<div style="font-size:18px;font-weight:700;color:#4db6ac">' + i + '</div>' +
+          '<div style="font-size:10px;color:#546e7a">תזכורת</div>' +
+        '</div>' +
+        '<div class="form-group" style="margin:0">' +
+          '<label>Template ID (אינפוריו) <span style="color:#ef5350">*</span></label>' +
+          '<input type="text" id="' + prefix + 'ReminderTpl' + i + '" value="' + existingVal + '" placeholder="מספר תבנית מאושרת מטא" required style="border-color:#1e4a3f">' +
+        '</div>' +
+      '</div>';
+    }
+    if (n === 0) html = '<div style="font-size:11px;color:#546e7a;padding:6px 0">אין תזכורות WA — הקמפיין יעבור ישירות לשיחות.</div>';
+    container.innerHTML = html;
+  };
+
   window.openFlowSettings = function(id) {
     var el = document.getElementById('camp-flow-settings-' + id);
     if (!el) return;
@@ -481,15 +497,21 @@ textarea{resize:vertical;min-height:80px}
     apiFetch(API + '/' + id).then(function(d) {
       if (!d.success) { el.innerHTML = '<div style="color:#ef5350">שגיאה</div>'; return; }
       var c = d.campaign;
+      var maxR = c.max_wa_reminders != null ? c.max_wa_reminders : 2;
+      var tplMap = {};
+      if (c.reminder1_template_id) tplMap[1] = c.reminder1_template_id;
+      if (c.reminder2_template_id) tplMap[2] = c.reminder2_template_id;
+      if (c.reminder3_template_id) tplMap[3] = c.reminder3_template_id;
+      if (c.reminder4_template_id) tplMap[4] = c.reminder4_template_id;
+      if (c.reminder5_template_id) tplMap[5] = c.reminder5_template_id;
       el.innerHTML = '<div class="flow-section"><div class="flow-section-title">⚙️ הגדרות זרימה — ' + escHtml(c.name) + '</div>' +
         '<div class="form-group"><label>Zoho Campaign ID</label><input type="text" id="fs-zoho-' + id + '" value="' + escHtml(c.zoho_campaign_id || '') + '" placeholder="מזהה זוהו"></div>' +
-        '<div class="flow-grid">' +
-          '<div class="form-group"><label>מקסימום תזכורות WA</label><input type="number" id="fs-maxr-' + id + '" value="' + (c.max_wa_reminders != null ? c.max_wa_reminders : 2) + '" min="0" max="5"></div>' +
+        '<div class="flow-grid" style="margin-bottom:12px">' +
+          '<div class="form-group"><label>מספר תזכורות WA</label><input type="number" id="fs-maxr-' + id + '" value="' + maxR + '" min="0" max="5" oninput="renderReminderRows(\'fs-' + id + '-\', null, null)"></div>' +
           '<div class="form-group"><label>השהיה בין תזכורות (שעות)</label><input type="number" id="fs-rdelay-' + id + '" value="' + (c.wa_reminder_delay_hours || 24) + '" min="1" max="168"></div>' +
         '</div>' +
-        '<div class="form-group"><label>Template ID — תזכורת 1 (מאינפוריו)</label><input type="text" id="fs-r1-' + id + '" value="' + escHtml(c.reminder1_template_id || '') + '" placeholder="מספר תבנית מאושרת מטא"></div>' +
-        '<div class="form-group"><label>Template ID — תזכורת 2 (מאינפוריו)</label><input type="text" id="fs-r2-' + id + '" value="' + escHtml(c.reminder2_template_id || '') + '" placeholder="מספר תבנית מאושרת מטא"></div>' +
-        '<div class="flow-grid">' +
+        '<div id="fs-' + id + '-ReminderRows"></div>' +
+        '<div class="flow-grid" style="margin-top:12px">' +
           '<div class="form-group"><label>מקסימום ניסיונות שיחה</label><input type="number" id="fs-maxc-' + id + '" value="' + (c.max_call_attempts != null ? c.max_call_attempts : 2) + '" min="0" max="5"></div>' +
           '<div class="form-group"><label>השהיה לפני שיחה 1 (שעות)</label><input type="number" id="fs-cdelay-' + id + '" value="' + (c.call_delay_after_wa_hours || 48) + '" min="1" max="168"></div>' +
         '</div>' +
@@ -500,6 +522,7 @@ textarea{resize:vertical;min-height:80px}
           '<button class="btn btn-success btn-sm" onclick="saveFlowSettings(' + id + ')">💾 שמור</button>' +
           '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'camp-flow-settings-' + id + '\').style.display=\'none\'">✕ סגור</button>' +
         '</div></div>';
+      renderReminderRows('fs-' + id + '-', maxR, tplMap);
     }).catch(function() { el.innerHTML = '<div style="color:#ef5350">שגיאת רשת</div>'; });
   };
 
@@ -507,17 +530,25 @@ textarea{resize:vertical;min-height:80px}
     var g = function(sfx) { var el = document.getElementById('fs-' + sfx + '-' + id); return el ? el.value : null; };
     var gn = function(sfx) { var v = g(sfx); return (v !== null && v !== '') ? parseInt(v) : null; };
     var chk = document.getElementById('fs-enabled-' + id);
-    apiFetch(API + '/' + id + '/flow-settings', 'POST', {
+    var maxR = gn('maxr') || 0;
+    // Validate: all reminder template IDs must be filled
+    var tplIds = {};
+    for (var i = 1; i <= maxR; i++) {
+      var tplEl = document.getElementById('fs-' + id + '-ReminderTpl' + i);
+      var tplVal = tplEl ? tplEl.value.trim() : '';
+      if (!tplVal) { toast('יש להזין Template ID לתזכורת ' + i, 'error'); return; }
+      tplIds['reminder' + i + '_template_id'] = tplVal;
+    }
+    var payload = Object.assign({
       zoho_campaign_id: g('zoho') || null,
-      max_wa_reminders: gn('maxr'),
+      max_wa_reminders: maxR,
       wa_reminder_delay_hours: gn('rdelay'),
-      reminder1_template_id: g('r1') || null,
-      reminder2_template_id: g('r2') || null,
       max_call_attempts: gn('maxc'),
       call_delay_after_wa_hours: gn('cdelay'),
       call_retry_delay_hours: gn('cretry'),
       flow_enabled: chk ? chk.checked : true
-    }).then(function(d) {
+    }, tplIds);
+    apiFetch(API + '/' + id + '/flow-settings', 'POST', payload).then(function(d) {
       if (d.success) { toast('הגדרות זרימה נשמרו ✅'); loadCampaigns(); loadFunnel(id); }
       else toast(d.error || 'שגיאה', 'error');
     }).catch(function() { toast('שגיאת רשת', 'error'); });
@@ -604,9 +635,18 @@ textarea{resize:vertical;min-height:80px}
     document.getElementById('bCallScript').value = 'You are {{agent_name}}, a real estate agent at QUANTUM specializing in urban renewal.\\nYou are calling {{name}} to discuss their property.\\nBe professional, friendly, and speak Hebrew.\\nYour goal is to schedule a meeting.';
   });
 
+  // Init builder reminder rows on page load
+  renderReminderRows('b');
+
   document.getElementById('btnCreateCampaign').addEventListener('click', function() {
     var name = document.getElementById('bName').value.trim();
     if (!name) { toast('יש להזין שם לקמפיין', 'error'); return; }
+    // Validate reminder template IDs
+    var bMaxR2 = parseInt(document.getElementById('bMaxReminders').value) || 0;
+    for (var vi = 1; vi <= bMaxR2; vi++) {
+      var vEl = document.getElementById('bReminderTpl' + vi);
+      if (!vEl || !vEl.value.trim()) { toast('יש להזין Template ID לתזכורת ' + vi, 'error'); return; }
+    }
     var voiceId = selVoice === 'custom' ? (document.getElementById('bVoiceId').value.trim() || null) : selVoice;
     var btn = document.getElementById('btnCreateCampaign');
     btn.disabled = true; btn.textContent = 'יוצר...';
@@ -621,17 +661,21 @@ textarea{resize:vertical;min-height:80px}
       btn.disabled = false; btn.textContent = '✚ צור קמפיין';
       if (!d.success) { toast(d.error || 'שגיאה', 'error'); return; }
       var campId = d.campaign.id;
-      apiFetch(API + '/' + campId + '/flow-settings', 'POST', {
+      var bMaxR = parseInt(document.getElementById('bMaxReminders').value) || 0;
+      var bTplIds = {};
+      for (var bi = 1; bi <= bMaxR; bi++) {
+        var bTplEl = document.getElementById('bReminderTpl' + bi);
+        bTplIds['reminder' + bi + '_template_id'] = bTplEl ? bTplEl.value.trim() : null;
+      }
+      apiFetch(API + '/' + campId + '/flow-settings', 'POST', Object.assign({
         zoho_campaign_id: document.getElementById('bZohoId').value.trim() || null,
-        max_wa_reminders: parseInt(document.getElementById('bMaxReminders').value) || 2,
+        max_wa_reminders: bMaxR,
         wa_reminder_delay_hours: parseInt(document.getElementById('bReminderDelay').value) || 24,
-        reminder1_template_id: document.getElementById('bReminder1Id').value.trim() || null,
-        reminder2_template_id: document.getElementById('bReminder2Id').value.trim() || null,
         max_call_attempts: parseInt(document.getElementById('bMaxCalls').value) || 2,
         call_delay_after_wa_hours: parseInt(document.getElementById('bCallDelay').value) || 48,
         call_retry_delay_hours: parseInt(document.getElementById('bCallRetry').value) || 24,
         flow_enabled: true
-      }).then(function() {
+      }, bTplIds)).then(function() {
         toast('קמפיין נוצר בהצלחה! ✅');
         loadCampaigns();
         document.querySelector('[data-tab="campaigns"]').click();
