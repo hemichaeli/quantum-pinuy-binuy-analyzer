@@ -483,6 +483,7 @@ function generateDashboardHTML(stats) {
 
     <div class="nav-tabs">
         <div class="nav-tab active" data-tab="dashboard">📊 דשבורד</div>
+        <a href="/api/scheduling/admin" class="nav-tab" target="_blank" style="font-size:11px;text-decoration:none;">⚙️ לוח זמנים</a>
         <div class="nav-tab" data-tab="ads">🏘 מודעות</div>
         <div class="nav-tab" data-tab="messages">💬 הודעות</div>
         <div class="nav-tab" data-tab="leads">👤 לידים</div>
@@ -584,9 +585,11 @@ function generateDashboardHTML(stats) {
                     <option value="no">אין טלפון</option>
                 </select>
                 <select class="filter-select" id="adsSortBy" onchange="loadAds()">
+                    <option value="ssi_score">מיון: SSI</option>
                     <option value="created_at">מיון: תאריך</option>
                     <option value="asking_price">מיון: מחיר</option>
-                    <option value="ssi_score">מיון: SSI</option>
+                    <option value="estimated_sale_price">מיון: מחיר מכירה</option>
+                    <option value="profit_delta_ils">מיון: דלתא ₪</option>
                     <option value="city">מיון: עיר</option>
                     <option value="area_sqm">מיון: שטח</option>
                 </select>
@@ -610,8 +613,9 @@ function generateDashboardHTML(stats) {
                 <thead>
                     <tr id="ads-thead">
                         <th data-onclick="sortAdsBy('title')" data-sort-field="title">Property</th>
+                        <th>מתחם</th>
                         <th data-onclick="sortAdsBy('complex_status')" data-sort-field="complex_status">Status</th>
-                        <th>Performance Trend</th>
+                        <th title="שינוי מחיר לאורך זמן (מדמה תנועה - נתון אמיתי יתעדכן עם היסטוריה)">Performance Trend</th>
                         <th data-onclick="sortAdsBy('asking_price')" data-sort-field="asking_price">Price</th>
                         <th data-onclick="sortAdsBy('premium_percent')" data-sort-field="premium_percent">% פרמייה</th>
                         <th data-onclick="sortAdsBy('estimated_sale_price')" data-sort-field="estimated_sale_price">מחיר מכירה</th>
@@ -1078,10 +1082,15 @@ function generateDashboardHTML(stats) {
                 const minPrice = document.getElementById('minPriceFilter')?.value;
                 const maxPrice = document.getElementById('maxPriceFilter')?.value;
                 const phoneFilter = document.getElementById('phoneFilter')?.value;
+                const sortBy = document.getElementById('adsSortBy')?.value || 'ssi_score';
+                const sortOrder = document.getElementById('adsSortOrder')?.value || 'desc';
                 if (city) params.append('city', city);
                 if (minPrice) params.append('minPrice', minPrice);
                 if (maxPrice) params.append('maxPrice', maxPrice);
                 if (phoneFilter) params.append('phoneFilter', phoneFilter);
+                params.append('sortBy', sortBy);
+                params.append('sortOrder', sortOrder);
+                params.append('limit', '100');
                 const data = await fetchJSON('/dashboard/api/ads?' + params);
                 if (!data.success) throw new Error(data.error);
                 if (!data.data.length) { container.innerHTML = '<div class="loading">📋 אין מודעות</div>'; return; }
@@ -1247,6 +1256,7 @@ function generateDashboardHTML(stats) {
                     + (ad.url ? '<a href="' + ad.url + '" target="_blank" style="color:var(--text-primary);text-decoration:none;">' + title + '</a>' : title)
                     + '</div><div style="font-size:11px;color:var(--text-muted);">' + (ad.city || '') + (ad.address ? ' | ' + ad.address.substring(0,30) : '') + '</div></div>'
                     + '</div></td>'
+                    + '<td style="font-size:11px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:' + (ad.complex_name ? '#4ecdc4' : '#444') + ';" title="' + (ad.complex_name || '\u05dc\u05d0 \u05de\u05e7\u05d5\u05e9\u05e8') + '">' + (ad.complex_name || '\u2014') + '</td>'
                     + '<td>' + statusBadge(adStatus) + '</td>'
                     + '<td>' + miniSparkline(sparkColor) + '</td>'
                     + '<td style="color:var(--text-primary);font-weight:600;font-size:14px;">' + price + '</td>'
