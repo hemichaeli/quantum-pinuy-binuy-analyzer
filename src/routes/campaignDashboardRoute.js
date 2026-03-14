@@ -635,7 +635,7 @@ hr.divider{border:none;border-top:1px solid #1e3a5f;margin:16px 0}
 
       el.innerHTML = allCampaigns.map(function(c) {
         var ml = c.mode === 'wa_then_call'
-          ? '💬→📞 ' + c.wa_wait_minutes + ' דק\''
+          ? '💬→📞 ' + c.wa_wait_minutes + ' דק\\u0027'
           : '📞 שיחה ישירה';
         var vl = c.voice_name ? ' · ' + c.voice_name : '';
         var actions = '';
@@ -846,7 +846,7 @@ hr.divider{border:none;border-top:1px solid #1e3a5f;margin:16px 0}
   });
 
   function updateSliderDisplay(v) {
-    document.getElementById('escSliderVal').textContent  = v === 0 ? 'כבוי' : v + ' דק\'';
+    document.getElementById('escSliderVal').textContent  = v === 0 ? 'כבוי' : v + ' דק\\u0027';
     document.getElementById('escSliderHint').textContent = v === 0
       ? 'הסלמה אוטומטית מבוטלת'
       : 'אחרי ' + v + ' דקות ללא מענה ב-WA — רן מתקשר';
@@ -893,7 +893,7 @@ hr.divider{border:none;border-top:1px solid #1e3a5f;margin:16px 0}
       } else {
         pill.className = 'status-pill pill-active';
         dot.className  = 'dot dot-active';
-        txt.textContent = 'פעיל — ' + m + ' דק\'';
+        txt.textContent = 'פעיל — ' + m + ' דק\\u0027';
       }
     }).catch(function() {});
   }
