@@ -446,6 +446,7 @@ function generateDashboardHTML(stats) {
         .bubble-in { background:#1e293b; color:var(--text-primary); margin-left:auto; border-bottom-left-radius:3px; }
         .bubble-time { font-size:10px; opacity:0.55; margin-top:3px; }
 
+
         /* ── MODAL ── */
         .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; align-items:center; justify-content:center; }
         .modal-box { background:var(--bg-card); border:1px solid var(--border-medium); border-radius:12px; padding:24px; max-width:480px; width:90%; max-height:90vh; overflow-y:auto; }
@@ -2169,5 +2170,110 @@ function generateDashboardHTML(stats) {
 </html>`;
 }
 
+// Helper: get Trello credentials (key + token always from env; boardId dynamic)
+function getTrelloCreds() {
+  const key = process.env.TRELLO_API_KEY;
+  const token = process.env.TRELLO_TOKEN;
+  if (!key || !token) throw new Error('TRELLO_API_KEY / TRELLO_TOKEN לא מוגדרים');
+  return { key, token };
+}
+
+// GET /dashboard/api/trello/favorite-boards — return user's starred boards
+router.get('/api/trello/favorite-boards', async (req, res) => {
+  try {
+    const { key, token } = getTrelloCreds();
+    const resp = await fetch(`https://api.trello.com/1/members/me/boards?key=${key}&token=${token}&filter=starred&fields=id,name,shortUrl`);
+    if (!resp.ok) throw new Error(`Trello API ${resp.status}`);
+    const boards = await resp.json();
+    // Also return currently saved board selection
+    let savedBoardId = null;
+    try {
+      const r = await pool.query("SELECT value FROM system_settings WHERE key = 'trello_selected_board_id'");
+      if (r.rows.length) savedBoardId = r.rows[0].value;
+    } catch (_) {}
+    res.json({ success: true, boards, savedBoardId });
+  } catch (e) {
+    if (e.message.includes('לא מוגדרים')) return res.json({ success: false, configured: false, boards: [] });
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /dashboard/api/trello/select-board — save selected board to system_settings
+router.post('/api/trello/select-board', async (req, res) => {
+  try {
+    const { boardId, boardName } = req.body;
+    if (!boardId) return res.status(400).json({ success: false, error: 'boardId required' });
+    await pool.query(
+      `INSERT INTO system_settings (key, value, label, updated_at)
+       VALUES ('trello_selected_board_id', $1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1, label = $2, updated_at = NOW()`,
+      [boardId, boardName || boardId]
+    );
+    res.json({ success: true, boardId, boardName });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /dashboard/api/trello/cards?boardId=xxx — fetch open cards from a specific board
+router.get('/api/trello/cards', async (req, res) => {
+  try {
+    const { key, token } = getTrelloCreds();
+    // boardId: from query param, or saved setting, or env fallback
+    let boardId = req.query.boardId;
+    if (!boardId) {
+      try {
+        const r = await pool.query("SELECT value FROM system_settings WHERE key = 'trello_selected_board_id'");
+        if (r.rows.length) boardId = r.rows[0].value;
+      } catch (_) {}
+    }
+    if (!boardId) boardId = process.env.TRELLO_BOARD_ID;
+    if (!boardId) return res.json({ success: false, configured: false, noBoardSelected: true, cards: [], lists: [] });
+    const [cardsResp, listsResp] = await Promise.all([
+      fetch(`https://api.trello.com/1/boards/${boardId}/cards?key=${key}&token=${token}&fields=id,name,desc,due,url,idList,labels,closed&filter=open`),
+      fetch(`https://api.trello.com/1/boards/${boardId}/lists?key=${key}&token=${token}&fields=id,name`)
+    ]);
+    if (!cardsResp.ok) throw new Error(`Trello cards API ${cardsResp.status}`);
+    const cards = await cardsResp.json();
+    const lists = listsResp.ok ? await listsResp.json() : [];
+    const listMap = {};
+    lists.forEach(l => { listMap[l.id] = l.name; });
+    const enriched = cards.map(c => ({ ...c, listName: listMap[c.idList] || c.idList }));
+    res.json({ success: true, configured: true, boardId, cards: enriched, lists });
+  } catch (e) {
+    if (e.message.includes('לא מוגדרים')) return res.json({ success: false, configured: false, cards: [], lists: [] });
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /dashboard/api/trello/move-card — move a card to a different list by list name or id
+router.post('/api/trello/move-card', async (req, res) => {
+  try {
+    const { cardId, listId, listName, boardId } = req.body;
+    if (!cardId || (!listId && !listName)) return res.status(400).json({ success: false, error: 'cardId and listId or listName required' });
+    const { key, token } = getTrelloCreds();
+    let targetListId = listId;
+    if (!targetListId && listName && boardId) {
+      // Find list by name within the board
+      const listsResp = await fetch(`https://api.trello.com/1/boards/${boardId}/lists?key=${key}&token=${token}&fields=id,name`);
+      if (listsResp.ok) {
+        const lists = await listsResp.json();
+        const found = lists.find(l => l.name.toLowerCase() === listName.toLowerCase());
+        if (found) targetListId = found.id;
+      }
+    }
+    if (!targetListId) throw new Error('לא נמצאה רשימה בשם: ' + listName);
+    const resp = await fetch(
+      `https://api.trello.com/1/cards/${cardId}?key=${key}&token=${token}`,
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idList: targetListId }) }
+    );
+    if (!resp.ok) throw new Error(`Trello API ${resp.status}`);
+    const card = await resp.json();
+    res.json({ success: true, card });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
-// v5.4.0 - SSI backfill, conversion rate chart, Trello board sync
+// v5.5.0 - Dynamic Trello board selector from Favorites

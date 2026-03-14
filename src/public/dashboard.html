@@ -662,18 +662,24 @@
 
         <!-- Trello Board Sync Panel -->
         <div class="section" id="trello-board-panel" style="margin-top:16px;">
+            <!-- Board selector row -->
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
                 <h2 style="margin:0;">📌 לוח Trello</h2>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <label style="font-size:11px;color:var(--text-secondary);white-space:nowrap;">לוח פעיל:</label>
+                        <select id="trello-favorite-boards" class="filter-select" style="min-width:180px;font-size:12px;padding:6px 10px;" onchange="onTrelloBoardSelected()">
+                            <option value="">— בחר לוח Favorites —</option>
+                        </select>
+                    </div>
                     <select id="trello-board-filter" class="filter-select" style="min-width:140px;font-size:12px;padding:6px 10px;" onchange="renderTrelloBoardCards()">
                         <option value="">כל הרשימות</option>
                     </select>
-                    <button class="btn btn-secondary" onclick="_trelloBoardCards=[];loadTrelloBoardCards()" style="padding:7px 12px;font-size:12px;">🔄 רענן</button>
-                    <button class="btn" onclick="openNewTaskModal()" style="padding:7px 12px;font-size:12px;">➕ כרטיס חדש</button>
+                    <button class="btn btn-secondary" onclick="_trelloBoardCards=[];_trelloActiveBoardId=document.getElementById('trello-favorite-boards').value;loadTrelloBoardCards()" style="padding:7px 12px;font-size:12px;">🔄 רענן</button>
                 </div>
             </div>
             <div id="trello-board-status" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;"></div>
-            <div id="trello-board-cards"><div class="loading">📌 טוען כרטיסים מטרלו...</div></div>
+            <div id="trello-board-cards"><div class="loading">📌 טוען לוחות Favorites...</div></div>
         </div>
     </div>
 
@@ -1861,32 +1867,81 @@
         // -- TRELLO BOARD SYNC --
         let _trelloBoardCards = [];
         let _trelloBoardLists = [];
+        let _trelloActiveBoardId = null;
+        let _trelloFavoriteBoards = [];
 
+        // Step 1: Load favorite boards and populate selector
         async function loadTrelloBoardCards() {
             const container = document.getElementById('trello-board-cards');
             const statusEl = document.getElementById('trello-board-status');
             if (!container) return;
-            container.innerHTML = '<div class="loading">📌 טוען כרטיסים מטרלו...</div>';
+            container.innerHTML = '<div class="loading">📌 טוען לוחות Favorites...</div>';
             try {
-                const data = await fetchJSON('/dashboard/api/trello/cards');
+                const data = await fetchJSON('/dashboard/api/trello/favorite-boards');
                 if (!data.success) {
-                    if (!data.configured) {
-                        container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:20px;text-align:center;">⚠️ Trello לא מוגדר. הגדר TRELLO_API_KEY, TRELLO_TOKEN, TRELLO_BOARD_ID ב-Railway.</div>';
+                    if (data.configured === false) {
+                        container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:20px;text-align:center;">⚠️ Trello לא מוגדר. הגדר TRELLO_API_KEY ו-TRELLO_TOKEN ב-Railway.</div>';
                         return;
                     }
                     throw new Error(data.error);
                 }
+                _trelloFavoriteBoards = data.boards || [];
+                const boardSel = document.getElementById('trello-favorite-boards');
+                if (boardSel) {
+                    boardSel.innerHTML = '<option value="">— בחר לוח Favorites —</option>' +
+                        _trelloFavoriteBoards.map(b => '<option value="' + b.id + '">' + b.name + '</option>').join('');
+                    // Restore saved selection
+                    if (data.savedBoardId) {
+                        boardSel.value = data.savedBoardId;
+                        _trelloActiveBoardId = data.savedBoardId;
+                    }
+                }
+                if (_trelloActiveBoardId) {
+                    await loadCardsForBoard(_trelloActiveBoardId);
+                } else {
+                    container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:30px;text-align:center;">📌 בחר לוח Trello מהרשימה למעלה</div>';
+                }
+            } catch (e) {
+                container.innerHTML = '<div class="error">שגיאה: ' + e.message + '</div>';
+            }
+        }
+
+        // Called when user picks a board from the selector
+        async function onTrelloBoardSelected() {
+            const boardSel = document.getElementById('trello-favorite-boards');
+            const boardId = boardSel ? boardSel.value : '';
+            if (!boardId) return;
+            _trelloActiveBoardId = boardId;
+            _trelloBoardCards = [];
+            // Save selection to backend
+            const boardName = boardSel.options[boardSel.selectedIndex].text;
+            fetch('/dashboard/api/trello/select-board', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ boardId, boardName })
+            }).catch(() => {});
+            await loadCardsForBoard(boardId);
+        }
+
+        // Step 2: Load cards for a specific board
+        async function loadCardsForBoard(boardId) {
+            const container = document.getElementById('trello-board-cards');
+            const statusEl = document.getElementById('trello-board-status');
+            if (!container) return;
+            container.innerHTML = '<div class="loading">📌 טוען כרטיסים...</div>';
+            try {
+                const data = await fetchJSON('/dashboard/api/trello/cards?boardId=' + boardId);
+                if (!data.success) throw new Error(data.error || 'שגיאה בטעינת כרטיסים');
                 _trelloBoardCards = data.cards || [];
                 _trelloBoardLists = data.lists || [];
-                // Populate filter
+                // Populate list filter
                 const filterSel = document.getElementById('trello-board-filter');
                 if (filterSel) {
-                    const currentVal = filterSel.value;
                     filterSel.innerHTML = '<option value="">כל הרשימות</option>' +
                         _trelloBoardLists.map(l => '<option value="' + l.id + '">' + l.name + '</option>').join('');
-                    filterSel.value = currentVal;
                 }
-                if (statusEl) statusEl.textContent = _trelloBoardCards.length + ' כרטיסים פעילים';
+                const boardSel = document.getElementById('trello-favorite-boards');
+                const boardName = boardSel ? boardSel.options[boardSel.selectedIndex].text : '';
+                if (statusEl) statusEl.innerHTML = '📌 <strong>' + boardName + '</strong> — ' + _trelloBoardCards.length + ' כרטיסים פתוחים';
                 renderTrelloBoardCards();
             } catch (e) {
                 container.innerHTML = '<div class="error">שגיאה בטעינת Trello: ' + e.message + '</div>';
@@ -1900,7 +1955,7 @@
             const filterListId = filterSel ? filterSel.value : '';
             const cards = filterListId ? _trelloBoardCards.filter(c => c.idList === filterListId) : _trelloBoardCards;
             if (!cards.length) {
-                container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:20px;text-align:center;">אין כרטיסים להצגה</div>';
+                container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:20px;text-align:center;">אין כרטיסים פתוחים בלוח זה</div>';
                 return;
             }
             // Group by list
@@ -1913,17 +1968,21 @@
             let html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">';
             for (const [listName, listCards] of Object.entries(byList)) {
                 html += '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;">';
-                html += '<div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:10px;border-bottom:1px solid var(--border-subtle);padding-bottom:6px;">' + listName + ' <span style="color:var(--text-muted);font-weight:400;">(' + listCards.length + ')</span></div>';
+                html += '<div style="font-size:12px;font-weight:600;color:var(--teal);margin-bottom:10px;border-bottom:1px solid var(--border-subtle);padding-bottom:6px;">' + listName + ' <span style="color:var(--text-muted);font-weight:400;">(' + listCards.length + ')</span></div>';
                 listCards.forEach(c => {
                     const dueStr = c.due ? new Date(c.due).toLocaleDateString('he-IL') : '';
-                    const labels = (c.labels || []).map(l => '<span style="background:' + (l.color ? l.color : '#555') + ';color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:3px;">' + (l.name || '') + '</span>').join('');
-                    html += '<div style="background:rgba(255,255,255,0.04);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;margin-bottom:8px;cursor:pointer;" onclick="window.open(\'' + c.url + '\',\'_blank\')">';
+                    const isOverdue = c.due && new Date(c.due) < new Date();
+                    const labels = (c.labels || []).map(l => {
+                        const bg = l.color === 'red' ? '#ef4444' : l.color === 'orange' ? '#f97316' : l.color === 'green' ? '#22c55e' : l.color === 'blue' ? '#3b82f6' : l.color === 'purple' ? '#8b5cf6' : l.color === 'yellow' ? '#eab308' : '#6b7280';
+                        return '<span style="background:' + bg + ';color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:3px;">' + (l.name || '') + '</span>';
+                    }).join('');
+                    html += '<div style="background:rgba(255,255,255,0.04);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;margin-bottom:8px;cursor:pointer;transition:background 0.12s;" onmouseover="this.style.background=\'rgba(255,255,255,0.08)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.04)\'" onclick="window.open(\'' + c.url + '\',\'_blank\')">';
                     html += '<div style="font-size:13px;color:var(--text-primary);font-weight:500;margin-bottom:4px;">' + c.name + '</div>';
-                    if (labels) html += '<div style="margin-bottom:4px;">' + labels + '</div>';
-                    if (dueStr) html += '<div style="font-size:11px;color:var(--text-muted);">⏰ ' + dueStr + '</div>';
+                    if (labels) html += '<div style="margin-bottom:5px;">' + labels + '</div>';
+                    if (dueStr) html += '<div style="font-size:11px;color:' + (isOverdue ? 'var(--red)' : 'var(--text-muted)') + ';">⏰ ' + dueStr + (isOverdue ? ' ⚠️ עבר זמן' : '') + '</div>';
                     html += '<div style="display:flex;gap:6px;margin-top:8px;">';
-                    html += '<button class="btn btn-secondary" style="padding:3px 8px;font-size:10px;" onclick="event.stopPropagation();moveTrelloCard(\'' + c.id + '\')">↔️ הזז</button>';
-                    html += '<a href="' + c.url + '" target="_blank" class="btn btn-secondary" style="padding:3px 8px;font-size:10px;" onclick="event.stopPropagation();">🔗 פתח</a>';
+                    html += '<button class="btn btn-secondary" style="padding:3px 8px;font-size:10px;" onclick="event.stopPropagation();moveTrelloCard(\'' + c.id + '\',\'' + (_trelloActiveBoardId||'') + '\')">↔️ הזז</button>';
+                    html += '<a href="' + c.url + '" target="_blank" class="btn btn-secondary" style="padding:3px 8px;font-size:10px;text-decoration:none;" onclick="event.stopPropagation();">🔗 פתח</a>';
                     html += '</div></div>';
                 });
                 html += '</div>';
@@ -1932,14 +1991,21 @@
             container.innerHTML = html;
         }
 
-        async function moveTrelloCard(cardId) {
-            const listName = prompt('שם הרשימה להזזה (לדוגמא: Done):');
+        async function moveTrelloCard(cardId, boardId) {
+            // Build list options from current board
+            const listOptions = _trelloBoardLists.map(l => l.name).join(' / ');
+            const listName = prompt('הזז לרשימה:\n' + listOptions);
             if (!listName) return;
+            const found = _trelloBoardLists.find(l => l.name.toLowerCase() === listName.trim().toLowerCase());
+            if (!found) { alert('רשימה לא נמצאה: ' + listName); return; }
             try {
-                const resp = await fetch('/dashboard/api/trello/move-card', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ cardId, listName }) });
+                const resp = await fetch('/dashboard/api/trello/move-card', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ cardId, listId: found.id, boardId })
+                });
                 const data = await resp.json();
                 if (!data.success) throw new Error(data.error);
-                loadTrelloBoardCards();
+                if (_trelloActiveBoardId) loadCardsForBoard(_trelloActiveBoardId);
             } catch (e) { alert('שגיאה: ' + e.message); }
         }
 
