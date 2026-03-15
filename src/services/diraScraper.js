@@ -61,6 +61,8 @@ async function queryDiraDirect(city, limit = 50) {
 function parseDiraItem(item, defaultCity) {
   const phone = item.phone || item.contactPhone || item.contact?.phone || null;
   const price = parseInt(String(item.price || item.askingPrice || '').replace(/\D/g, '')) || null;
+  const thumbnail = item.images?.[0]?.src || item.images?.[0]?.url ||
+    item.thumbnail || item.cover_image || item.image || item.img_url || null;
   return {
     source: 'dira',
     listing_id: String(item.id || item.adId || ''),
@@ -73,7 +75,8 @@ function parseDiraItem(item, defaultCity) {
     phone: cleanPhone(phone),
     contact_name: item.contactName || item.sellerName || null,
     url: item.url || (item.id ? `https://www.dira.co.il/item/${item.id}` : null),
-    description: (item.description || item.title || '').substring(0, 500)
+    description: (item.description || item.title || '').substring(0, 500),
+    thumbnail_url: thumbnail
   };
 }
 
@@ -162,16 +165,16 @@ async function saveListing(listing) {
     }
     await pool.query(
       `INSERT INTO listings (source, source_listing_id, address, city, asking_price,
-        rooms, area_sqm, floor, phone, contact_name, url, description_snippet,
+        rooms, area_sqm, floor, phone, contact_name, url, description_snippet, thumbnail_url,
         is_active, first_seen, last_seen, created_at, updated_at)
-       VALUES ('dira', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+       VALUES ('dira', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         TRUE, CURRENT_DATE, CURRENT_DATE, NOW(), NOW())
        ON CONFLICT DO NOTHING`,
       [
         sourceId, listing.address, listing.city, listing.price,
         listing.rooms, listing.area_sqm, listing.floor,
         listing.phone, listing.contact_name,
-        listing.url, listing.description
+        listing.url, listing.description, listing.thumbnail_url || null
       ]
     );
     return 'inserted';

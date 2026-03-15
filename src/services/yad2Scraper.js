@@ -176,6 +176,16 @@ function parseYad2Item(item, complex) {
   const isForeclosure = /כינוס|כונס|הוצל"פ|הוצלפ/i.test(text);
   const isInheritance = /ירושה|עיזבון/i.test(text);
 
+  // Extract thumbnail image URL from yad2 API response
+  const thumbnail =
+    item.images?.[0]?.src ||
+    item.images?.[0]?.url ||
+    item.cover_image ||
+    item.main_image ||
+    item.image ||
+    item.img_url ||
+    null;
+
   return {
     listing_id: item.id?.toString() || item.token,
     address,
@@ -188,6 +198,7 @@ function parseYad2Item(item, complex) {
     days_on_market: daysOnMarket,
     description: [item.title, item.info_text].filter(Boolean).join(' - ').substring(0, 500),
     url: item.id ? `https://www.yad2.co.il/item/${item.id}` : null,
+    thumbnail_url: thumbnail,
     is_urgent: isUrgent,
     is_foreclosure: isForeclosure,
     is_inheritance: isInheritance,
@@ -397,6 +408,7 @@ async function processListing(listing, complexId, complexCity) {
           url = COALESCE($11, url),
           phone = COALESCE(phone, $13),
           contact_name = COALESCE(contact_name, $14),
+          thumbnail_url = COALESCE(thumbnail_url, $15),
           updated_at = NOW()
         WHERE id = $12`,
         [
@@ -409,7 +421,8 @@ async function processListing(listing, complexId, complexCity) {
           listing.url,
           ex.id,
           updPhone,
-          listing.contact_name || null
+          listing.contact_name || null,
+          listing.thumbnail_url || null
         ]
       );
 
@@ -443,9 +456,9 @@ async function processListing(listing, complexId, complexCity) {
           address, city, first_seen, last_seen, days_on_market,
           original_price, description_snippet,
           has_urgent_keywords, urgent_keywords_found, is_foreclosure, is_inheritance,
-          phone, contact_name,
+          phone, contact_name, thumbnail_url,
           is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, CURRENT_DATE, $12, $13, $14, $15, $16, $17, $18, $19, $20, TRUE)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, CURRENT_DATE, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, TRUE)
         ON CONFLICT DO NOTHING
         RETURNING id`,
         [
@@ -458,7 +471,7 @@ async function processListing(listing, complexId, complexCity) {
           keywords.urgent_keywords_found,
           keywords.is_foreclosure || listing.is_foreclosure,
           keywords.is_inheritance || listing.is_inheritance,
-          phone, contactName
+          phone, contactName, listing.thumbnail_url || null
         ]
       );
 

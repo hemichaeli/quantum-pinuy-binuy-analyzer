@@ -291,3 +291,10 @@ CREATE TABLE IF NOT EXISTS dashboard_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_tasks_status ON dashboard_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_dashboard_tasks_due ON dashboard_tasks(due_date) WHERE due_date IS NOT NULL;
+
+-- ========================================================
+-- QUANTUM v5.6+ - Listing Thumbnail Images
+-- ========================================================
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS contact_name VARCHAR(200);
+CREATE INDEX IF NOT EXISTS idx_listings_thumbnail ON listings(id) WHERE thumbnail_url IS NOT NULL;

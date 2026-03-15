@@ -71,7 +71,9 @@ function parseWinwinItem(item) {
     phone: cleanPhone(phone),
     contact_name: item.contactName || item.agentName || null,
     url: item.url || (item.id ? `https://www.winwin.co.il/item/${item.id}` : null),
-    description: (item.description || item.title || '').substring(0, 500)
+    description: (item.description || item.title || '').substring(0, 500),
+    thumbnail_url: item.images?.[0]?.src || item.images?.[0]?.url ||
+      item.thumbnail || item.cover_image || item.image || item.img_url || null
   };
 }
 
@@ -166,16 +168,16 @@ async function saveListing(listing) {
 
     await pool.query(
       `INSERT INTO listings (source, source_listing_id, address, city, asking_price,
-        rooms, area_sqm, floor, phone, contact_name, url, description_snippet,
+        rooms, area_sqm, floor, phone, contact_name, url, description_snippet, thumbnail_url,
         is_active, first_seen, last_seen, created_at, updated_at)
-       VALUES ('winwin', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+       VALUES ('winwin', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         TRUE, CURRENT_DATE, CURRENT_DATE, NOW(), NOW())
        ON CONFLICT DO NOTHING`,
       [
         sourceId, listing.address, listing.city, listing.price,
         listing.rooms, listing.area_sqm, listing.floor,
         listing.phone, listing.contact_name,
-        listing.url, listing.description
+        listing.url, listing.description, listing.thumbnail_url || null
       ]
     );
     return 'inserted';

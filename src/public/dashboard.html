@@ -984,9 +984,12 @@
                     const avgPriceSqm = ad.avg_price_sqm_area ? '\u20AA' + parseInt(ad.avg_price_sqm_area).toLocaleString() + '/מ"ר' : null;
                     const perplexityNotes = ad.perplexity_public_notes && ad.perplexity_public_notes !== 'null' ? ad.perplexity_public_notes : null;
                     const isEnriched = !!ad.gemini_enriched_at;
-                    return '<div style="background:var(--bg-card);border-radius:10px;padding:14px;border:1px solid ' + (urgency ? urgencyColor : 'var(--border-subtle)') + ';display:flex;flex-direction:column;gap:7px;position:relative;">'
-                        + (urgency ? '<div style="position:absolute;top:-7px;right:10px;background:' + urgencyColor + ';color:#fff;font-size:10px;font-weight:700;padding:2px 9px;border-radius:10px;">⚡ ' + urgency + '</div>' : '')
-                        + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;' + (urgency ? 'margin-top:7px;' : '') + '">'
+                    const thumb = ad.thumbnail_url || null;
+                    return '<div style="background:var(--bg-card);border-radius:10px;overflow:hidden;border:1px solid ' + (urgency ? urgencyColor : 'var(--border-subtle)') + ';display:flex;flex-direction:column;gap:0;position:relative;">'
+                        + (urgency ? '<div style="position:absolute;top:6px;right:10px;background:' + urgencyColor + ';color:#fff;font-size:10px;font-weight:700;padding:2px 9px;border-radius:10px;z-index:2;">⚡ ' + urgency + '</div>' : '')
+                        + (thumb ? '<div style="width:100%;height:140px;overflow:hidden;background:#111;"><img src="' + thumb + '" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.parentElement.style.display=\'none\'"/></div>' : '')
+                        + '<div style="padding:14px;display:flex;flex-direction:column;gap:7px;' + (urgency && !thumb ? 'margin-top:7px;' : '') + '">'
+                        + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
                         + '<div style="font-weight:600;font-size:13px;color:var(--text-primary);line-height:1.3;flex:1;">' + title + '</div>'
                         + (ssi > 0 ? '<div style="background:rgba(0,0,0,0.3);border-radius:5px;padding:2px 7px;font-size:11px;font-weight:700;color:' + ssiColor + ';white-space:nowrap;">SSI ' + ssi + '</div>' : '')
                         + '</div>'
@@ -1016,6 +1019,7 @@
                         + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:var(--blue);font-size:11px;text-decoration:none;">' + ad.phone + '</a>' : '')
                         + (ad.url ? '<a href="' + ad.url + '" target="_blank" style="color:var(--blue);font-size:11px;text-decoration:none;">&#128279; פתח</a>' : '')
                         + '</div></div>'
+                        + '</div>'
                         + '</div>';
                 }).join('')
                 + '</div>';
