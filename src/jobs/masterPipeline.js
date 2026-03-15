@@ -592,7 +592,98 @@ async function runIAIAndRanking() {
   }
 }
 
-// ─── MAIN PIPELINE ORCHESTRATOR ──────────────────────────────────────────────
+// ─── PHASE 1c: LINK UNLINKED LISTINGS TO COMPLEXES BY ADDRESS ──────────────────────────────
+
+/**
+ * For every listing without a complex_id (yad1, dira, komo, winwin, etc.),
+ * try to match it to a complex by comparing the listing's city+address against
+ * each complex's city + addresses field (comma-separated street names).
+ *
+ * Match logic:
+ *   1. City must match (case-insensitive)
+ *   2. At least one street token from complex.addresses appears in listing.address
+ *
+ * Listings that match → UPDATE complex_id
+ * Listings that don’t match any complex → DELETE (they are irrelevant to pinuy-binuy)
+ */
+async function linkListingsToComplexes() {
+  // Load all complexes with their addresses
+  const complexesResult = await pool.query(
+    `SELECT id, city, addresses FROM complexes WHERE addresses IS NOT NULL AND addresses != ''`
+  );
+  const complexes = complexesResult.rows;
+
+  // Build a lookup: city (lowercase) → array of { id, streetTokens[] }
+  const cityMap = {};
+  for (const c of complexes) {
+    const cityKey = (c.city || '').trim().toLowerCase();
+    if (!cityKey) continue;
+    const streets = (c.addresses || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    if (streets.length === 0) continue;
+    if (!cityMap[cityKey]) cityMap[cityKey] = [];
+    cityMap[cityKey].push({ id: c.id, streets });
+  }
+
+  // Load all active listings without complex_id (non-yad2 sources)
+  const listingsResult = await pool.query(
+    `SELECT id, city, address FROM listings
+     WHERE complex_id IS NULL AND is_active = TRUE AND source != 'yad2'
+     LIMIT 5000`
+  );
+  const listings = listingsResult.rows;
+
+  let linked = 0;
+  let deleted = 0;
+  const toLink = [];   // { listingId, complexId }
+  const toDelete = []; // listingId[]
+
+  for (const listing of listings) {
+    const cityKey = (listing.city || '').trim().toLowerCase();
+    const addrLower = (listing.address || '').trim().toLowerCase();
+    const candidates = cityMap[cityKey] || [];
+
+    let matched = null;
+    for (const candidate of candidates) {
+      // Check if any street token appears in the listing address
+      const hit = candidate.streets.some(street => {
+        // Extract just the street name (first word or two) for fuzzy matching
+        const streetTokens = street.split(' ').filter(Boolean);
+        // At least the first meaningful token must appear
+        const mainToken = streetTokens.find(t => t.length > 2);
+        return mainToken && addrLower.includes(mainToken);
+      });
+      if (hit) { matched = candidate.id; break; }
+    }
+
+    if (matched) {
+      toLink.push({ listingId: listing.id, complexId: matched });
+    } else {
+      toDelete.push(listing.id);
+    }
+  }
+
+  // Batch UPDATE linked listings
+  for (const { listingId, complexId } of toLink) {
+    try {
+      await pool.query(`UPDATE listings SET complex_id = $1 WHERE id = $2`, [complexId, listingId]);
+      linked++;
+    } catch (e) { /* skip */ }
+  }
+
+  // Batch DELETE unmatched listings (irrelevant to pinuy-binuy)
+  if (toDelete.length > 0) {
+    await pool.query(
+      `DELETE FROM listings WHERE id = ANY($1::int[])`,
+      [toDelete]
+    );
+    deleted = toDelete.length;
+  }
+
+  logger.info(`[Phase1c] Linked ${linked} listings to complexes, deleted ${deleted} unmatched`);
+  return { linked, deleted, total: listings.length };
+}
+
+// ─── MAIN PIPELINE ORCHESTRATOR ────────────────────────────────────────────────
 
 async function runMasterPipeline(options = {}) {
   if (isRunning) {
@@ -640,6 +731,16 @@ async function runMasterPipeline(options = {}) {
       result.phase1b_phones = { enriched: 0, total: 0, error: phoneErr.message };
     }
 
+    // ── PHASE 1c: Link unlinked listings to complexes by address ──────────
+    logger.info('[MasterPipeline] PHASE 1c: Linking listings to complexes by address...');
+    try {
+      result.phase1c_linking = await linkListingsToComplexes();
+      logger.info(`[MasterPipeline] PHASE 1c complete: ${result.phase1c_linking.linked} linked, ${result.phase1c_linking.deleted} unmatched deleted`);
+    } catch (linkErr) {
+      logger.warn(`[MasterPipeline] PHASE 1c linking failed (non-fatal): ${linkErr.message}`);
+      result.phase1c_linking = { linked: 0, deleted: 0, error: linkErr.message };
+    }
+
     // ── PHASE 2: Statutory enrichment (Perplexity + Gemini) ───────────────
     logger.info('[MasterPipeline] PHASE 2: Statutory enrichment...');
     result.phase2_statutory = await runStatutoryEnrichment();
@@ -673,6 +774,7 @@ async function runMasterPipeline(options = {}) {
     const summary = `Pipeline complete in ${Math.round(result.duration_ms / 1000)}s: ` +
       `${result.phase1_scrapers.totalNew} new listings | ` +
       `${(result.phase1b_phones||{}).enriched||0} phones revealed | ` +
+      `${(result.phase1c_linking||{}).linked||0} linked to complexes | ` +
       `${result.phase2_statutory.enriched} statutory enriched | ` +
       `${result.phase3_synthesis.synthesized} synthesized | ` +
       `${(result.phase4b_ssi||{}).updated||0} SSI scored`;
