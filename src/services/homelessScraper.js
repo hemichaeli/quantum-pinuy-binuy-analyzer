@@ -11,6 +11,7 @@ const { logger } = require('./logger');
 
 const DELAY_MS = 4000;
 const PERPLEXITY_API = 'https://api.perplexity.ai/chat/completions';
+const { findMatchingComplex } = require('./complexMatcher');
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -148,6 +149,14 @@ function cleanPhone(phone) {
 
 async function saveListing(listing) {
   try {
+    // Only save listings that match a pinuy-binuy complex
+    const match = await findMatchingComplex(listing.address, listing.city);
+    if (!match) {
+      logger.debug(`[HomeLess] No complex match for: ${listing.address}, ${listing.city} — skipping`);
+      return 'skipped';
+    }
+    const complexId = match.complexId;
+
     const sourceId = listing.listing_id || `homeless-${listing.city}-${listing.address}-${listing.price}`;
     const existing = await pool.query(
       `SELECT id FROM listings WHERE source = 'homeless' AND source_listing_id = $1 LIMIT 1`,
@@ -157,9 +166,10 @@ async function saveListing(listing) {
     if (existing.rows.length > 0) {
       await pool.query(
         `UPDATE listings SET asking_price = COALESCE($1, asking_price),
-          last_seen = CURRENT_DATE, updated_at = NOW(), url = COALESCE($2, url)
-         WHERE id = $3`,
-        [listing.price, listing.url, existing.rows[0].id]
+          last_seen = CURRENT_DATE, updated_at = NOW(), url = COALESCE($2, url),
+          complex_id = COALESCE(complex_id, $3)
+         WHERE id = $4`,
+        [listing.price, listing.url, complexId, existing.rows[0].id]
       );
       return 'updated';
     }
@@ -167,17 +177,18 @@ async function saveListing(listing) {
     await pool.query(
       `INSERT INTO listings (source, source_listing_id, address, city, asking_price,
         rooms, area_sqm, floor, phone, contact_name, url, description_snippet,
-        is_active, first_seen, last_seen, created_at, updated_at)
+        complex_id, is_active, first_seen, last_seen, created_at, updated_at)
        VALUES ('homeless', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-        TRUE, CURRENT_DATE, CURRENT_DATE, NOW(), NOW())
+        $12, TRUE, CURRENT_DATE, CURRENT_DATE, NOW(), NOW())
        ON CONFLICT DO NOTHING`,
       [
         sourceId, listing.address, listing.city, listing.price,
         listing.rooms, listing.area_sqm, listing.floor,
         listing.phone, listing.contact_name,
-        listing.url, listing.description
+        listing.url, listing.description, complexId
       ]
     );
+    logger.debug(`[HomeLess] Saved listing for complex ${match.complexName}: ${listing.address}`);
     return 'inserted';
   } catch (err) {
     logger.warn(`[HomeLess] Save error: ${err.message}`);
