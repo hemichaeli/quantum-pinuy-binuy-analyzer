@@ -85,8 +85,9 @@ async function queryYad2Direct(complex) {
     return null;
   }
 
-  // Extract street names from addresses
-  const addresses = (complex.addresses || '').split(',').map(a => a.trim()).filter(Boolean);
+  // Extract street names from addresses (use both 'addresses' and 'address' fields)
+  const addressSrc = [complex.addresses || '', complex.address || ''].filter(Boolean).join(',');
+  const addresses = addressSrc.split(',').map(a => a.trim()).filter(Boolean);
   const streetNames = addresses.map(addr => {
     // Remove house numbers
     return addr.replace(/\d+/g, '').trim();
@@ -213,8 +214,9 @@ async function queryYad2Perplexity(complex) {
   const apiKey = process.env.PERPLEXITY_API_KEY;
   if (!apiKey) return null;
 
-  const addresses = complex.addresses || '';
-  const streets = addresses.split(',').map(a => a.trim()).filter(Boolean);
+  // Use both 'addresses' and 'address' fields for street list
+  const addressSrc = [complex.addresses || '', complex.address || ''].filter(Boolean).join(',');
+  const streets = addressSrc.split(',').map(a => a.trim()).filter(Boolean);
   const streetList = streets.length > 0 ? streets.join(', ') : complex.name;
 
   const prompt = `חפש מודעות למכירה פעילות באתר yad2.co.il עבור הכתובות הבאות ב${complex.city}:
@@ -583,7 +585,7 @@ async function createPriceDropAlert(listingId, complexId, dropPercent, currentPr
  */
 async function scanComplex(complexId) {
   const complexResult = await pool.query(
-    'SELECT id, name, city, addresses, iai_score FROM complexes WHERE id = $1',
+    'SELECT id, name, city, addresses, address, iai_score FROM complexes WHERE id = $1',
     [complexId]
   );
   if (complexResult.rows.length === 0) {
@@ -700,12 +702,13 @@ async function scanComplex(complexId) {
 }
 
 /**
- * Scan yad2 listings for all complexes
+ * Scan yad2 listings for ALL complexes (no limit) using parallel batches
  */
+const SCAN_BATCH_SIZE = 8; // parallel requests per batch
 async function scanAll(options = {}) {
-  const { staleOnly = true, limit = 50, city = null } = options;
+  const { staleOnly = true, limit = null, city = null } = options;
 
-  let query = 'SELECT id, name, city, addresses, iai_score FROM complexes WHERE 1=1';
+  let query = 'SELECT id, name, city, addresses, address, iai_score FROM complexes WHERE 1=1';
   const params = [];
   let paramCount = 0;
 
@@ -721,15 +724,18 @@ async function scanAll(options = {}) {
 
   // Prioritize high-IAI complexes
   query += ` ORDER BY iai_score DESC NULLS LAST`;
-  
-  paramCount++;
-  query += ` LIMIT $${paramCount}`;
-  params.push(limit);
+
+  // Only add LIMIT if explicitly specified (null = scan all)
+  if (limit !== null && limit !== undefined) {
+    paramCount++;
+    query += ` LIMIT $${paramCount}`;
+    params.push(limit);
+  }
 
   const complexes = await pool.query(query, params);
   const total = complexes.rows.length;
 
-  logger.info(`yad2 batch scan: ${total} complexes to scan`);
+  logger.info(`yad2 batch scan: ${total} complexes to scan (parallel batch size: ${SCAN_BATCH_SIZE})`);
 
   let succeeded = 0;
   let failed = 0;
@@ -740,28 +746,44 @@ async function scanAll(options = {}) {
   let totalWhatsAppAlerts = 0;
   const details = [];
 
-  for (const complex of complexes.rows) {
-    try {
-      const result = await scanComplex(complex.id);
-      succeeded++;
-      totalNew += result.newListings;
-      totalUpdated += result.updatedListings;
-      totalPriceChanges += result.priceChanges;
-      totalAlerts += result.priceDropAlerts || 0;
-      totalWhatsAppAlerts += result.whatsappAlertsSent || 0;
-      details.push({ status: 'ok', ...result });
+  // Process in parallel batches to speed up scanning
+  for (let i = 0; i < complexes.rows.length; i += SCAN_BATCH_SIZE) {
+    const batch = complexes.rows.slice(i, i + SCAN_BATCH_SIZE);
+    const batchNum = Math.floor(i / SCAN_BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(total / SCAN_BATCH_SIZE);
+    logger.info(`yad2 scanning batch ${batchNum}/${totalBatches} (complexes ${i + 1}-${Math.min(i + SCAN_BATCH_SIZE, total)} of ${total})`);
 
-      await new Promise(r => setTimeout(r, DELAY_BETWEEN_REQUESTS));
-    } catch (err) {
-      failed++;
-      details.push({
-        status: 'error',
-        complex: complex.name,
-        city: complex.city,
-        error: err.message
-      });
-      logger.warn(`yad2 scan failed for ${complex.name}`, { error: err.message });
-      await new Promise(r => setTimeout(r, 1000));
+    const batchResults = await Promise.allSettled(
+      batch.map(complex => scanComplex(complex.id))
+    );
+
+    for (let j = 0; j < batchResults.length; j++) {
+      const br = batchResults[j];
+      const complex = batch[j];
+      if (br.status === 'fulfilled') {
+        const result = br.value;
+        succeeded++;
+        totalNew += result.newListings;
+        totalUpdated += result.updatedListings;
+        totalPriceChanges += result.priceChanges;
+        totalAlerts += result.priceDropAlerts || 0;
+        totalWhatsAppAlerts += result.whatsappAlertsSent || 0;
+        details.push({ status: 'ok', ...result });
+      } else {
+        failed++;
+        details.push({
+          status: 'error',
+          complex: complex.name,
+          city: complex.city,
+          error: br.reason?.message || 'unknown error'
+        });
+        logger.warn(`yad2 scan failed for ${complex.name}`, { error: br.reason?.message });
+      }
+    }
+
+    // Delay between batches to avoid rate limiting
+    if (i + SCAN_BATCH_SIZE < complexes.rows.length) {
+      await new Promise(r => setTimeout(r, 2000));
     }
   }
 
