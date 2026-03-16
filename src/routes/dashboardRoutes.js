@@ -101,7 +101,7 @@ router.get('/listings', async (req, res) => {
         l.id, l.address, l.title, l.city, l.rooms, l.asking_price, l.area_sqm,
         l.ssi_score, l.message_status, l.contact_attempts,
         l.last_message_sent_at, l.last_reply_at, l.deal_status, l.source,
-        l.phone, l.contact_name, l.created_at,
+        l.phone, l.contact_name, l.thumbnail_url, l.created_at,
         c.name   AS complex_name,
         c.city   AS complex_city,
         c.slug   AS complex_slug,
