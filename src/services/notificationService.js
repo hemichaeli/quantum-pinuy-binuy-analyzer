@@ -130,6 +130,32 @@ class NotificationService {
       reason: complex.reason || 'ציון IAI גבוה'
     });
   }
+
+  // Compatibility shim — used by missedScanDetector, scanWatchdog, weeklyScanner
+  isConfigured() {
+    return !!(process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY);
+  }
+
+  async sendEmail(to, subject, html) {
+    try {
+      const axios = require('axios');
+      const apiKey = process.env.RESEND_API_KEY;
+      if (!apiKey) return { sent: false, error: 'RESEND_API_KEY not set' };
+      const from = process.env.EMAIL_FROM || 'QUANTUM <onboarding@resend.dev>';
+      const res = await axios.post('https://api.resend.com/emails',
+        { from, to: [to], subject, html },
+        { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, timeout: 15000 }
+      );
+      return { sent: true, id: res.data?.id };
+    } catch (e) {
+      return { sent: false, error: e.message };
+    }
+  }
+
+  async sendPendingAlerts() {
+    // No-op shim — alerts are handled by morningReportService
+    return { sent: 0 };
+  }
 }
 
 // Singleton export
