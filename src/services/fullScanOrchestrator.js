@@ -29,10 +29,12 @@ function sleep(ms) {
 async function runYad2Scan() {
   try {
     const yad2 = require('./yad2Scraper');
-    logger.info('[FullScan] Starting yad2 scan...');
-    const result = await yad2.scanAll({ staleOnly: false });
-    logger.info(`[FullScan] yad2: ${result.totalNew} new, ${result.totalUpdated} updated`);
-    return { source: 'yad2', success: true, new: result.totalNew || 0, updated: result.totalUpdated || 0 };
+    logger.info('[FullScan] Starting yad2 city-based scan (40 cities instead of 762 complexes)...');
+    // scanAllByCities: fetches all listings per city, matches to complexes via complexMatcher
+    // Reduces scan time from ~70 minutes to ~1-2 minutes
+    const result = await yad2.scanAllByCities({ staleOnly: false });
+    logger.info(`[FullScan] yad2: ${result.totalNew} new, ${result.totalUpdated} updated, ${result.citiesScanned} cities, ${result.totalListingsFound} listings fetched`);
+    return { source: 'yad2', success: true, new: result.totalNew || 0, updated: result.totalUpdated || 0, cities: result.citiesScanned, listingsFetched: result.totalListingsFound };
   } catch (err) {
     logger.error(`[FullScan] yad2 failed: ${err.message}`);
     return { source: 'yad2', success: false, error: err.message };

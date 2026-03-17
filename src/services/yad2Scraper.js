@@ -24,39 +24,70 @@ const PERPLEXITY_API = 'https://api.perplexity.ai/chat/completions';
 const DELAY_BETWEEN_REQUESTS = 3500; // 3.5s between requests
 const MAX_RETRIES = 2;
 
-// City code mapping for yad2 API
+// City code mapping for yad2 API (CBS settlement codes - verified from data.gov.il)
 const CITY_CODES = {
+  // Tel Aviv area
   'תל אביב יפו': '5000',
+  'תל אביב - יפו': '5000',
   'תל אביב': '5000',
   'רמת גן': '8600',
   'גבעתיים': '6300',
+  'בני ברק': '6100',
   'חולון': '6600',
   'בת ים': '6200',
+  // Center
   'ראשון לציון': '8300',
   'פתח תקווה': '7900',
-  'בני ברק': '6100',
   'הרצליה': '6400',
   'רעננה': '8700',
   'כפר סבא': '6900',
-  'נתניה': '7400',
-  'חיפה': '4000',
-  'באר שבע': '9000',
-  'ירושלים': '3000',
-  'אשדוד': '70',
-  'אשקלון': '7100',
+  'הוד השרון': '9700',
+  'רמת השרון': '2650',
+  'כוכב יאיר': '1224',
+  'כוכב יאיר-צור יגאל': '1224',
+  'ראש העין': '2640',
+  'אור יהודה': '2400',
+  'יהוד': '9400',
+  'יהוד-מונוסון': '9400',
+  'נס ציונה': '7200',
   'רחובות': '8400',
+  'יבנה': '2660',
+  'באר יעקב': '2530',
   'לוד': '7000',
   'רמלה': '8500',
   'מודיעין': '1200',
-  'נס ציונה': '7300',
-  'ראש העין': '2640',
+  'מודיעין-מכבים-רעות': '1200',
+  // North coast
+  'נתניה': '7400',
   'חדרה': '6500',
+  'טירת כרמל': '2100',
+  // Haifa area
+  'חיפה': '4000',
+  'קריית אתא': '6800',
+  'קריית ביאליק': '9500',
+  'קריית ים': '9600',
+  'קריית מוצקין': '8200',
+  'קריות': '9600',  // fallback to קריית ים
+  'קריית אונו': '2620',
+  'נשר': '2500',
+  // Jerusalem area
+  'ירושלים': '3000',
+  'מבשרת ציון': '1015',
+  'מעלה אדומים': '3616',
+  // South
+  'אשדוד': '70',
+  'אשקלון': '7100',
+  'באר שבע': '9000',
+  // Other
   'עפולה': '7800',
   'נצרת עילית': '1061',
-  'קריית אתא': '8200',
-  'קריית ביאליק': '9200',
-  'קריית ים': '6800',
-  'קריית מוצקין': '8000'
+  'בית שמש': '2610',
+  // Krayot (with alternate spellings - קרית vs קריית)
+  'קרית אתא': '6800',
+  'קרית ביאליק': '9500',
+  'קרית ים': '9600',
+  'קרית מוצקין': '8200',
+  'קרית אונו': '2620'
 };
 
 /**
@@ -802,9 +833,185 @@ async function scanAll(options = {}) {
   };
 }
 
+/**
+ * NEW: Scan yad2 by city (40 API calls) instead of by complex (762 calls).
+ * For each city that has pinuy-binuy complexes, fetch ALL listings from yad2,
+ * then use complexMatcher to identify which listings belong to a complex.
+ * This reduces scan time from ~70 minutes to ~1 minute.
+ */
+async function scanAllByCities(options = {}) {
+  const { staleOnly = false } = options;
+  const { findMatchingComplex, loadComplexCache } = require('./complexMatcher');
+
+  // Load complex cache
+  await loadComplexCache();
+
+  // Get all unique cities that have complexes
+  let cityQuery = 'SELECT DISTINCT city FROM complexes WHERE city IS NOT NULL';
+  if (staleOnly) {
+    cityQuery += " AND (last_yad2_scan IS NULL OR last_yad2_scan < NOW() - INTERVAL '3 days')";
+  }
+  const cityResult = await pool.query(cityQuery);
+  const cities = cityResult.rows.map(r => r.city).filter(Boolean);
+
+  logger.info(`[yad2-city-scan] Scanning ${cities.length} cities for pinuy-binuy listings`);
+
+  let totalNew = 0;
+  let totalUpdated = 0;
+  let totalPriceChanges = 0;
+  let totalListingsFound = 0;
+  let citiesScanned = 0;
+  let citiesWithResults = 0;
+  const cityResults = [];
+
+  // Process cities in parallel batches of 5
+  const CITY_BATCH_SIZE = 5;
+  for (let i = 0; i < cities.length; i += CITY_BATCH_SIZE) {
+    const batch = cities.slice(i, i + CITY_BATCH_SIZE);
+    const batchResults = await Promise.allSettled(
+      batch.map(async (cityName) => {
+        const cityCode = getCityCode(cityName);
+        if (!cityCode) {
+          logger.debug(`[yad2-city-scan] No city code for ${cityName}, skipping`);
+          return { city: cityName, skipped: true, reason: 'no_city_code' };
+        }
+
+        // Fetch all listings for this city from yad2 API (paginated)
+        const allListings = [];
+        let page = 1;
+        let hasMore = true;
+
+        while (hasMore && page <= 10) { // max 10 pages = 500 listings per city
+          try {
+            const response = await axios.get(YAD2_API_BASE, {
+              params: {
+                city: cityCode,
+                propertyGroup: 'apartments',
+                dealType: 'forsale',
+                page,
+                limit: 50
+              },
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'he-IL,he;q=0.9,en;q=0.8',
+                'Referer': 'https://www.yad2.co.il/realestate/forsale',
+                'Origin': 'https://www.yad2.co.il'
+              },
+              timeout: 15000
+            });
+
+            const feedItems = response.data?.feed?.feed_items || [];
+            const ads = feedItems.filter(item => item.type === 'ad' && item.id);
+            allListings.push(...ads);
+
+            // Check if there are more pages
+            const totalCount = response.data?.feed?.total_items || 0;
+            hasMore = allListings.length < totalCount && ads.length === 50;
+            page++;
+
+            if (ads.length < 50) hasMore = false;
+          } catch (err) {
+            logger.warn(`[yad2-city-scan] API error for ${cityName} page ${page}: ${err.message}`);
+            hasMore = false;
+          }
+        }
+
+        logger.info(`[yad2-city-scan] ${cityName}: fetched ${allListings.length} listings from yad2`);
+
+        // For each listing, try to match it to a pinuy-binuy complex
+        let cityNew = 0;
+        let cityUpdated = 0;
+        let cityMatched = 0;
+
+        for (const item of allListings) {
+          const address = [
+            item.street || item.street_name || '',
+            item.house_number || item.HomeNumber || ''
+          ].filter(Boolean).join(' ').trim() || item.address_more?.text || '';
+
+          if (!address) continue;
+
+          // Find matching complex
+          const match = await findMatchingComplex(address, cityName);
+          if (!match) continue;
+
+          cityMatched++;
+          // Parse the listing with the matched complex context
+          const complexRow = { name: match.complexName, city: cityName, addresses: '', address: '' };
+          const listing = parseYad2Item(item, complexRow);
+
+          const result = await processListing(listing, match.complexId, cityName);
+          if (result.action === 'inserted') {
+            cityNew++;
+            // Trigger alerts for new listings
+            if (result.id) {
+              const complexInfo = await pool.query('SELECT iai_score FROM complexes WHERE id = $1', [match.complexId]);
+              const iai = complexInfo.rows[0]?.iai_score;
+              await createNewListingAlert(result.id, match.complexId, listing, iai);
+            }
+          } else if (result.action === 'updated') {
+            cityUpdated++;
+          }
+        }
+
+        // Update last_yad2_scan for all complexes in this city
+        await pool.query(
+          "UPDATE complexes SET last_yad2_scan = NOW() WHERE city = $1",
+          [cityName]
+        );
+
+        return {
+          city: cityName,
+          cityCode,
+          listingsFetched: allListings.length,
+          listingsMatched: cityMatched,
+          newListings: cityNew,
+          updatedListings: cityUpdated
+        };
+      })
+    );
+
+    for (const br of batchResults) {
+      if (br.status === 'fulfilled') {
+        const r = br.value;
+        citiesScanned++;
+        if (!r.skipped) {
+          totalListingsFound += r.listingsFetched || 0;
+          totalNew += r.newListings || 0;
+          totalUpdated += r.updatedListings || 0;
+          if ((r.listingsMatched || 0) > 0) citiesWithResults++;
+        }
+        cityResults.push(r);
+      } else {
+        logger.warn(`[yad2-city-scan] City batch error: ${br.reason?.message}`);
+      }
+    }
+
+    // Small delay between city batches
+    if (i + CITY_BATCH_SIZE < cities.length) {
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+
+  logger.info(`[yad2-city-scan] Complete: ${citiesScanned} cities, ${totalListingsFound} listings fetched, ${totalNew} new, ${totalUpdated} updated`);
+
+  return {
+    total: cities.length,
+    citiesScanned,
+    citiesWithResults,
+    totalListingsFound,
+    totalNew,
+    totalUpdated,
+    totalPriceChanges,
+    cityResults
+  };
+}
+
 module.exports = {
   scanComplex,
   scanAll,
+  scanAllByCities,
   queryYad2Listings,
   queryYad2Direct,
   queryYad2Perplexity,
