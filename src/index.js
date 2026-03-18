@@ -15,7 +15,7 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const VERSION = '4.99.0';
-const BUILD = '2026-03-12-v4.99.0-facebook-groups';
+const BUILD = '2026-03-18-v4.99.1-dedup-upsert';
 
 async function runAutoMigrations() {
   try {
@@ -290,7 +290,7 @@ async function checkVapiKeytermsSupport() {
 app.get('/health', async (req, res) => {
   try {
     const result = await pool.query('SELECT COUNT(*) FROM complexes');
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), db: 'connected', complexes: parseInt(result.rows[0].count), version: VERSION });
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), db: 'connected', complexes: parseInt(result.rows[0].count), version: VERSION, build: BUILD });
   } catch (err) {
     res.status(503).json({ status: 'error', db: 'disconnected', error: err.message, version: VERSION });
   }
