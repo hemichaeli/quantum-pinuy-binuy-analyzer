@@ -182,7 +182,12 @@ async function saveListing(listing) {
         complex_id, is_active, first_seen, last_seen, created_at, updated_at)
        VALUES ('winwin', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         $13, TRUE, CURRENT_DATE, CURRENT_DATE, NOW(), NOW())
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT (source, LOWER(TRIM(address)), LOWER(TRIM(city)))
+       DO UPDATE SET last_seen=CURRENT_DATE, asking_price=COALESCE(EXCLUDED.asking_price, listings.asking_price),
+         phone=COALESCE(EXCLUDED.phone, listings.phone),
+         url=COALESCE(EXCLUDED.url, listings.url),
+         complex_id=COALESCE(EXCLUDED.complex_id, listings.complex_id),
+         updated_at=NOW()`,
       [
         sourceId, listing.address, listing.city, listing.price,
         listing.rooms, listing.area_sqm, listing.floor,

@@ -79,6 +79,16 @@ async function runEnrichmentMigration() {
     }
   } catch (err) { logger.error('[MIGRATIONS] Enrichment migration failed:', err.message); }
 }
+async function runDeduplicateMigration() {
+  try {
+    const migFile = path.join(__dirname, 'db', 'migrations', '010_deduplicate_listings.sql');
+    if (fs.existsSync(migFile)) {
+      const sql = fs.readFileSync(migFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] Deduplicate listings (010) applied');
+    }
+  } catch (err) { logger.error('[MIGRATIONS] Deduplicate migration failed:', err.message); }
+}
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -344,6 +354,7 @@ async function start() {
   await runCampaignsMigration();
   await runEventsMigration();
   await runEnrichmentMigration();
+  await runDeduplicateMigration();
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();
