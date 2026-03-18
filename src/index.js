@@ -89,6 +89,16 @@ async function runDeduplicateMigration() {
     }
   } catch (err) { logger.error('[MIGRATIONS] Deduplicate migration failed:', err.message); }
 }
+async function runRededuplicateMigration() {
+  try {
+    const migFile = path.join(__dirname, 'db', 'migrations', '011_rededuplicate_listings.sql');
+    if (fs.existsSync(migFile)) {
+      const sql = fs.readFileSync(migFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] Re-deduplicate listings (011) applied');
+    }
+  } catch (err) { logger.error('[MIGRATIONS] Re-deduplicate migration failed:', err.message); }
+}
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -355,6 +365,7 @@ async function start() {
   await runEventsMigration();
   await runEnrichmentMigration();
   await runDeduplicateMigration();
+  await runRededuplicateMigration();
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();
