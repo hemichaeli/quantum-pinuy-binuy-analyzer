@@ -15,7 +15,7 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const VERSION = '4.99.0';
-const BUILD = '2026-03-18-v4.99.4-staleonly-fix';
+const BUILD = '2026-03-18-v4.99.5-github-backup';
 
 async function runAutoMigrations() {
   try {
@@ -231,6 +231,19 @@ function loadBackupRoutes() {
     routeLoadResults.push({ path: '/api/backup', status: 'failed', error: err.message, file: 'services/backupService.js' });
     logger.error('[BACKUP API] Failed to load backup API routes:', err.message);
   }
+  // GitHub backup routes
+  try {
+    const { createBackup, listBackups } = require('./services/githubBackupService');
+    app.post('/api/backup/github/create', async (req, res) => {
+      try { const result = await createBackup(); res.json(result); }
+      catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+    app.get('/api/backup/github/list', async (req, res) => {
+      try { const backups = await listBackups(); res.json({ success: true, count: backups.length, backups }); }
+      catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    });
+    logger.info('[BACKUP API] GitHub backup routes loaded');
+  } catch (err) { logger.warn('[BACKUP API] GitHub routes failed:', err.message); }
 }
 
 function loadAutoContactRoutes() {
@@ -467,6 +480,9 @@ async function start() {
   } catch (e) {}
 
   try { const { initializeBackupService } = require('./services/backupService'); await initializeBackupService(); } catch (e) {}
+
+  // GitHub-based hourly backup (replaces broken pg_dump backup)
+  try { const { initializeGithubBackup } = require('./services/githubBackupService'); await initializeGithubBackup(); } catch (e) { logger.warn('[Backup] GitHub backup init failed:', e.message); }
 
   try { const { processReminderQueue } = require('./jobs/reminderJob'); const cron = require('node-cron');
     cron.schedule('* * * * *', async () => { try { await processReminderQueue(); } catch (e) {} });
