@@ -22,6 +22,55 @@ const pool = require('../db/pool');
 const axios = require('axios');
 
 // ─────────────────────────────────────────────
+// BROWSER FACTORY (puppeteer-extra + stealth + 2captcha)
+// ─────────────────────────────────────────────
+async function launchStealthBrowser() {
+  const puppeteer = require('puppeteer-extra');
+  const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+  puppeteer.use(StealthPlugin());
+  return puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--window-size=1280,800'
+    ]
+  });
+}
+
+// Solve image/text captcha using 2captcha service
+async function solveCaptchaImage(base64Image) {
+  const apiKey = process.env.TWOCAPTCHA_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const { Solver } = require('2captcha-ts');
+    const solver = new Solver(apiKey);
+    const result = await solver.imageCaptcha({ body: base64Image });
+    return result.data;
+  } catch (err) {
+    logger.warn('[2captcha] Failed to solve captcha:', err.message);
+    return null;
+  }
+}
+
+// Solve reCAPTCHA v2 using 2captcha service
+async function solveRecaptchaV2(siteKey, pageUrl) {
+  const apiKey = process.env.TWOCAPTCHA_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const { Solver } = require('2captcha-ts');
+    const solver = new Solver(apiKey);
+    const result = await solver.recaptcha({ googlekey: siteKey, pageurl: pageUrl });
+    return result.data;
+  } catch (err) {
+    logger.warn('[2captcha] Failed to solve reCAPTCHA:', err.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────
 // MAIN ENTRY POINT
 // ─────────────────────────────────────────────
 async function publishListing(listingId, platforms) {
@@ -168,13 +217,9 @@ async function publishToYad2(listing) {
   }
 
   try {
-    const puppeteer = require('puppeteer');
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
+    const browser = await launchStealthBrowser();
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.setViewport({ width: 1280, height: 800 });
 
     try {
       // Login
@@ -268,20 +313,12 @@ async function publishToYad2(listing) {
       throw err;
     }
   } catch (err) {
-    if (err.code === 'MODULE_NOT_FOUND') {
-      return { 
-        success: false, 
-        error: 'puppeteer not installed. Run: npm install puppeteer',
-        platform: 'yad2',
-        setup_required: true
-      };
-    }
     return { success: false, error: err.message, platform: 'yad2' };
   }
 }
 
 // ─────────────────────────────────────────────
-// HOMELESS (Puppeteer)
+// HOMELESS (Puppeteer + stealth + 2captcha)
 // ─────────────────────────────────────────────
 async function publishToHomeless(listing) {
   const email = process.env.HOMELESS_EMAIL;
@@ -297,37 +334,71 @@ async function publishToHomeless(listing) {
   }
 
   try {
-    const puppeteer = require('puppeteer');
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
+    const browser = await launchStealthBrowser();
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    await page.setViewport({ width: 1280, height: 800 });
 
     try {
-      await page.goto('https://www.homeless.co.il/login', { waitUntil: 'networkidle2', timeout: 30000 });
+      // Login to homeless private zone
+      await page.goto('https://www.homeless.co.il/privatezone/', { waitUntil: 'networkidle2', timeout: 30000 });
       
-      // Login
-      const emailInput = await page.$('input[type="email"], input[name="email"], input[placeholder*="מייל"]');
+      // Check for captcha and solve if present
+      const captchaFrame = await page.$('iframe[src*="recaptcha"]');
+      if (captchaFrame) {
+        logger.info('[Publisher] Homeless: reCAPTCHA detected, solving via 2captcha...');
+        const siteKey = await page.evaluate(() => {
+          const el = document.querySelector('[data-sitekey]');
+          return el ? el.getAttribute('data-sitekey') : null;
+        });
+        if (siteKey) {
+          const token = await solveRecaptchaV2(siteKey, page.url());
+          if (token) {
+            await page.evaluate((t) => {
+              const el = document.querySelector('[name="g-recaptcha-response"]');
+              if (el) el.value = t;
+              // Also try callback
+              if (window.grecaptcha && window.grecaptcha.getResponse) {
+                const form = document.querySelector('form');
+                if (form) form.submit();
+              }
+            }, token);
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+          }
+        }
+      }
+
+      // Login form
+      const emailInput = await page.$('input[type="email"], input[name="email"], #email');
       if (emailInput) {
+        await emailInput.click({ clickCount: 3 });
         await emailInput.type(email);
         const passInput = await page.$('input[type="password"]');
-        if (passInput) await passInput.type(password);
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        if (passInput) {
+          await passInput.click({ clickCount: 3 });
+          await passInput.type(password);
+        }
+        await page.click('input[type="submit"], button[type="submit"]');
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
       }
 
       // Navigate to new listing
-      await page.goto('https://www.homeless.co.il/publish', { waitUntil: 'networkidle2', timeout: 30000 });
+      await page.goto('https://www.homeless.co.il/postad/', { waitUntil: 'networkidle2', timeout: 30000 });
+
+      // Select real estate category if needed
+      const catLink = await page.$('a[href*="rent"], a[href*="sale"]');
+      if (catLink) await catLink.click();
+      await page.waitForTimeout(1000);
 
       // Fill basic fields
       const title = `${listing.rooms ? listing.rooms + ' חדרים' : 'דירה'} ב${listing.address || listing.city}`;
-      const titleInput = await page.$('input[name="title"], input[placeholder*="כותרת"]');
-      if (titleInput) await titleInput.type(title);
+      const titleInput = await page.$('input[name="title"], input[id*="title"], input[placeholder*="כותרת"]');
+      if (titleInput) {
+        await titleInput.click({ clickCount: 3 });
+        await titleInput.type(title);
+      }
 
       if (listing.asking_price) {
-        const priceInput = await page.$('input[name="price"]');
+        const priceInput = await page.$('input[name="price"], input[id*="price"]');
         if (priceInput) {
           await priceInput.click({ clickCount: 3 });
           await priceInput.type(String(listing.asking_price));
@@ -339,10 +410,23 @@ async function publishToHomeless(listing) {
         if (descInput) await descInput.type(listing.description);
       }
 
-      const submitBtn = await page.$('button[type="submit"]');
+      // Check for captcha before submit
+      const submitCaptcha = await page.$('[data-sitekey]');
+      if (submitCaptcha) {
+        const siteKey = await page.evaluate(() => document.querySelector('[data-sitekey]').getAttribute('data-sitekey'));
+        const token = await solveRecaptchaV2(siteKey, page.url());
+        if (token) {
+          await page.evaluate((t) => {
+            const el = document.querySelector('[name="g-recaptcha-response"]');
+            if (el) el.value = t;
+          }, token);
+        }
+      }
+
+      const submitBtn = await page.$('input[type="submit"], button[type="submit"]');
       if (submitBtn) {
         await submitBtn.click();
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
       }
 
       const url = page.url();
@@ -354,9 +438,6 @@ async function publishToHomeless(listing) {
       throw err;
     }
   } catch (err) {
-    if (err.code === 'MODULE_NOT_FOUND') {
-      return { success: false, error: 'puppeteer not installed', platform: 'homeless', setup_required: true };
-    }
     return { success: false, error: err.message, platform: 'homeless' };
   }
 }
@@ -378,13 +459,9 @@ async function publishToMadlan(listing) {
   }
 
   try {
-    const puppeteer = require('puppeteer');
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
+    const browser = await launchStealthBrowser();
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    await page.setViewport({ width: 1280, height: 800 });
 
     try {
       await page.goto('https://www.madlan.co.il/user/login', { waitUntil: 'networkidle2', timeout: 30000 });
@@ -428,9 +505,6 @@ async function publishToMadlan(listing) {
       throw err;
     }
   } catch (err) {
-    if (err.code === 'MODULE_NOT_FOUND') {
-      return { success: false, error: 'puppeteer not installed', platform: 'madlan', setup_required: true };
-    }
     return { success: false, error: err.message, platform: 'madlan' };
   }
 }
@@ -452,13 +526,9 @@ async function publishToWinwin(listing) {
   }
 
   try {
-    const puppeteer = require('puppeteer');
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
+    const browser = await launchStealthBrowser();
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    await page.setViewport({ width: 1280, height: 800 });
 
     try {
       await page.goto('https://www.winwin.co.il/login', { waitUntil: 'networkidle2', timeout: 30000 });
@@ -502,9 +572,6 @@ async function publishToWinwin(listing) {
       throw err;
     }
   } catch (err) {
-    if (err.code === 'MODULE_NOT_FOUND') {
-      return { success: false, error: 'puppeteer not installed', platform: 'winwin', setup_required: true };
-    }
     return { success: false, error: err.message, platform: 'winwin' };
   }
 }
@@ -514,11 +581,11 @@ async function publishToWinwin(listing) {
 // ─────────────────────────────────────────────
 function getPlatformStatus() {
   return {
-    yad2:     { configured: !!(process.env.YAD2_EMAIL && process.env.YAD2_PASSWORD),     method: 'puppeteer' },
-    homeless: { configured: !!(process.env.HOMELESS_EMAIL && process.env.HOMELESS_PASSWORD), method: 'puppeteer' },
-    madlan:   { configured: !!(process.env.MADLAN_EMAIL && process.env.MADLAN_PASSWORD),   method: 'puppeteer' },
-    winwin:   { configured: !!(process.env.WINWIN_EMAIL && process.env.WINWIN_PASSWORD),   method: 'puppeteer' },
-    facebook: { configured: !!process.env.APIFY_API_TOKEN,                                 method: 'apify' }
+    yad2:     { configured: !!(process.env.YAD2_EMAIL && process.env.YAD2_PASSWORD),     method: 'puppeteer', captcha: !!process.env.TWOCAPTCHA_API_KEY },
+    homeless: { configured: !!(process.env.HOMELESS_EMAIL && process.env.HOMELESS_PASSWORD), method: 'puppeteer', captcha: !!process.env.TWOCAPTCHA_API_KEY },
+    madlan:   { configured: !!(process.env.MADLAN_EMAIL && process.env.MADLAN_PASSWORD),   method: 'puppeteer', captcha: !!process.env.TWOCAPTCHA_API_KEY },
+    winwin:   { configured: !!(process.env.WINWIN_EMAIL && process.env.WINWIN_PASSWORD),   method: 'puppeteer', captcha: !!process.env.TWOCAPTCHA_API_KEY },
+    facebook: { configured: !!process.env.APIFY_API_TOKEN,                                 method: 'apify',     captcha: false }
   };
 }
 
