@@ -492,25 +492,7 @@ async function start() {
     logger.info('Reminder queue: ACTIVE (includes no-reply flow)');
   } catch (e) {}
 
-  try {
-    const cron = require('node-cron');
-    const axios = require('axios');
-    cron.schedule('30 5 * * *', async () => {
-      try {
-        logger.info('[MorningReport] Triggering daily morning report...');
-        const result = await axios.post(`http://localhost:${PORT}/api/morning/send`, {}, { timeout: 60000 });
-        if (result.data && result.data.success) {
-          const wa = result.data.whatsapp || {};
-          logger.info(`[MorningReport] SUCCESS. WhatsApp: ${wa.sent || 0}/${wa.total || 0}`);
-        } else {
-          logger.warn('[MorningReport] Report returned failure:', result.data && result.data.error);
-        }
-      } catch (e) {
-        logger.error('[MorningReport] Cron error:', e.message);
-      }
-    }, { timezone: 'UTC' });
-    logger.info('[MorningReport] ACTIVE - daily at 07:30 Israel time (05:30 UTC)');
-  } catch (e) { logger.warn('[MorningReport] Failed to start cron:', e.message); }
+  // NOTE: Morning report is scheduled in quantumScheduler.js (07:30 Asia/Jerusalem) - no duplicate here
   try { require('./jobs/weeklyScanner').startScheduler(); } catch (e) {}
   try { require('./jobs/stuckScanWatcher').startWatcher(); } catch (e) {}
   try { require('./jobs/discoveryScheduler').startDiscoveryScheduler(); } catch (e) {}
