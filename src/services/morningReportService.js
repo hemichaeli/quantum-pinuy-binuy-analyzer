@@ -254,6 +254,42 @@ function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats,
  */
 async function sendMorningReport() {
   try {
+    // ── Skip on Friday, Saturday, and Israeli holidays ──
+    const { shouldSkipToday } = require('../config/israeliHolidays');
+    const skipCheck = shouldSkipToday();
+    if (skipCheck.shouldSkip) {
+      logger.info(`[MorningReport] SKIPPED: ${skipCheck.reason}`);
+      return { success: false, skipped: true, reason: skipCheck.reasonHe };
+    }
+
+    // ── Deduplication guard: only send once per calendar day ──
+    const todayIL = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+    try {
+      // Create table if it doesn't exist
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS morning_report_log (
+          id SERIAL PRIMARY KEY,
+          sent_date DATE UNIQUE NOT NULL,
+          sent_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      const { rows } = await pool.query(
+        `SELECT id FROM morning_report_log WHERE sent_date = $1 LIMIT 1`,
+        [todayIL]
+      );
+      if (rows.length > 0) {
+        logger.info(`[MorningReport] Already sent today (${todayIL}) - skipping duplicate`);
+        return { success: false, skipped: true, reason: `כבר נשלח היום (${todayIL})` };
+      }
+      // Mark as sent immediately to prevent race condition
+      await pool.query(
+        `INSERT INTO morning_report_log (sent_date, sent_at) VALUES ($1, NOW()) ON CONFLICT (sent_date) DO NOTHING`,
+        [todayIL]
+      );
+    } catch (dbErr) {
+      logger.warn('[MorningReport] Dedup check failed (continuing):', dbErr.message);
+    }
+
     logger.info('[MorningReport] Generating daily morning intelligence report...');
 
     // Fetch data in parallel
