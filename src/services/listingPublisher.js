@@ -386,10 +386,57 @@ async function publishToYad2(listing) {
     await page.mouse.move(600, 400);
     await delay(300);
 
-    await page.goto('https://www.yad2.co.il/account/login', {
-      waitUntil: 'networkidle2',
-      timeout: 60000
+    // Try to navigate to login page - yad2 uses different URLs
+    const loginUrls = [
+      'https://www.yad2.co.il/auth/login',
+      'https://www.yad2.co.il/account/login',
+      'https://www.yad2.co.il/login'
+    ];
+    let loginLoaded = false;
+    for (const loginUrl of loginUrls) {
+      await page.goto(loginUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 45000
+      }).catch(() => {});
+      await delay(3000);
+      const title = await page.title();
+      const url = page.url();
+      logger.info(`[Publisher] yad2: tried ${loginUrl} -> title: ${title}, url: ${url}`);
+      // Check if we got a 404 or redirect to homepage
+      const is404 = title.includes('לא נמצא') || title.includes('404') || title.includes('Not Found');
+      if (!is404) {
+        loginLoaded = true;
+        break;
+      }
+      await delay(1000);
+    }
+
+    if (!loginLoaded) {
+      // Try clicking the login button from homepage
+      logger.info('[Publisher] yad2: all login URLs returned 404, trying homepage login button...');
+      await page.goto('https://www.yad2.co.il/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await delay(3000);
+      // Click login button
+      const loginBtn = await page.$('button[data-testid*="login"], a[href*="login"], button:has-text("התחברות"), [class*="login"]');
+      if (loginBtn) {
+        await loginBtn.click();
+        await delay(3000);
+      }
+    }
+
+    // Check for yad2 captcha challenge ("Are you for real?")
+    const yad2Captcha = await page.evaluate(() => {
+      return document.title.includes('אבטחת אתר') ||
+             document.body?.innerText?.includes('Are you for real') ||
+             document.body?.innerText?.includes('Captcha Digest');
     });
+    if (yad2Captcha) {
+      logger.info('[Publisher] yad2: captcha challenge detected, waiting 10s...');
+      await delay(10000);
+      // Try to solve it
+      await detectAndSolveCaptcha(page);
+      await delay(5000);
+    }
 
     // Check for Cloudflare 403 or challenge
     const statusCode = await page.evaluate(() => {
@@ -399,18 +446,8 @@ async function publishToYad2(listing) {
     });
 
     if (statusCode) {
-      logger.info('[Publisher] yad2: got 403, waiting 15s and retrying with fresh navigation...');
+      logger.info('[Publisher] yad2: got 403, waiting 15s...');
       await delay(15000);
-      // Navigate to a different page first, then back to login
-      await page.goto('https://www.yad2.co.il/realestate', {
-        waitUntil: 'domcontentloaded',
-        timeout: 45000
-      }).catch(() => {});
-      await delay(3000);
-      await page.goto('https://www.yad2.co.il/account/login', {
-        waitUntil: 'networkidle2',
-        timeout: 60000
-      });
     }
 
     // Check for Cloudflare challenge
