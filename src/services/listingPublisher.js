@@ -72,8 +72,16 @@ async function launchStealthBrowser({ useProxy = true } = {}) {
     args.push(...getProxyArgs());
   }
 
+  // Use Chromium path from env (set in Dockerfile for Railway)
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH ||
+    process.env.CHROMIUM_PATH ||
+    '/usr/bin/chromium' ||
+    '/usr/bin/chromium-browser' ||
+    '/usr/bin/google-chrome';
+
   return puppeteer.launch({
     headless: 'new',
+    executablePath,
     args
   });
 }
