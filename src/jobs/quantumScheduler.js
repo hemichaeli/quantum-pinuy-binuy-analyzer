@@ -422,16 +422,22 @@ function initScheduler() {
   );
 
   // Morning Intelligence Report: Daily 07:30 (after listings scan at 07:00)
-  schedulerState.scheduledTasks.push(
-    cron.schedule('30 7 * * *', async () => {
-      logger.info('[SCHEDULER] Morning Intelligence Report - generating...');
-      try {
-        const { sendMorningReport } = require('../services/morningReportService');
-        const result = await sendMorningReport();
-        logger.info('[SCHEDULER] Morning Report sent:', result.stats);
-      } catch (e) { logger.warn('[SCHEDULER] Morning Report failed:', e.message); }
-    }, { timezone: 'Asia/Jerusalem' })
-  );
+  // Only runs if ENABLE_MORNING_REPORT=true to prevent duplicate sends from multiple Railway services
+  if (process.env.ENABLE_MORNING_REPORT === 'true') {
+    schedulerState.scheduledTasks.push(
+      cron.schedule('30 7 * * *', async () => {
+        logger.info('[SCHEDULER] Morning Intelligence Report - generating...');
+        try {
+          const { sendMorningReport } = require('../services/morningReportService');
+          const result = await sendMorningReport();
+          logger.info('[SCHEDULER] Morning Report sent:', result.stats);
+        } catch (e) { logger.warn('[SCHEDULER] Morning Report failed:', e.message); }
+      }, { timezone: 'Asia/Jerusalem' })
+    );
+    logger.info('[SCHEDULER] Morning Report cron registered (ENABLE_MORNING_REPORT=true)');
+  } else {
+    logger.info('[SCHEDULER] Morning Report cron DISABLED (set ENABLE_MORNING_REPORT=true to enable)');
+  }
 
   // WhatsApp Follow-up: Daily 14:00 (business days only)
   schedulerState.scheduledTasks.push(
