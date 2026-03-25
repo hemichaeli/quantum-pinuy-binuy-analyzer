@@ -21,6 +21,57 @@ const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
 
 const DELAY_MS = 3500;
 
+// ── AI Usage Tracker ──────────────────────────────────────────
+// Tracks cumulative token usage in system_settings table
+async function trackAiUsage(provider, inputTokens, outputTokens) {
+  try {
+    const totalTokens = (inputTokens || 0) + (outputTokens || 0);
+    if (totalTokens === 0) return;
+    const keyTotal = `ai_usage_${provider}_tokens_total`;
+    const keyInput = `ai_usage_${provider}_tokens_input`;
+    const keyOutput = `ai_usage_${provider}_tokens_output`;
+    const keyLastCall = `ai_usage_${provider}_last_call`;
+    const keyCallCount = `ai_usage_${provider}_call_count`;
+    await pool.query(`
+      INSERT INTO system_settings (key, value, label, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = (CAST(system_settings.value AS BIGINT) + $2::BIGINT)::TEXT,
+            updated_at = NOW()
+    `, [keyTotal, totalTokens.toString(), `${provider} total tokens used`]);
+    await pool.query(`
+      INSERT INTO system_settings (key, value, label, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = (CAST(system_settings.value AS BIGINT) + $2::BIGINT)::TEXT,
+            updated_at = NOW()
+    `, [keyInput, (inputTokens||0).toString(), `${provider} input tokens`]);
+    await pool.query(`
+      INSERT INTO system_settings (key, value, label, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = (CAST(system_settings.value AS BIGINT) + $2::BIGINT)::TEXT,
+            updated_at = NOW()
+    `, [keyOutput, (outputTokens||0).toString(), `${provider} output tokens`]);
+    await pool.query(`
+      INSERT INTO system_settings (key, value, label, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = NOW()::TEXT, updated_at = NOW()
+    `, [keyLastCall, new Date().toISOString(), `${provider} last API call`]);
+    await pool.query(`
+      INSERT INTO system_settings (key, value, label, updated_at)
+      VALUES ($1, '1', $2, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = (CAST(system_settings.value AS BIGINT) + 1)::TEXT,
+            updated_at = NOW()
+    `, [keyCallCount, `${provider} total API calls`]);
+  } catch (e) {
+    // Non-critical - don't fail the main call
+    logger.warn(`[AI Usage] Failed to track ${provider} usage: ${e.message}`);
+  }
+}
+
 /**
  * Query Perplexity for real-time web data
  */
@@ -45,10 +96,15 @@ async function queryPerplexity(prompt, options = {}) {
       timeout: 45000
     });
 
+    // Track token usage
+    const usage = response.data.usage || {};
+    await trackAiUsage('perplexity', usage.prompt_tokens || 0, usage.completion_tokens || 0);
+
     return {
       source: 'perplexity',
       content: response.data.choices?.[0]?.message?.content || '',
-      citations: response.data.citations || []
+      citations: response.data.citations || [],
+      usage: { input: usage.prompt_tokens || 0, output: usage.completion_tokens || 0 }
     };
   } catch (err) {
     logger.warn('Perplexity query failed', { error: err.message });
@@ -83,9 +139,14 @@ async function queryClaude(prompt, options = {}) {
       timeout: 60000
     });
 
+    // Track token usage
+    const usage = response.data.usage || {};
+    await trackAiUsage('claude', usage.input_tokens || 0, usage.output_tokens || 0);
+
     return {
       source: 'claude',
-      content: response.data.content?.[0]?.text || ''
+      content: response.data.content?.[0]?.text || '',
+      usage: { input: usage.input_tokens || 0, output: usage.output_tokens || 0 }
     };
   } catch (err) {
     logger.warn('Claude query failed', { error: err.message });

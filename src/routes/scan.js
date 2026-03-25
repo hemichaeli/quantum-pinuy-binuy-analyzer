@@ -1223,6 +1223,112 @@ router.post('/dedup', async (req, res) => {
   }
 });
 
+// GET /api/scan/ai-credits - AI usage tracking & budget status
+router.get('/ai-credits', async (req, res) => {
+  try {
+    const DEFAULTS = {
+      claude_budget: 5000000,
+      perplexity_budget: 2000000,
+      warn_threshold: 0.75,
+      critical_threshold: 0.90
+    };
+    const result = await pool.query(`
+      SELECT key, value, updated_at FROM system_settings
+      WHERE key LIKE 'ai_usage_%' OR key LIKE 'ai_budget_%'
+      ORDER BY key
+    `);
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.key] = { value: row.value, updated_at: row.updated_at };
+    }
+    const num = (key, def = 0) => parseInt(settings[key]?.value || def) || 0;
+    const str = (key, def = '') => settings[key]?.value || def;
+    const claudeBudget = num('ai_budget_claude_tokens', DEFAULTS.claude_budget);
+    const pplxBudget = num('ai_budget_perplexity_tokens', DEFAULTS.perplexity_budget);
+    const warnThreshold = parseFloat(str('ai_budget_warn_threshold', DEFAULTS.warn_threshold));
+    const critThreshold = parseFloat(str('ai_budget_critical_threshold', DEFAULTS.critical_threshold));
+    const claudeTotal = num('ai_usage_claude_tokens_total');
+    const claudeInput = num('ai_usage_claude_tokens_input');
+    const claudeOutput = num('ai_usage_claude_tokens_output');
+    const claudeCalls = num('ai_usage_claude_call_count');
+    const claudeLastCall = settings['ai_usage_claude_last_call']?.value || null;
+    const pplxTotal = num('ai_usage_perplexity_tokens_total');
+    const pplxInput = num('ai_usage_perplexity_tokens_input');
+    const pplxOutput = num('ai_usage_perplexity_tokens_output');
+    const pplxCalls = num('ai_usage_perplexity_call_count');
+    const pplxLastCall = settings['ai_usage_perplexity_last_call']?.value || null;
+    function calcStatus(used, budget) {
+      if (budget === 0) return 'unknown';
+      const pct = used / budget;
+      if (pct >= critThreshold) return 'critical';
+      if (pct >= warnThreshold) return 'warning';
+      return 'ok';
+    }
+    const claudeCostUSD = parseFloat(((claudeInput * 3 + claudeOutput * 15) / 1000000).toFixed(4));
+    const pplxCostUSD = parseFloat(((pplxTotal * 5) / 1000000).toFixed(4));
+    res.json({
+      claude: {
+        configured: !!(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY),
+        tokens_used: claudeTotal,
+        tokens_input: claudeInput,
+        tokens_output: claudeOutput,
+        tokens_budget: claudeBudget,
+        usage_pct: claudeBudget > 0 ? Math.round((claudeTotal / claudeBudget) * 100) : 0,
+        api_calls: claudeCalls,
+        last_call: claudeLastCall,
+        estimated_cost_usd: claudeCostUSD,
+        status: calcStatus(claudeTotal, claudeBudget),
+        purchase_url: 'https://console.anthropic.com/settings/billing'
+      },
+      perplexity: {
+        configured: !!process.env.PERPLEXITY_API_KEY,
+        tokens_used: pplxTotal,
+        tokens_input: pplxInput,
+        tokens_output: pplxOutput,
+        tokens_budget: pplxBudget,
+        usage_pct: pplxBudget > 0 ? Math.round((pplxTotal / pplxBudget) * 100) : 0,
+        api_calls: pplxCalls,
+        last_call: pplxLastCall,
+        estimated_cost_usd: pplxCostUSD,
+        status: calcStatus(pplxTotal, pplxBudget),
+        purchase_url: 'https://www.perplexity.ai/settings/api'
+      },
+      thresholds: { warn: warnThreshold, critical: critThreshold },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    logger.error('[AI Credits] Failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/scan/ai-credits/budget - Update budget thresholds
+router.post('/ai-credits/budget', async (req, res) => {
+  try {
+    const { claude_budget, perplexity_budget, warn_threshold, critical_threshold } = req.body;
+    const updates = [];
+    if (claude_budget !== undefined) {
+      await pool.query(`INSERT INTO system_settings (key,value,label,updated_at) VALUES ('ai_budget_claude_tokens',$1,'Claude monthly token budget',NOW()) ON CONFLICT (key) DO UPDATE SET value=$1,updated_at=NOW()`, [String(claude_budget)]);
+      updates.push('claude_budget');
+    }
+    if (perplexity_budget !== undefined) {
+      await pool.query(`INSERT INTO system_settings (key,value,label,updated_at) VALUES ('ai_budget_perplexity_tokens',$1,'Perplexity monthly token budget',NOW()) ON CONFLICT (key) DO UPDATE SET value=$1,updated_at=NOW()`, [String(perplexity_budget)]);
+      updates.push('perplexity_budget');
+    }
+    if (warn_threshold !== undefined) {
+      await pool.query(`INSERT INTO system_settings (key,value,label,updated_at) VALUES ('ai_budget_warn_threshold',$1,'Warning threshold',NOW()) ON CONFLICT (key) DO UPDATE SET value=$1,updated_at=NOW()`, [String(warn_threshold)]);
+      updates.push('warn_threshold');
+    }
+    if (critical_threshold !== undefined) {
+      await pool.query(`INSERT INTO system_settings (key,value,label,updated_at) VALUES ('ai_budget_critical_threshold',$1,'Critical threshold',NOW()) ON CONFLICT (key) DO UPDATE SET value=$1,updated_at=NOW()`, [String(critical_threshold)]);
+      updates.push('critical_threshold');
+    }
+    res.json({ success: true, updated: updates });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
 router.get('/:id', async (req, res) => {
   try {
