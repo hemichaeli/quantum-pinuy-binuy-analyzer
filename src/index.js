@@ -99,6 +99,16 @@ async function runRededuplicateMigration() {
     }
   } catch (err) { logger.error('[MIGRATIONS] Re-deduplicate migration failed:', err.message); }
 }
+async function runCrmDealsMigration() {
+  try {
+    const migFile = path.join(__dirname, 'db', 'migrations', '013_crm_deals.sql');
+    if (fs.existsSync(migFile)) {
+      const sql = fs.readFileSync(migFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] CRM deals table (013) applied');
+    }
+  } catch (err) { logger.error('[MIGRATIONS] CRM deals migration failed:', err.message); }
+}
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -177,6 +187,10 @@ function loadAllRoutes() {
     { path: '/api', file: 'routes/whatsappWebhookRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
     { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
+    { path: '/api', file: 'routes/whatsappAnalyticsRoutes.js' },
+    { path: '/api', file: 'routes/whatsappDashboardRoutes.js' },
+    { path: '/api', file: 'routes/quantumWhatsAppRoutes.js' },
+    { path: '/api/ssi', file: 'routes/ssiRoutes.js' },
     { path: '/api/scheduling', file: 'routes/schedulingRoutes.js' },
     { path: '/api/scheduling', file: 'routes/professionalVisitRoutes.js' },
     { path: '/api/scheduling/calendar', file: 'routes/calendarRoutes.js' },
@@ -382,6 +396,7 @@ async function start() {
   await runEnrichmentMigration();
   await runDeduplicateMigration();
   await runRededuplicateMigration();
+  await runCrmDealsMigration();
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();
