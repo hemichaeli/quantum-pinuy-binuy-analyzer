@@ -199,6 +199,8 @@ function loadAllRoutes() {
     { path: '/api/export', file: 'routes/exportRoutes.js' },
     { path: '/api/search', file: 'routes/searchRoutes.js' },
     { path: '/api/crm', file: 'routes/crmRoutes.js' },
+    { path: '/api/signatures', file: 'routes/signatureRoutes.js' },
+    { path: '/api/enrichment', file: 'routes/enrichmentRoutes.js' },
     { path: '/api/analytics', file: 'routes/analyticsRoutes.js' },
     { path: '/api/users', file: 'routes/userRoutes.js' },
     { path: '/api/docs', file: 'routes/docsRoute.js' },
@@ -334,6 +336,10 @@ app.get('/health', async (req, res) => {
   } catch (err) {
     res.status(503).json({ status: 'error', db: 'disconnected', error: err.message, version: VERSION });
   }
+});
+
+app.get('/api/version', (req, res) => {
+  res.json({ version: VERSION, build: BUILD, timestamp: new Date().toISOString() });
 });
 
 app.get('/api/complexes', async (req, res) => {
