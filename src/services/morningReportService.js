@@ -41,35 +41,32 @@ async function sendEmail({ subject, html }) {
     return { sent: false, error: 'RESEND_API_KEY not set' };
   }
   const fromAddress = process.env.EMAIL_FROM || 'QUANTUM <onboarding@resend.dev>';
-  let lastError = null;
-  let sent = 0;
-  for (const to of NOTIFICATION_EMAILS) {
-    try {
-      const response = await axios.post('https://api.resend.com/emails', {
-        from: fromAddress,
-        to: [to],
-        subject,
-        html
-      }, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 15000
-      });
-      if (response.data?.id) {
-        logger.info(`[MorningReport] Email sent to ${to}: ${response.data.id}`);
-        sent++;
-      } else {
-        lastError = `Resend error: ${JSON.stringify(response.data)}`;
-        logger.warn(`[MorningReport] Email failed to ${to}:`, lastError);
-      }
-    } catch (err) {
-      lastError = err.message;
-      logger.warn(`[MorningReport] Email error to ${to}:`, err.message);
+  // Send a single email to all recipients at once (avoids duplicate messages in inbox)
+  try {
+    const response = await axios.post('https://api.resend.com/emails', {
+      from: fromAddress,
+      to: NOTIFICATION_EMAILS,
+      subject,
+      html
+    }, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+    if (response.data?.id) {
+      logger.info(`[MorningReport] Email sent to [${NOTIFICATION_EMAILS.join(', ')}]: ${response.data.id}`);
+      return { sent: true, count: NOTIFICATION_EMAILS.length };
+    } else {
+      const errMsg = `Resend error: ${JSON.stringify(response.data)}`;
+      logger.warn('[MorningReport] Email failed:', errMsg);
+      return { sent: false, error: errMsg };
     }
+  } catch (err) {
+    logger.warn('[MorningReport] Email error:', err.message);
+    return { sent: false, error: err.message };
   }
-  return sent > 0 ? { sent: true, count: sent } : { sent: false, error: lastError };
 }
 
 /**
