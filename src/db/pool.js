@@ -16,13 +16,10 @@ if (dbUrl) {
     ssl: sslDisabled ? false : { rejectUnauthorized: false },
   };
 } else {
-  const host = process.env.PGHOST || 'localhost';
-  const port = parseInt(process.env.PGPORT || '5432');
-  const database = process.env.PGDATABASE || 'pinuy_binuy';
-  const user = process.env.PGUSER || 'pinuy_admin';
-  const password = process.env.PGPASSWORD || 'pinuy_secure_2024';
-  console.log(`[pool] Using individual params: ${user}@${host}:${port}/${database}`);
-  poolConfig = { host, port, database, user, password, ssl: false };
+  console.error('[pool] FATAL: DATABASE_URL environment variable is required.');
+  console.error('[pool] Set it in Railway dashboard or create a local .env file.');
+  console.error('[pool] Example: DATABASE_URL=postgresql://user:pass@localhost:5432/pinuy_binuy');
+  process.exit(1);
 }
 
 console.log('[pool] Pool config keys:', Object.keys(poolConfig).join(', '));

@@ -213,9 +213,14 @@ router.post('/conversations/:phone/reply', async (req, res) => {
     if (!message) return res.status(400).json({ error: 'message required' });
 
     const axios = require('axios');
-    const INFORU_USERNAME = process.env.INFORU_USERNAME || 'hemichaeli';
-    const INFORU_TOKEN = process.env.INFORU_TOKEN || '95452ace-07cf-48be-8671-a197c15d3c17';
-    const INFORU_BUSINESS_LINE = process.env.INFORU_BUSINESS_LINE || '037572229';
+    const INFORU_USERNAME = process.env.INFORU_USERNAME;
+    const INFORU_TOKEN = process.env.INFORU_TOKEN;
+    const INFORU_BUSINESS_LINE = process.env.INFORU_BUSINESS_LINE;
+
+    if (!INFORU_USERNAME || !INFORU_TOKEN || !INFORU_BUSINESS_LINE) {
+      logger.error('[ConvReply] Missing INFORU credentials in environment variables');
+      return res.status(500).json({ success: false, error: 'Messaging service not configured. Set INFORU_USERNAME, INFORU_TOKEN, INFORU_BUSINESS_LINE in environment.' });
+    }
 
     let cleanPhone = phone.replace(/[^0-9]/g, '');
     if (cleanPhone.startsWith('0')) cleanPhone = '972' + cleanPhone.substring(1);

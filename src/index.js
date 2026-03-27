@@ -109,6 +109,16 @@ async function runCrmDealsMigration() {
     }
   } catch (err) { logger.error('[MIGRATIONS] CRM deals migration failed:', err.message); }
 }
+async function runPerformanceIndexesMigration() {
+  try {
+    const migFile = path.join(__dirname, 'db', 'migrations', '014_add_performance_indexes.sql');
+    if (fs.existsSync(migFile)) {
+      const sql = fs.readFileSync(migFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] Performance indexes (014) applied');
+    }
+  } catch (err) { logger.error('[MIGRATIONS] Performance indexes migration failed:', err.message); }
+}
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -403,6 +413,7 @@ async function start() {
   await runDeduplicateMigration();
   await runRededuplicateMigration();
   await runCrmDealsMigration();
+  await runPerformanceIndexesMigration();
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();
