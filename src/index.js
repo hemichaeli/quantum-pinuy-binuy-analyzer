@@ -119,6 +119,16 @@ async function runPerformanceIndexesMigration() {
     }
   } catch (err) { logger.error('[MIGRATIONS] Performance indexes migration failed:', err.message); }
 }
+async function runNewsletterMigration() {
+  try {
+    const migFile = path.join(__dirname, 'db', 'migrations', '015_newsletter_subscribers.sql');
+    if (fs.existsSync(migFile)) {
+      const sql = fs.readFileSync(migFile, 'utf8');
+      await pool.query(sql);
+      logger.info('[MIGRATIONS] Newsletter subscribers (015) applied');
+    }
+  } catch (err) { logger.error('[MIGRATIONS] Newsletter migration failed:', err.message); }
+}
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -221,6 +231,8 @@ function loadAllRoutes() {
     { path: '/events', file: 'routes/eventSchedulerRoutes.js' },
     // ── Unified Communications: sellers (inbound), buyers, outgoing listings ──
     { path: '/api/comms', file: 'routes/unifiedCommsRoutes.js' },
+    // ── Newsletter: public subscriber alerts ──
+    { path: '/api/newsletter', file: 'routes/newsletterRoutes.js' },
   ];
 
   for (const { path: routePath, file } of routeFiles) {
@@ -414,6 +426,7 @@ async function start() {
   await runRededuplicateMigration();
   await runCrmDealsMigration();
   await runPerformanceIndexesMigration();
+  await runNewsletterMigration();
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();

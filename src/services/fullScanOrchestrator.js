@@ -257,9 +257,27 @@ async function runFullScan(options = {}) {
   
   results.duration_ms = Date.now() - startTime;
   results.completed_at = new Date().toISOString();
-  
+
   logger.info(`[FullScan] Complete in ${Math.round(results.duration_ms/1000)}s: ${results.total_new} new, ${results.total_updated} updated`);
-  
+
+  // Newsletter: dispatch alerts for new listings added in this scan
+  if (results.total_new > 0) {
+    try {
+      const { rows: newRows } = await pool.query(
+        `SELECT id FROM listings WHERE created_at > NOW() - INTERVAL '35 minutes' AND is_active = TRUE ORDER BY id DESC LIMIT 500`
+      );
+      if (newRows.length > 0) {
+        const { dispatchAlerts } = require('./newsletterService');
+        const newIds = newRows.map(r => r.id);
+        const dispatch = await dispatchAlerts(newIds);
+        results.newsletter_dispatch = dispatch;
+        logger.info(`[Newsletter] Dispatched: ${dispatch.emails_sent} emails sent for ${dispatch.dispatched} new listings`);
+      }
+    } catch (err) {
+      logger.warn(`[Newsletter] Dispatch failed (non-blocking): ${err.message}`);
+    }
+  }
+
   return results;
 }
 

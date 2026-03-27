@@ -1333,6 +1333,31 @@ router.post('/ai-credits/budget', async (req, res) => {
   }
 });
 
+// POST /api/scan/enrich-phones-v2 - 5-pass phone enrichment orchestrator
+router.post('/enrich-phones-v2', async (req, res) => {
+  try {
+    const { limit = 500, useApify = false, sources = null } = req.body;
+    const { enrichPhonesV2 } = require('../services/phoneRevealOrchestrator');
+    res.json({ success: true, message: 'Phone enrichment v2 started', limit, useApify });
+    enrichPhonesV2({ limit, useApify, sources: sources ? (Array.isArray(sources) ? sources : [sources]) : null })
+      .then(r => logger.info(`[PhoneV2] Done: ${r.found}/${r.total} phones found`))
+      .catch(err => logger.error(`[PhoneV2] Error: ${err.message}`));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/scan/phone-coverage - Phone coverage stats by source
+router.get('/phone-coverage', async (req, res) => {
+  try {
+    const { getPhoneCoverage } = require('../services/phoneRevealOrchestrator');
+    const coverage = await getPhoneCoverage();
+    res.json(coverage);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
 router.get('/:id', async (req, res) => {
   try {
