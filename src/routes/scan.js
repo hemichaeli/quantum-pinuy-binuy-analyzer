@@ -1543,7 +1543,7 @@ router.post('/apify-deploy', async (req, res) => {
       }
     }
 
-    res.json({
+    const responseData = {
       success: true,
       actor_id: actorId,
       actor_name: actor.name,
@@ -1553,12 +1553,24 @@ router.post('/apify-deploy', async (req, res) => {
       default_set: defaultSetOk,
       source_files: versionData.sourceFiles.map(f => f.name),
       test_run: testResult,
+      build_log: null,
       next_steps: [
         `Build started (ID: ${buildId}). Wait ~2-3 min for it to finish.`,
         'Then check: GET /api/scan/apify-runs to see runs.',
         'To test: POST /api/scan/apify-test-run to run with real listings.'
       ]
-    });
+    };
+
+    // If build failed, fetch the build log
+    if (buildStatus === 'FAILED') {
+      try {
+        const logResp = await axios.get(`${baseUrl}/acts/${actorId}/builds/${buildId}/log`, { headers, timeout: 10000, responseType: 'text' });
+        const fullLog = typeof logResp.data === 'string' ? logResp.data : JSON.stringify(logResp.data);
+        responseData.build_log = fullLog.length > 5000 ? '...' + fullLog.slice(-5000) : fullLog;
+      } catch (e) { responseData.build_log = `Failed to fetch log: ${e.message}`; }
+    }
+
+    res.json(responseData);
 
   } catch (err) {
     logger.error('[apify-deploy] Error:', err.response?.data || err.message);
