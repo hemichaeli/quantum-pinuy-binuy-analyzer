@@ -1493,15 +1493,29 @@ router.post('/apify-deploy', async (req, res) => {
     }
     const buildId = buildResp.data?.data?.id;
 
-    // 4b. Set version 0.1 as the default run version for the Actor
+    // 4b. Set version 0.1 as the actor's default run version
+    let defaultSetOk = false;
     try {
       await axios.put(`${baseUrl}/acts/${actorId}`, {
-        versions: [{ versionNumber: '0.1', buildTag: 'latest', sourceType: 'SOURCE_FILES' }],
-        defaultRunOptions: { build: 'latest' }
+        defaultRunBuild: 'latest',
+        versions: [{ versionNumber: '0.1', buildTag: 'latest', sourceType: 'SOURCE_FILES' }]
       }, { headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 15000 });
+      defaultSetOk = true;
       logger.info('[apify-deploy] Actor default set to version 0.1 / latest build');
     } catch (e) {
       logger.warn('[apify-deploy] Could not set default version:', e.response?.data?.error?.message || e.message);
+    }
+
+    // 4c. Wait for build to finish (poll up to 3 min)
+    let buildStatus = buildResp.data?.data?.status;
+    const buildStartTime = Date.now();
+    while (['READY', 'RUNNING'].includes(buildStatus) && Date.now() - buildStartTime < 180000) {
+      await new Promise(r => setTimeout(r, 10000));
+      try {
+        const checkResp = await axios.get(`${baseUrl}/acts/${actorId}/builds/${buildId}`, { headers, timeout: 10000 });
+        buildStatus = checkResp.data?.data?.status;
+        logger.info(`[apify-deploy] Build ${buildId} status: ${buildStatus}`);
+      } catch (e) { break; }
     }
 
     // 5. Optional test run with a single listing
@@ -1535,7 +1549,8 @@ router.post('/apify-deploy', async (req, res) => {
       actor_name: actor.name,
       version: '0.1',
       build_id: buildId,
-      build_status: buildResp.data?.data?.status,
+      build_status: buildStatus,
+      default_set: defaultSetOk,
       source_files: versionData.sourceFiles.map(f => f.name),
       test_run: testResult,
       next_steps: [
