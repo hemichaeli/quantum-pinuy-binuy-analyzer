@@ -1493,6 +1493,17 @@ router.post('/apify-deploy', async (req, res) => {
     }
     const buildId = buildResp.data?.data?.id;
 
+    // 4b. Set version 0.1 as the default run version for the Actor
+    try {
+      await axios.put(`${baseUrl}/acts/${actorId}`, {
+        versions: [{ versionNumber: '0.1', buildTag: 'latest', sourceType: 'SOURCE_FILES' }],
+        defaultRunOptions: { build: 'latest' }
+      }, { headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 15000 });
+      logger.info('[apify-deploy] Actor default set to version 0.1 / latest build');
+    } catch (e) {
+      logger.warn('[apify-deploy] Could not set default version:', e.response?.data?.error?.message || e.message);
+    }
+
     // 5. Optional test run with a single listing
     let testResult = null;
     if (req.body?.testRun) {
@@ -1583,7 +1594,7 @@ router.post('/apify-test-run', async (req, res) => {
       proxyConfig: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'], countryCode: 'IL' }
     };
 
-    const runResp = await axios.post(`${baseUrl}/acts/${actor.id}/runs`, input, { headers, timeout: 30000 });
+    const runResp = await axios.post(`${baseUrl}/acts/${actor.id}/runs?build=latest`, input, { headers, timeout: 30000 });
     const run = runResp.data?.data;
 
     res.json({
