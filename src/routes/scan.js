@@ -1448,8 +1448,7 @@ router.post('/apify-deploy', async (req, res) => {
         { name: 'INPUT_SCHEMA.json', format: 'TEXT', content: inputSchema },
         { name: '.actor/actor.json', format: 'TEXT', content: JSON.stringify({
           actorSpecification: 1, name: 'quantum-phone-reveal', title: 'QUANTUM Phone Reveal',
-          version: '0.1', input: './INPUT_SCHEMA.json',
-          dockerfile: './Dockerfile'
+          input: './INPUT_SCHEMA.json', dockerfile: './Dockerfile'
         }, null, 2) },
         { name: 'Dockerfile', format: 'TEXT', content: 'FROM apify/actor-node-puppeteer-chrome:20\nCOPY package.json ./\nRUN npm install --omit=dev\nCOPY . ./\nCMD npm start\n' },
         { name: '.actorignore', format: 'TEXT', content: 'node_modules\n' }
@@ -1459,15 +1458,39 @@ router.post('/apify-deploy', async (req, res) => {
     // Try PUT (update existing version) first, then POST (create new)
     let versionResp;
     try {
-      versionResp = await axios.put(`${baseUrl}/acts/${actorId}/versions/0.1`, versionData, { headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 15000 });
+      versionResp = await axios.put(`${baseUrl}/acts/${actorId}/versions/0.1`, versionData, {
+        headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 30000
+      });
+      logger.info('[apify-deploy] Version 0.1 updated');
     } catch (e) {
       if (e.response?.status === 404) {
-        versionResp = await axios.post(`${baseUrl}/acts/${actorId}/versions`, versionData, { headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 15000 });
-      } else throw e;
+        versionResp = await axios.post(`${baseUrl}/acts/${actorId}/versions`, versionData, {
+          headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 30000
+        });
+        logger.info('[apify-deploy] Version 0.1 created');
+      } else {
+        logger.error('[apify-deploy] Version create/update failed:', e.response?.data || e.message);
+        return res.status(500).json({
+          error: 'Version create/update failed',
+          step: 'version',
+          details: e.response?.data || e.message
+        });
+      }
     }
 
     // 4. Trigger build
-    const buildResp = await axios.post(`${baseUrl}/acts/${actorId}/builds`, null, { headers, params: { version: '0.1', tag: 'latest', useCache: false }, timeout: 15000 });
+    let buildResp;
+    try {
+      buildResp = await axios.post(`${baseUrl}/acts/${actorId}/builds?version=0.1&tag=latest&useCache=false`, null, { headers, timeout: 30000 });
+    } catch (e) {
+      logger.error('[apify-deploy] Build trigger failed:', e.response?.data || e.message);
+      return res.status(500).json({
+        error: 'Build trigger failed',
+        step: 'build',
+        version_ok: true,
+        details: e.response?.data || e.message
+      });
+    }
     const buildId = buildResp.data?.data?.id;
 
     // 5. Optional test run with a single listing
