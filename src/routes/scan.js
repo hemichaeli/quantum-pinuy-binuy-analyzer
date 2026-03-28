@@ -1411,6 +1411,172 @@ router.post('/enrich-missing-addresses', async (req, res) => {
   }
 });
 
+// POST /api/scan/apify-deploy - Deploy Actor source code to Apify via API + optional test run
+router.post('/apify-deploy', async (req, res) => {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return res.status(503).json({ error: 'APIFY_API_TOKEN not configured' });
+
+  const axios = require('axios');
+  const fs = require('fs');
+  const path = require('path');
+  const baseUrl = 'https://api.apify.com/v2';
+  const headers = { Authorization: `Bearer ${token}` };
+
+  try {
+    // 1. Find actor ID
+    const actorsResp = await axios.get(`${baseUrl}/acts`, { headers, params: { my: true, limit: 50 }, timeout: 10000 });
+    const actor = (actorsResp.data?.data?.items || []).find(a => a.name === 'quantum-phone-reveal');
+    if (!actor) return res.status(404).json({ error: 'Actor quantum-phone-reveal not found. Create it first in Apify Console.' });
+
+    const actorId = actor.id;
+
+    // 2. Read actor source files
+    const actorDir = path.join(__dirname, '..', 'apify-actors', 'quantum-phone-reveal');
+    const mainJs = fs.readFileSync(path.join(actorDir, 'main.js'), 'utf8');
+    const packageJson = fs.readFileSync(path.join(actorDir, 'package.json'), 'utf8');
+    const inputSchema = fs.readFileSync(path.join(actorDir, 'INPUT_SCHEMA.json'), 'utf8');
+
+    // 3. Create new Actor version with source code (multifile)
+    const versionData = {
+      versionNumber: '0.1',
+      sourceType: 'SOURCE_FILES',
+      envVars: [],
+      buildTag: 'latest',
+      sourceFiles: [
+        { name: 'main.js', format: 'TEXT', content: mainJs },
+        { name: 'package.json', format: 'TEXT', content: packageJson },
+        { name: 'INPUT_SCHEMA.json', format: 'TEXT', content: inputSchema },
+        { name: '.actor/actor.json', format: 'TEXT', content: JSON.stringify({
+          actorSpecification: 1, name: 'quantum-phone-reveal', title: 'QUANTUM Phone Reveal',
+          version: '0.1', input: './INPUT_SCHEMA.json',
+          dockerfile: './Dockerfile'
+        }, null, 2) },
+        { name: 'Dockerfile', format: 'TEXT', content: 'FROM apify/actor-node-puppeteer-chrome:20\nCOPY package.json ./\nRUN npm install --omit=dev\nCOPY . ./\nCMD npm start\n' },
+        { name: '.actorignore', format: 'TEXT', content: 'node_modules\n' }
+      ]
+    };
+
+    // Try PUT (update existing version) first, then POST (create new)
+    let versionResp;
+    try {
+      versionResp = await axios.put(`${baseUrl}/acts/${actorId}/versions/0.1`, versionData, { headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 15000 });
+    } catch (e) {
+      if (e.response?.status === 404) {
+        versionResp = await axios.post(`${baseUrl}/acts/${actorId}/versions`, versionData, { headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 15000 });
+      } else throw e;
+    }
+
+    // 4. Trigger build
+    const buildResp = await axios.post(`${baseUrl}/acts/${actorId}/builds`, { version: '0.1', tag: 'latest', useCache: false }, { headers: { ...headers, 'Content-Type': 'application/json' }, timeout: 15000 });
+    const buildId = buildResp.data?.data?.id;
+
+    // 5. Optional test run with a single listing
+    let testResult = null;
+    if (req.body?.testRun) {
+      // Get one listing without phone from DB to test
+      const { rows } = await pool.query(`
+        SELECT id, url, source, source_listing_id, address, city
+        FROM listings
+        WHERE (phone IS NULL OR phone = '') AND url IS NOT NULL AND url != 'NULL'
+          AND source IN ('yad2','homeless','yad1','dira')
+        ORDER BY RANDOM() LIMIT 1
+      `);
+
+      if (rows.length > 0) {
+        const testListing = rows[0];
+        testResult = {
+          status: 'queued',
+          message: `Test run queued with listing #${testListing.id} (${testListing.source}: ${testListing.address})`,
+          listing: testListing,
+          note: 'Build must complete first (~2-3 min). Check /api/scan/apify-runs after.'
+        };
+      } else {
+        testResult = { status: 'skipped', message: 'No phoneless listings with URLs found for testing' };
+      }
+    }
+
+    res.json({
+      success: true,
+      actor_id: actorId,
+      actor_name: actor.name,
+      version: '0.1',
+      build_id: buildId,
+      build_status: buildResp.data?.data?.status,
+      source_files: versionData.sourceFiles.map(f => f.name),
+      test_run: testResult,
+      next_steps: [
+        `Build started (ID: ${buildId}). Wait ~2-3 min for it to finish.`,
+        'Then check: GET /api/scan/apify-runs to see runs.',
+        'To test: POST /api/scan/apify-test-run to run with real listings.'
+      ]
+    });
+
+  } catch (err) {
+    logger.error('[apify-deploy] Error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.message, details: err.response?.data });
+  }
+});
+
+// POST /api/scan/apify-test-run - Run Actor with a few real listings from DB
+router.post('/apify-test-run', async (req, res) => {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return res.status(503).json({ error: 'APIFY_API_TOKEN not configured' });
+
+  const axios = require('axios');
+  const baseUrl = 'https://api.apify.com/v2';
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  try {
+    // Find actor
+    const actorsResp = await axios.get(`${baseUrl}/acts`, { headers, params: { my: true, limit: 50 }, timeout: 10000 });
+    const actor = (actorsResp.data?.data?.items || []).find(a => a.name === 'quantum-phone-reveal');
+    if (!actor) return res.status(404).json({ error: 'Actor not found' });
+
+    const count = Math.min(parseInt(req.body?.count) || 3, 10);
+    const source = req.body?.source || null;
+
+    // Get phoneless listings with URLs
+    const sourceFilter = source ? `AND source = '${source.replace(/[^a-z0-9]/gi, '')}'` : '';
+    const { rows: listings } = await pool.query(`
+      SELECT id, url, source, source_listing_id, address, city
+      FROM listings
+      WHERE (phone IS NULL OR phone = '') AND url IS NOT NULL AND url != 'NULL'
+        AND url NOT LIKE '%forsale?%' AND url NOT LIKE '%/city/%'
+        ${sourceFilter}
+      ORDER BY RANDOM() LIMIT $1
+    `, [count]);
+
+    if (listings.length === 0) {
+      return res.json({ success: false, message: 'No phoneless listings with valid URLs found' });
+    }
+
+    // Start async run (don't wait for completion)
+    const input = {
+      listings: listings.map(l => ({
+        id: l.id, url: l.url, source: l.source,
+        sourceListingId: l.source_listing_id, address: l.address, city: l.city
+      })),
+      maxConcurrency: 2,
+      proxyConfig: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'], countryCode: 'IL' }
+    };
+
+    const runResp = await axios.post(`${baseUrl}/acts/${actor.id}/runs`, input, { headers, timeout: 30000 });
+    const run = runResp.data?.data;
+
+    res.json({
+      success: true,
+      run_id: run?.id,
+      status: run?.status,
+      listings_sent: listings.length,
+      listings: listings.map(l => ({ id: l.id, source: l.source, address: l.address, url: l.url })),
+      check_results: `/api/scan/apify-runs?limit=1`
+    });
+  } catch (err) {
+    logger.error('[apify-test-run] Error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.message, details: err.response?.data });
+  }
+});
+
 // GET /api/scan/apify-runs - Fetch recent Apify Actor runs + logs for diagnostics
 router.get('/apify-runs', async (req, res) => {
   const token = process.env.APIFY_API_TOKEN;
