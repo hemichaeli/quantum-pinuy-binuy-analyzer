@@ -14,121 +14,43 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '4.99.0';
-const BUILD = '2026-03-18-v5.0.0-github-backup';
+const VERSION = '5.1.0';
+const BUILD = '2026-03-28-start-mode-routing';
+
+// ── START_MODE: 'quantum' | 'minhelet' | 'both' (default: 'both') ─────────────
+const START_MODE = (process.env.START_MODE || 'both').toLowerCase();
+const isQuantum  = START_MODE === 'quantum' || START_MODE === 'both';
+const isMinhelet = START_MODE === 'minhelet' || START_MODE === 'both';
+
+logger.info(`=== START_MODE: ${START_MODE.toUpperCase()} | quantum=${isQuantum} minhelet=${isMinhelet} ===`);
+
+// ── Migrations ─────────────────────────────────────────────────────────────────
 
 async function runAutoMigrations() {
   try {
-    logger.info('[MIGRATIONS] Running auto-migrations...');
     const migFile = path.join(__dirname, 'db', 'auto_migrations.sql');
-    if (!fs.existsSync(migFile)) { logger.warn('[MIGRATIONS] No auto_migrations.sql found'); return; }
-    const sql = fs.readFileSync(migFile, 'utf8');
-    await pool.query(sql);
+    if (!fs.existsSync(migFile)) return;
+    await pool.query(fs.readFileSync(migFile, 'utf8'));
     logger.info('[MIGRATIONS] Auto-migrations completed');
   } catch (err) { logger.error('[MIGRATIONS] Failed:', err.message); }
 }
 
+async function runMigrationFile(label, filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return;
+    await pool.query(fs.readFileSync(filePath, 'utf8'));
+    logger.info(`[MIGRATIONS] ${label} applied`);
+  } catch (err) { logger.error(`[MIGRATIONS] ${label} failed:`, err.message); }
+}
+
 async function runOutreachMigration() {
   try {
-    await pool.query(`
-      ALTER TABLE listings ADD COLUMN IF NOT EXISTS call_scheduled_at TIMESTAMPTZ;
-    `);
+    await pool.query(`ALTER TABLE listings ADD COLUMN IF NOT EXISTS call_scheduled_at TIMESTAMPTZ;`);
     logger.info('[MIGRATIONS] Outreach columns applied');
   } catch (err) { logger.error('[MIGRATIONS] Outreach migration failed:', err.message); }
 }
 
-async function runSchedulingMigrations() {
-  try {
-    const schemaFile = path.join(__dirname, 'models', 'schedulingSchema.sql');
-    if (fs.existsSync(schemaFile)) {
-      const sql = fs.readFileSync(schemaFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Scheduling schema applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Scheduling schema failed:', err.message); }
-}
-
-async function runCampaignsMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', 'campaigns_schema.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Campaigns schema applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Campaigns schema failed:', err.message); }
-}
-
-async function runEventsMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', 'events_schema.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Events schema applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Events schema failed:', err.message); }
-}
-async function runEnrichmentMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', '009_listing_enrichment_columns.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Enrichment columns (009) applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Enrichment migration failed:', err.message); }
-}
-async function runDeduplicateMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', '010_deduplicate_listings.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Deduplicate listings (010) applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Deduplicate migration failed:', err.message); }
-}
-async function runRededuplicateMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', '011_rededuplicate_listings.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Re-deduplicate listings (011) applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Re-deduplicate migration failed:', err.message); }
-}
-async function runCrmDealsMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', '013_crm_deals.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] CRM deals table (013) applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] CRM deals migration failed:', err.message); }
-}
-async function runPerformanceIndexesMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', '014_add_performance_indexes.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Performance indexes (014) applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Performance indexes migration failed:', err.message); }
-}
-async function runNewsletterMigration() {
-  try {
-    const migFile = path.join(__dirname, 'db', 'migrations', '015_newsletter_subscribers.sql');
-    if (fs.existsSync(migFile)) {
-      const sql = fs.readFileSync(migFile, 'utf8');
-      await pool.query(sql);
-      logger.info('[MIGRATIONS] Newsletter subscribers (015) applied');
-    }
-  } catch (err) { logger.error('[MIGRATIONS] Newsletter migration failed:', err.message); }
-}
+// ── Middleware ─────────────────────────────────────────────────────────────────
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -163,7 +85,8 @@ const limiter = rateLimit({
     req.path.startsWith('/events/') || req.path.startsWith('/api/events/') ||
     req.path.startsWith('/pro/') || req.path.startsWith('/attend/') ||
     req.path.startsWith('/api/outreach/') ||
-    req.path.startsWith('/api/comms/'),
+    req.path.startsWith('/api/comms/') ||
+    req.path.startsWith('/api/morning/'),
   message: { error: 'Too many requests, please try again later' }
 });
 app.use('/api/', limiter);
@@ -171,9 +94,9 @@ app.use('/api/', limiter);
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
-    const duration = Date.now() - start;
+    const d = Date.now() - start;
     if (req.path !== '/health' && !req.path.startsWith('/api/debug')) {
-      logger.info(`${req.method} ${req.path} ${res.statusCode} ${duration}ms`);
+      logger.info(`${req.method} ${req.path} ${res.statusCode} ${d}ms`);
     }
   });
   next();
@@ -181,188 +104,174 @@ app.use((req, res, next) => {
 
 const routeLoadResults = [];
 
+// ── Route loader ───────────────────────────────────────────────────────────────
+
+function loadRoute(routePath, file) {
+  try {
+    const fullPath = require.resolve(`./${file}`);
+    delete require.cache[fullPath];
+    app.use(routePath, require(`./${file}`));
+    routeLoadResults.push({ path: routePath, status: 'ok', file });
+  } catch (err) {
+    routeLoadResults.push({ path: routePath, status: 'failed', error: err.message, file });
+  }
+}
+
 function loadAllRoutes() {
-  const routeFiles = [
-    { path: '/dashboard', file: 'routes/dashboardRoute.js' },
-    { path: '/sandbox', file: 'routes/sandboxRoute.js' },
-    { path: '/campaigns', file: 'routes/campaignDashboardRoute.js' },
-    { path: '/booking', file: 'routes/bookingRoute.js' },
-    { path: '/cal', file: 'routes/calRoute.js' },
-    { path: '/api/projects', file: 'routes/projects.js' },
-    { path: '/api', file: 'routes/opportunities.js' },
-    { path: '/api/scan', file: 'routes/scan.js' },
-    { path: '/api/alerts', file: 'routes/alerts.js' },
-    { path: '/api/leads', file: 'routes/leadRoutes.js' },
-    { path: '/api/dashboard', file: 'routes/dashboardRoutes.js' },
-    { path: '/api/chat', file: 'routes/chatRoutes.js' },
-    { path: '/api/intelligence', file: 'routes/intelligenceRoutes.js' },
-    { path: '/api/facebook', file: 'routes/facebookRoute.js' },
-    { path: '/api/facebook', file: 'routes/facebookRoutes.js' },
-    { path: '/api/messaging', file: 'routes/messagingRoutes.js' },
-    { path: '/api/morning', file: 'routes/morningReportRoutes.js' },
-    { path: '/api/vapi', file: 'routes/vapiRoutes.js' },
-    { path: '/api/inforu', file: 'routes/inforuRoutes.js' },
-    { path: '/api/kones', file: 'routes/konesRoutes.js' },
-    { path: '/api/appointments', file: 'routes/appointmentRoutes.js' },
-    { path: '/api', file: 'routes/whatsappWebhookRoutes.js' },
-    { path: '/api/whatsapp', file: 'routes/whatsappAlertRoutes.js' },
-    { path: '/api/whatsapp', file: 'routes/whatsappRoutes.js' },
-    { path: '/api', file: 'routes/whatsappAnalyticsRoutes.js' },
-    { path: '/api', file: 'routes/whatsappDashboardRoutes.js' },
-    { path: '/api', file: 'routes/quantumWhatsAppRoutes.js' },
-    { path: '/api/ssi', file: 'routes/ssiRoutes.js' },
-    { path: '/api/scheduling', file: 'routes/schedulingRoutes.js' },
-    { path: '/api/scheduling', file: 'routes/professionalVisitRoutes.js' },
-    { path: '/api/scheduling/calendar', file: 'routes/calendarRoutes.js' },
-    { path: '/api/test/optimization', file: 'routes/optimizationTestRoute.js' },
-    { path: '/api/notifications', file: 'routes/notificationRoutes.js' },
-    { path: '/api/export', file: 'routes/exportRoutes.js' },
-    { path: '/api/search', file: 'routes/searchRoutes.js' },
-    { path: '/api/crm', file: 'routes/crmRoutes.js' },
-    { path: '/api/signatures', file: 'routes/signatureRoutes.js' },
-    { path: '/api/enrichment', file: 'routes/enrichmentRoutes.js' },
-    { path: '/api/analytics', file: 'routes/analyticsRoutes.js' },
-    { path: '/api/users', file: 'routes/userRoutes.js' },
-    { path: '/api/docs', file: 'routes/docsRoute.js' },
-    { path: '/api/campaigns', file: 'routes/campaignRoutes.js' },
-    { path: '/api/outreach', file: 'routes/outreachRoutes.js' },
-    // ── Event Scheduler — Admin UI MUST come before scheduler (avoids :id conflict) ──
-    { path: '/events', file: 'routes/eventAdminRoute.js' },
-    { path: '/events', file: 'routes/eventSchedulerRoutes.js' },
-    // ── Unified Communications: sellers (inbound), buyers, outgoing listings ──
-    { path: '/api/comms', file: 'routes/unifiedCommsRoutes.js' },
-    // ── Newsletter: public subscriber alerts ──
-    { path: '/api/newsletter', file: 'routes/newsletterRoutes.js' },
+  // ── SHARED: loaded for both QUANTUM and MINHELET ────────────────────────────
+  const shared = [
+    { path: '/api/vapi',               file: 'routes/vapiRoutes.js' },
+    { path: '/api/inforu',             file: 'routes/inforuRoutes.js' },
+    { path: '/api',                    file: 'routes/whatsappWebhookRoutes.js' },
+    { path: '/api/whatsapp',           file: 'routes/whatsappAlertRoutes.js' },
+    { path: '/api/whatsapp',           file: 'routes/whatsappRoutes.js' },
+    { path: '/api',                    file: 'routes/whatsappAnalyticsRoutes.js' },
+    { path: '/api',                    file: 'routes/whatsappDashboardRoutes.js' },
+    { path: '/api',                    file: 'routes/quantumWhatsAppRoutes.js' },
+    { path: '/api/users',              file: 'routes/userRoutes.js' },
+    { path: '/api/docs',               file: 'routes/docsRoute.js' },
+    { path: '/api/search',             file: 'routes/searchRoutes.js' },
+    { path: '/api/comms',              file: 'routes/unifiedCommsRoutes.js' },
   ];
 
-  for (const { path: routePath, file } of routeFiles) {
-    try {
-      const fullPath = require.resolve(`./${file}`);
-      delete require.cache[fullPath];
-      const router = require(`./${file}`);
-      app.use(routePath, router);
-      routeLoadResults.push({ path: routePath, status: 'ok', file });
-    } catch (err) {
-      routeLoadResults.push({ path: routePath, status: 'failed', error: err.message, file });
-    }
-  }
+  // ── QUANTUM only: listings, IAI/SSI, scrapers, outreach, morning report ─────
+  const quantumRoutes = [
+    { path: '/dashboard',              file: 'routes/dashboardRoute.js' },
+    { path: '/sandbox',                file: 'routes/sandboxRoute.js' },
+    { path: '/api/projects',           file: 'routes/projects.js' },
+    { path: '/api',                    file: 'routes/opportunities.js' },
+    { path: '/api/scan',               file: 'routes/scan.js' },
+    { path: '/api/alerts',             file: 'routes/alerts.js' },
+    { path: '/api/leads',              file: 'routes/leadRoutes.js' },
+    { path: '/api/dashboard',          file: 'routes/dashboardRoutes.js' },
+    { path: '/api/chat',               file: 'routes/chatRoutes.js' },
+    { path: '/api/intelligence',       file: 'routes/intelligenceRoutes.js' },
+    { path: '/api/facebook',           file: 'routes/facebookRoute.js' },
+    { path: '/api/facebook',           file: 'routes/facebookRoutes.js' },
+    { path: '/api/messaging',          file: 'routes/messagingRoutes.js' },
+    { path: '/api/morning',            file: 'routes/morningReportRoutes.js' },
+    { path: '/api/kones',              file: 'routes/konesRoutes.js' },
+    { path: '/api/ssi',                file: 'routes/ssiRoutes.js' },
+    { path: '/api/export',             file: 'routes/exportRoutes.js' },
+    { path: '/api/crm',                file: 'routes/crmRoutes.js' },
+    { path: '/api/enrichment',         file: 'routes/enrichmentRoutes.js' },
+    { path: '/api/analytics',          file: 'routes/analyticsRoutes.js' },
+    { path: '/api/outreach',           file: 'routes/outreachRoutes.js' },
+    { path: '/api/newsletter',         file: 'routes/newsletterRoutes.js' },
+    { path: '/api/signatures',         file: 'routes/signatureRoutes.js' },
+  ];
+
+  // ── MINHELET only: resident coordination, scheduling, events, campaigns ──────
+  const minheletRoutes = [
+    { path: '/campaigns',              file: 'routes/campaignDashboardRoute.js' },
+    { path: '/booking',                file: 'routes/bookingRoute.js' },
+    { path: '/cal',                    file: 'routes/calRoute.js' },
+    { path: '/api/appointments',       file: 'routes/appointmentRoutes.js' },
+    { path: '/api/scheduling',         file: 'routes/schedulingRoutes.js' },
+    { path: '/api/scheduling',         file: 'routes/professionalVisitRoutes.js' },
+    { path: '/api/scheduling/calendar', file: 'routes/calendarRoutes.js' },
+    { path: '/api/test/optimization',  file: 'routes/optimizationTestRoute.js' },
+    { path: '/api/notifications',      file: 'routes/notificationRoutes.js' },
+    { path: '/api/campaigns',          file: 'routes/campaignRoutes.js' },
+    // Event Scheduler: Admin UI MUST come before scheduler (avoids :id conflict)
+    { path: '/events',                 file: 'routes/eventAdminRoute.js' },
+    { path: '/events',                 file: 'routes/eventSchedulerRoutes.js' },
+  ];
+
+  shared.forEach(r => loadRoute(r.path, r.file));
+  if (isQuantum)  quantumRoutes.forEach(r => loadRoute(r.path, r.file));
+  if (isMinhelet) minheletRoutes.forEach(r => loadRoute(r.path, r.file));
+
+  logger.info(`[Routes] shared=${shared.length} quantum=${isQuantum ? quantumRoutes.length : 0} minhelet=${isMinhelet ? minheletRoutes.length : 0}`);
 }
 
 function loadBackupRoutes() {
   try {
     const { createFullBackup, getBackupStats, restoreFromBackup } = require('./services/backupService');
     app.post('/api/backup/create', async (req, res) => {
-      try { const result = await createFullBackup(); res.json({ success: true, backup: result }); }
+      try { res.json({ success: true, backup: await createFullBackup() }); }
       catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
     app.get('/api/backup/list', async (req, res) => {
-      try { const stats = await getBackupStats(); res.json({ success: true, stats }); }
+      try { res.json({ success: true, stats: await getBackupStats() }); }
       catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
     app.post('/api/backup/restore/:timestamp', async (req, res) => {
       try {
         if (!req.body.confirmed) return res.status(400).json({ success: false, error: 'Confirmation required' });
-        const result = await restoreFromBackup(`quantum_backup_${req.params.timestamp}.sql.gz`, { confirmed: true });
-        res.json({ success: true, result });
+        res.json({ success: true, result: await restoreFromBackup(`quantum_backup_${req.params.timestamp}.sql.gz`, { confirmed: true }) });
       } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
     routeLoadResults.push({ path: '/api/backup', status: 'ok', file: 'services/backupService.js' });
-    logger.info('[BACKUP API] Backup API routes loaded successfully');
   } catch (err) {
     routeLoadResults.push({ path: '/api/backup', status: 'failed', error: err.message, file: 'services/backupService.js' });
-    logger.error('[BACKUP API] Failed to load backup API routes:', err.message);
   }
-  // GitHub backup routes
   try {
     const { createBackup, listBackups } = require('./services/githubBackupService');
     app.post('/api/backup/github/create', async (req, res) => {
-      try { const result = await createBackup(); res.json(result); }
-      catch (e) { res.status(500).json({ success: false, error: e.message }); }
+      try { res.json(await createBackup()); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
     app.get('/api/backup/github/list', async (req, res) => {
-      try { const backups = await listBackups(); res.json({ success: true, count: backups.length, backups }); }
-      catch (e) { res.status(500).json({ success: false, error: e.message }); }
+      try { const b = await listBackups(); res.json({ success: true, count: b.length, backups: b }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
     });
-    logger.info('[BACKUP API] GitHub backup routes loaded');
-  } catch (err) { logger.warn('[BACKUP API] GitHub routes failed:', err.message); }
+  } catch (err) { logger.warn('[BACKUP] GitHub routes failed:', err.message); }
 }
 
 function loadAutoContactRoutes() {
+  if (!isQuantum) return;
   try {
     const { runAutoFirstContact, runKonesAutoContact, getContactStats, getKonesContactStats } = require('./services/autoFirstContactService');
-    app.get('/api/auto-contact/stats', async (req, res) => {
-      try { res.json({ success: true, ...await getContactStats() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-    });
-    app.get('/api/auto-contact/kones-stats', async (req, res) => {
-      try { res.json({ success: true, kones: await getKonesContactStats() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-    });
-    app.post('/api/auto-contact/run', async (req, res) => {
-      try { res.json({ success: true, result: await runAutoFirstContact() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-    });
-    app.post('/api/auto-contact/run-kones', async (req, res) => {
-      try { res.json({ success: true, result: await runKonesAutoContact() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-    });
+    app.get('/api/auto-contact/stats', async (req, res) => { try { res.json({ success: true, ...await getContactStats() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } });
+    app.get('/api/auto-contact/kones-stats', async (req, res) => { try { res.json({ success: true, kones: await getKonesContactStats() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } });
+    app.post('/api/auto-contact/run', async (req, res) => { try { res.json({ success: true, result: await runAutoFirstContact() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } });
+    app.post('/api/auto-contact/run-kones', async (req, res) => { try { res.json({ success: true, result: await runKonesAutoContact() }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } });
     routeLoadResults.push({ path: '/api/auto-contact', status: 'ok', file: 'services/autoFirstContactService.js' });
-    logger.info('[AutoContact] API routes loaded');
   } catch (err) {
     routeLoadResults.push({ path: '/api/auto-contact', status: 'failed', error: err.message, file: 'services/autoFirstContactService.js' });
-    logger.error('[AutoContact] Failed to load routes:', err.message);
   }
 }
 
-const VAPI_QUANTUM_KEYTERMS = [
-  'פינוי-בינוי', 'ועדה מקומית', 'כינוס נכסים', 'פרמיה',
-  'דייר סרבן', 'יזם', 'נסח טאבו', 'QUANTUM', 'קוונטום',
-  'תשואה', 'השקעה', 'תמורה', 'חוזה פינוי', 'בעל נכס', 'שמאי',
-  'דירת תמורה', 'רישום בטאבו', 'פרויקט', 'מתחם', 'הסכם פינוי',
-];
+// ── Vapi keyterms ──────────────────────────────────────────────────────────────
 
-const VAPI_AGENT_IDS = [
-  process.env.VAPI_ASSISTANT_SELLER,
-  process.env.VAPI_ASSISTANT_BUYER,
-  process.env.VAPI_ASSISTANT_REMINDER,
-  process.env.VAPI_ASSISTANT_COLD,
-  process.env.VAPI_ASSISTANT_INBOUND,
-  process.env.VAPI_ASSISTANT_SCHEDULING,
+const VAPI_QUANTUM_KEYTERMS = [
+  'פינוי-בינוי', 'ועדה מקומית', 'כינוס נכסים', 'פרמיה', 'דייר סרבן', 'יזם',
+  'נסח טאבו', 'QUANTUM', 'קוונטום', 'תשואה', 'השקעה', 'תמורה', 'חוזה פינוי',
+  'בעל נכס', 'שמאי', 'דירת תמורה', 'רישום בטאבו', 'פרויקט', 'מתחם', 'הסכם פינוי',
 ];
 
 async function checkVapiKeytermsSupport() {
   const apiKey = process.env.VAPI_API_KEY;
   const testId = process.env.VAPI_ASSISTANT_COLD;
   if (!apiKey || !testId) return;
-  logger.info('[VapiKeyterms] Checking if Vapi supports keyterms...');
   try {
     const axios = require('axios');
-    const testBody = { transcriber: { provider: 'deepgram', model: 'nova-3', language: 'he', keyterms: ['פינוי-בינוי', 'QUANTUM'] } };
-    const resp = await axios.patch(`https://api.vapi.ai/assistant/${testId}`, testBody, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
-    const returned = resp.data?.transcriber?.keyterms;
-    if (Array.isArray(returned) && returned.length > 0) {
-      logger.info('[VapiKeyterms] SUPPORTED! Applying keyterms to all agents...');
-      const fullBody = { transcriber: { provider: 'deepgram', model: 'nova-3', language: 'he', keyterms: VAPI_QUANTUM_KEYTERMS } };
-      for (const agentId of VAPI_AGENT_IDS) {
-        if (!agentId) continue;
-        try { await axios.patch(`https://api.vapi.ai/assistant/${agentId}`, fullBody, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }); } catch (e) { logger.warn(`[VapiKeyterms] Failed to update agent ${agentId}:`, e.message); }
+    const resp = await axios.patch(`https://api.vapi.ai/assistant/${testId}`,
+      { transcriber: { provider: 'deepgram', model: 'nova-3', language: 'he', keyterms: ['פינוי-בינוי', 'QUANTUM'] } },
+      { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
+    );
+    if (Array.isArray(resp.data?.transcriber?.keyterms) && resp.data.transcriber.keyterms.length > 0) {
+      const agents = [process.env.VAPI_ASSISTANT_SELLER, process.env.VAPI_ASSISTANT_BUYER, process.env.VAPI_ASSISTANT_REMINDER, process.env.VAPI_ASSISTANT_COLD, process.env.VAPI_ASSISTANT_INBOUND, process.env.VAPI_ASSISTANT_SCHEDULING].filter(Boolean);
+      const body = { transcriber: { provider: 'deepgram', model: 'nova-3', language: 'he', keyterms: VAPI_QUANTUM_KEYTERMS } };
+      for (const id of agents) {
+        try { await axios.patch(`https://api.vapi.ai/assistant/${id}`, body, { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }); } catch (e) {}
       }
-    } else {
-      logger.info('[VapiKeyterms] Not yet supported - will check again in 3 days');
+      logger.info('[VapiKeyterms] Applied to all agents');
     }
-  } catch (err) {
-    logger.warn('[VapiKeyterms] Check error:', err.response?.data?.message || err.message);
-  }
+  } catch (err) { logger.warn('[VapiKeyterms]', err.response?.data?.message || err.message); }
 }
+
+// ── Health / version / complexes / debug ───────────────────────────────────────
 
 app.get('/health', async (req, res) => {
   try {
-    const result = await pool.query('SELECT COUNT(*) FROM complexes');
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), db: 'connected', complexes: parseInt(result.rows[0].count), version: VERSION, build: BUILD });
+    const r = await pool.query('SELECT COUNT(*) FROM complexes');
+    res.json({ status: 'ok', mode: START_MODE, complexes: parseInt(r.rows[0].count), version: VERSION, build: BUILD });
   } catch (err) {
     res.status(503).json({ status: 'error', db: 'disconnected', error: err.message, version: VERSION });
   }
 });
 
-app.get('/api/version', (req, res) => {
-  res.json({ version: VERSION, build: BUILD, timestamp: new Date().toISOString() });
-});
+app.get('/api/version', (req, res) => res.json({ version: VERSION, build: BUILD, mode: START_MODE }));
 
 app.get('/api/complexes', async (req, res) => {
   try {
@@ -378,204 +287,196 @@ app.get('/api/complexes', async (req, res) => {
 app.get('/api/debug', async (req, res) => {
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
-  let backupStatus = 'unknown';
-  try { const { getBackupStats } = require('./services/backupService'); const s = await getBackupStats(); backupStatus = `active (${s.totalBackups} backups, ${s.totalSizeMB}MB)`; } catch (e) { backupStatus = 'failed'; }
-  let optimizationStats = {};
-  try { const { rows } = await pool.query(`SELECT status, COUNT(*) AS total FROM reschedule_requests GROUP BY status`); optimizationStats = Object.fromEntries(rows.map(r => [r.status, parseInt(r.total)])); } catch (e) {}
   let gcalStatus = 'not configured';
-  try { const gcal = require('./services/googleCalendarService'); gcalStatus = gcal.isConfigured() ? `configured (${process.env.GOOGLE_SA_EMAIL || process.env.GOOGLE_CLIENT_EMAIL})` : 'credentials missing'; } catch (e) { gcalStatus = 'service error'; }
-  let zcalStatus = 'not configured';
-  try { const zcal = require('./services/zohoCalendarService'); zcalStatus = zcal.isConfigured() ? 'configured (Zoho OAuth)' : 'credentials missing'; } catch (e) { zcalStatus = 'service error'; }
-  let escalationStatus = 'not configured';
-  try { const { getEscalationMinutes } = require('./services/waBotEscalationService'); const m = await getEscalationMinutes(); escalationStatus = m === 0 ? 'disabled (0 min)' : `active (${m} min silence → Vapi call)`; } catch (e) { escalationStatus = 'error'; }
+  try { const gcal = require('./services/googleCalendarService'); gcalStatus = gcal.isConfigured() ? `configured (${process.env.GOOGLE_SA_EMAIL || ''})` : 'credentials missing'; } catch (e) {}
+  let escalationStatus = 'n/a';
+  try { const { getEscalationMinutes } = require('./services/waBotEscalationService'); const m = await getEscalationMinutes(); escalationStatus = m === 0 ? 'disabled' : `active (${m} min)`; } catch (e) {}
   let eventStats = {};
   try { const { rows } = await pool.query('SELECT COUNT(*) AS total FROM quantum_events'); eventStats = { total_events: parseInt(rows[0].total) }; } catch (e) {}
   let outreachStats = {};
   try { const { rows } = await pool.query(`SELECT COUNT(*) FILTER (WHERE message_status='sent') as wa_sent, COUNT(*) FILTER (WHERE message_status='replied') as replied FROM listings WHERE is_active=TRUE`); outreachStats = rows[0]; } catch (e) {}
-  let noReplyStats = {};
-  try { const { rows } = await pool.query(`SELECT reminder_type, status, COUNT(*) FROM reminder_queue WHERE reminder_type LIKE 'no_reply%' GROUP BY reminder_type, status ORDER BY reminder_type, status`); noReplyStats = rows; } catch (e) {}
   res.json({
-    version: VERSION, build: BUILD, timestamp: new Date().toISOString(),
-    wa_bot: 'רן מ-QUANTUM v7.0 | persona: רן | overlapping scripts with Vapi',
-    wa_bot_escalation: escalationStatus,
-    no_reply_flow: 'active | R1(24h) → R2(48h) → Vapi call(72h) | configurable per campaign',
-    campaigns: 'UI at /campaigns | API at /api/campaigns | followup cron: every 2min',
-    event_scheduler: `active | Admin UI at /events/admin | API at /events | ${JSON.stringify(eventStats)}`,
-    outreach: `active | POST /api/outreach/send | ${JSON.stringify(outreachStats)}`,
-    professional_visits: 'POST /api/scheduling/visits | POST /api/scheduling/pre-register',
-    schedule_optimization: `active | ${JSON.stringify(optimizationStats)}`,
-    no_reply_queue: noReplyStats,
+    version: VERSION, build: BUILD, mode: START_MODE, timestamp: new Date().toISOString(),
+    quantum: isQuantum, minhelet: isMinhelet,
     google_calendar: gcalStatus,
-    zoho_calendar: zcalStatus,
-    incoming_whatsapp_poll: 'active - every 60s via INFORU PullData',
-    routes: { loaded: loaded.map(r => r.path + ' (' + r.file + ')'), failed: failed.map(r => ({ path: r.path, error: r.error })) }
+    wa_bot_escalation: escalationStatus,
+    event_scheduler: JSON.stringify(eventStats),
+    outreach: JSON.stringify(outreachStats),
+    routes: { loaded: loaded.map(r => `${r.path} (${r.file})`), failed: failed.map(r => ({ path: r.path, error: r.error })) }
   });
 });
 
 app.get('/', (req, res) => res.redirect('/dashboard'));
 
+// ── Main start ─────────────────────────────────────────────────────────────────
+
 async function start() {
-  logger.info(`=== QUANTUM ANALYZER ${VERSION} ===`);
+  logger.info(`=== QUANTUM ANALYZER ${VERSION} | mode=${START_MODE} ===`);
+
+  // Shared migrations (always run)
   await runAutoMigrations();
-  await runOutreachMigration();
-  await runSchedulingMigrations();
-  await runCampaignsMigration();
-  await runEventsMigration();
-  await runEnrichmentMigration();
-  await runDeduplicateMigration();
-  await runRededuplicateMigration();
-  await runCrmDealsMigration();
-  await runPerformanceIndexesMigration();
-  await runNewsletterMigration();
+  await runMigrationFile('Scheduling schema', path.join(__dirname, 'models', 'schedulingSchema.sql'));
+  await runMigrationFile('Campaigns schema', path.join(__dirname, 'db', 'migrations', 'campaigns_schema.sql'));
+  await runMigrationFile('Events schema', path.join(__dirname, 'db', 'migrations', 'events_schema.sql'));
+  await runMigrationFile('Enrichment (009)', path.join(__dirname, 'db', 'migrations', '009_listing_enrichment_columns.sql'));
+  await runMigrationFile('Dedup (010)', path.join(__dirname, 'db', 'migrations', '010_deduplicate_listings.sql'));
+  await runMigrationFile('Re-dedup (011)', path.join(__dirname, 'db', 'migrations', '011_rededuplicate_listings.sql'));
+  await runMigrationFile('CRM deals (013)', path.join(__dirname, 'db', 'migrations', '013_crm_deals.sql'));
+  await runMigrationFile('Perf indexes (014)', path.join(__dirname, 'db', 'migrations', '014_add_performance_indexes.sql'));
+  await runMigrationFile('Newsletter (015)', path.join(__dirname, 'db', 'migrations', '015_newsletter_subscribers.sql'));
+  if (isQuantum) await runOutreachMigration();
+
   loadAllRoutes();
   loadBackupRoutes();
   loadAutoContactRoutes();
 
   const loaded = routeLoadResults.filter(r => r.status === 'ok');
   const failed = routeLoadResults.filter(r => r.status === 'failed');
-  logger.info('=== ROUTE LOADING SUMMARY ===');
-  loaded.forEach(r => logger.info(`  OK: ${r.path} (${r.file})`));
+  logger.info(`=== ROUTES: ${loaded.length} ok / ${failed.length} failed ===`);
   failed.forEach(r => logger.error(`  FAILED: ${r.path} (${r.file}) -> ${r.error}`));
 
-  try { const gcal = require('./services/googleCalendarService'); if (gcal.isConfigured()) { logger.info(`[GCal] Configured`); } } catch (e) {}
-  try { const zcal = require('./services/zohoCalendarService'); if (zcal.isConfigured()) { logger.info('[ZohoCal] Configured'); } } catch (e) {}
+  // ── QUANTUM crons ────────────────────────────────────────────────────────────
+  if (isQuantum) {
+    try { const gcal = require('./services/googleCalendarService'); if (gcal.isConfigured()) logger.info('[GCal] Configured'); } catch (e) {}
 
-  try {
-    const { initialize: initAutoContact, runAutoFirstContact, runKonesAutoContact } = require('./services/autoFirstContactService');
-    await initAutoContact();
-    const cron = require('node-cron');
-    cron.schedule('*/30 * * * *', async () => { try { await runAutoFirstContact(); } catch (e) { logger.warn('[AutoContact] Cron error:', e.message); } });
-    cron.schedule('45 7 * * *', async () => { try { await runKonesAutoContact(); } catch (e) { logger.warn('[KonesContact] Cron error:', e.message); } });
-    logger.info('[AutoContact] ACTIVE - every 30 min');
-  } catch (e) { logger.warn('[AutoContact] Failed to start:', e.message); }
+    try {
+      const { initialize: initAutoContact, runAutoFirstContact, runKonesAutoContact } = require('./services/autoFirstContactService');
+      await initAutoContact();
+      const cron = require('node-cron');
+      cron.schedule('*/30 * * * *', async () => { try { await runAutoFirstContact(); } catch (e) {} });
+      cron.schedule('45 7 * * *',   async () => { try { await runKonesAutoContact(); } catch (e) {} });
+      logger.info('[AutoContact] ACTIVE');
+    } catch (e) { logger.warn('[AutoContact] Failed:', e.message); }
 
-  // Outreach: WA-then-call scheduler (every 30 min)
-  try {
-    const cron = require('node-cron');
-    const axios = require('axios');
-    cron.schedule('*/30 * * * *', async () => {
-      try { await axios.post(`http://localhost:${PORT}/api/outreach/wa-then-call-cron`, {}, { timeout: 30000 }); }
-      catch (e) { if (e.code !== 'ECONNREFUSED') logger.warn('[OutreachCron] Error:', e.message); }
-    });
-    logger.info('[OutreachCron] ACTIVE - wa-then-call every 30 min');
-  } catch (e) { logger.warn('[OutreachCron] Failed to start:', e.message); }
+    try {
+      const cron = require('node-cron');
+      const axios = require('axios');
+      cron.schedule('*/30 * * * *', async () => {
+        try { await axios.post(`http://localhost:${PORT}/api/outreach/wa-then-call-cron`, {}, { timeout: 30000 }); }
+        catch (e) { if (e.code !== 'ECONNREFUSED') logger.warn('[OutreachCron]', e.message); }
+      });
+      logger.info('[OutreachCron] ACTIVE');
+    } catch (e) {}
 
-  try { const { startOptimizationCron } = require('./cron/optimizationCron'); startOptimizationCron(); logger.info('[ScheduleOptimization] ACTIVE'); } catch (e) { logger.warn('[ScheduleOptimization] Failed:', e.message); }
+    try {
+      const { pollIncomingWhatsApp } = require('./cron/incomingWhatsAppCron');
+      const cron = require('node-cron');
+      cron.schedule('* * * * *', async () => { try { await pollIncomingWhatsApp(); } catch (e) {} });
+      logger.info('[IncomingWA] ACTIVE - polling INFORU every 60s');
+    } catch (e) { logger.warn('[IncomingWA] Failed:', e.message); }
 
-  try {
-    const { pollIncomingWhatsApp } = require('./cron/incomingWhatsAppCron');
-    const cron = require('node-cron');
-    cron.schedule('* * * * *', async () => { try { await pollIncomingWhatsApp(); } catch (e) { logger.warn('[IncomingWA] Cron error:', e.message); } });
-    logger.info('[IncomingWA] ACTIVE - polling INFORU every 60s');
-  } catch (e) { logger.warn('[IncomingWA] Failed to start:', e.message); }
+    try {
+      const cron = require('node-cron');
+      const { runEscalation } = require('./services/waBotEscalationService');
+      cron.schedule('*/5 * * * *', async () => { try { await runEscalation(); } catch (e) {} });
+      logger.info('[WaBotEscalation] ACTIVE');
+    } catch (e) {}
 
-  try {
-    const cron = require('node-cron');
-    const axios = require('axios');
-    cron.schedule('*/2 * * * *', async () => {
-      try { await axios.post(`http://localhost:${PORT}/api/campaigns/followup/run`, {}, { timeout: 30000 }); }
-      catch (e) { if (e.code !== 'ECONNREFUSED') { logger.warn('[CampaignFollowup] Cron error:', e.message); } }
-    });
-    logger.info('[CampaignFollowup] ACTIVE - checking every 2 min');
-  } catch (e) { logger.warn('[CampaignFollowup] Failed to start:', e.message); }
+    try {
+      const cron = require('node-cron');
+      cron.schedule('0 9 */3 * *', async () => { try { await checkVapiKeytermsSupport(); } catch (e) {} });
+    } catch (e) {}
 
-  // Campaign Flow Engine v5.0 — WA reminders (Meta templates) + call escalation
-  try {
-    const cron = require('node-cron');
-    const { runCampaignFlowEngine } = require('./cron/campaignFlowEngine');
-    cron.schedule('*/5 * * * *', async () => {
-      try { await runCampaignFlowEngine(); }
-      catch (e) { logger.warn('[CampaignFlowEngine] Cron error:', e.message); }
-    });
-    logger.info('[CampaignFlowEngine] ACTIVE - WA reminders + call escalation every 5 min');
-  } catch (e) { logger.warn('[CampaignFlowEngine] Failed to start:', e.message); }
+    try { require('./jobs/weeklyScanner').startScheduler(); } catch (e) {}
+    try { require('./jobs/stuckScanWatcher').startWatcher(); } catch (e) {}
+    try { require('./jobs/discoveryScheduler').startDiscoveryScheduler(); } catch (e) {}
+    try { require('./jobs/appointmentFallbackJob').initialize(); } catch (e) {}
 
-  try {
-    const cron = require('node-cron');
-    const { runEscalation } = require('./services/waBotEscalationService');
-    cron.schedule('*/5 * * * *', async () => {
-      try { const result = await runEscalation(); if (result.called > 0) { logger.info(`[WaBotEscalation] Escalated ${result.called} leads to Vapi`); } }
-      catch (e) { logger.warn('[WaBotEscalation] Cron error:', e.message); }
-    });
-    logger.info('[WaBotEscalation] ACTIVE - checking every 5 min');
-  } catch (e) { logger.warn('[WaBotEscalation] Failed to start:', e.message); }
+    try {
+      const masterPipeline = require('./jobs/masterPipeline');
+      masterPipeline.startScheduler();
+      app.post('/api/pipeline/run', async (req, res) => {
+        const st = masterPipeline.getStatus();
+        if (st.isRunning) return res.json({ ok: false, message: 'Pipeline already running' });
+        res.json({ ok: true, message: 'Master pipeline started' });
+        masterPipeline.runMasterPipeline().catch(e => logger.error('Pipeline error', e));
+      });
+      app.get('/api/pipeline/status', (req, res) => res.json(masterPipeline.getStatus()));
+      logger.info('[MasterPipeline] ACTIVE');
+    } catch (e) { logger.warn('[MasterPipeline] Failed:', e.message); }
 
-  try {
-    const cron = require('node-cron');
-    cron.schedule('0 9 */3 * *', async () => { try { await checkVapiKeytermsSupport(); } catch (e) { logger.warn('[VapiKeyterms] Cron error:', e.message); } });
-    logger.info('[VapiKeyterms] Checker ACTIVE - every 3 days at 09:00');
-  } catch (e) { logger.warn('[VapiKeyterms] Failed to start checker:', e.message); }
-
-  try { const konesIsraelService = require('./services/konesIsraelService'); const cron = require('node-cron'); cron.schedule('15 7 * * *', async () => { try { await konesIsraelService.runKonesonlineScrape(); } catch (e) {} }); } catch (e) {}
-
-  try {
-    const cron = require('node-cron');
-    cron.schedule('*/15 * * * *', async () => {
+    const scraperDefs = [
+      { name: 'Komo',           module: './services/komoScraper',           cron: '0 8 * * *',   fn: 'scanAll' },
+      { name: 'BankNadlan',     module: './services/bankNadlanScraper',     cron: '15 8 * * *',  fn: 'scanAll' },
+      { name: 'Yad1',           module: './services/yad1Scraper',           cron: '30 8 * * *',  fn: 'scanAll' },
+      { name: 'Dira',           module: './services/diraScraper',           cron: '45 8 * * *',  fn: 'scanAll' },
+      { name: 'Kones2',         module: './services/kones2Scraper',         cron: '0 9 * * *',   fn: 'scanAll' },
+      { name: 'BidSpirit',      module: './services/bidspiritScraper',      cron: '15 9 * * *',  fn: 'scanAll' },
+      { name: 'Govmap',         module: './services/govmapScraper',         cron: '0 7 * * 1',   fn: 'scanAll' },
+      { name: 'ComplexAddress', module: './services/complexAddressScraper', cron: '30 9 * * *',  fn: 'scanAll' },
+      { name: 'KonesIsrael',    module: './services/konesIsraelService',    cron: '15 7 * * *',  fn: 'runKonesonlineScrape' },
+    ];
+    for (const def of scraperDefs) {
       try {
-        const { rows: stale } = await pool.query(`SELECT a.* FROM appointments a WHERE a.status='whatsapp_sent' AND a.created_at < NOW() - INTERVAL '1 hour' AND a.vapi_call_id IS NULL LIMIT 5`);
-        if (!stale.length) return;
-        const axios = require('axios');
-        const apiKey = process.env.VAPI_API_KEY, phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
-        const assistantId = process.env.VAPI_ASSISTANT_COLD || process.env.VAPI_ASSISTANT_SELLER;
-        if (!apiKey || !phoneNumberId) return;
-        for (const appt of stale) {
-          const p = appt.phone.replace(/\D/g,''); const ip = p.startsWith('0') ? '+972'+p.slice(1) : '+'+p;
-          const r = await axios.post('https://api.vapi.ai/call/phone', { phoneNumberId, assistantId, customer: { number: ip, name: appt.lead_name||'לקוח' }, assistantOverrides: { variableValues: { appointment_id: appt.id.toString() } } }, { headers: { Authorization: `Bearer ${apiKey}` } });
-          await pool.query(`UPDATE appointments SET status='vapi_called', vapi_call_id=$1 WHERE id=$2`, [r.data?.id, appt.id]);
-        }
+        const scraper = require(def.module);
+        const cron = require('node-cron');
+        cron.schedule(def.cron, async () => { try { await scraper[def.fn](); } catch (e) {} });
+        logger.info(`[${def.name}] ACTIVE`);
       } catch (e) {}
-    });
-  } catch (e) {}
-
-  try { const { initializeBackupService } = require('./services/backupService'); await initializeBackupService(); } catch (e) {}
-
-  // GitHub-based hourly backup (replaces broken pg_dump backup)
-  try { const { initializeGithubBackup } = require('./services/githubBackupService'); await initializeGithubBackup(); } catch (e) { logger.warn('[Backup] GitHub backup init failed:', e.message); }
-
-  try { const { processReminderQueue } = require('./jobs/reminderJob'); const cron = require('node-cron');
-    cron.schedule('* * * * *', async () => { try { await processReminderQueue(); } catch (e) {} });
-    logger.info('Reminder queue: ACTIVE (includes no-reply flow)');
-  } catch (e) {}
-
-  // NOTE: Morning report is scheduled in quantumScheduler.js (07:30 Asia/Jerusalem) - no duplicate here
-  try { require('./jobs/weeklyScanner').startScheduler(); } catch (e) {}
-  try { require('./jobs/stuckScanWatcher').startWatcher(); } catch (e) {}
-  try { require('./jobs/discoveryScheduler').startDiscoveryScheduler(); } catch (e) {}
-  try { require('./jobs/appointmentFallbackJob').initialize(); } catch (e) {}
-
-  // Master Pipeline: all scrapers + statutory enrichment + Claude synthesis + IAI ranking
-  try {
-    const masterPipeline = require('./jobs/masterPipeline');
-    masterPipeline.startScheduler();
-    app.post('/api/pipeline/run', async (req, res) => {
-      const status = masterPipeline.getStatus();
-      if (status.isRunning) return res.json({ ok: false, message: 'Pipeline already running' });
-      res.json({ ok: true, message: 'Master pipeline started in background' });
-      masterPipeline.runMasterPipeline().catch(e => logger.error('Manual pipeline error', e));
-    });
-    app.get('/api/pipeline/status', (req, res) => res.json(masterPipeline.getStatus()));
-    logger.info('[MasterPipeline] Registered — daily 06:00 Israel time');
-  } catch (e) { logger.warn('[MasterPipeline] init failed', { error: e.message }); }
-
-  const scraperDefs = [
-    { name: 'Komo', module: './services/komoScraper', cron: '0 8 * * *', fn: 'scanAll' },
-    { name: 'BankNadlan', module: './services/bankNadlanScraper', cron: '15 8 * * *', fn: 'scanAll' },
-    { name: 'Yad1', module: './services/yad1Scraper', cron: '30 8 * * *', fn: 'scanAll' },
-    { name: 'Dira', module: './services/diraScraper', cron: '45 8 * * *', fn: 'scanAll' },
-    { name: 'Kones2', module: './services/kones2Scraper', cron: '0 9 * * *', fn: 'scanAll' },
-    { name: 'BidSpirit', module: './services/bidspiritScraper', cron: '15 9 * * *', fn: 'scanAll' },
-    { name: 'Govmap', module: './services/govmapScraper', cron: '0 7 * * 1', fn: 'scanAll' },
-    { name: 'ComplexAddress', module: './services/complexAddressScraper', cron: '30 9 * * *', fn: 'scanAll' },
-  ];
-  for (const def of scraperDefs) {
-    try { const scraper = require(def.module); const cron = require('node-cron'); cron.schedule(def.cron, async () => { try { await scraper[def.fn](); } catch (e) {} }); logger.info(`[${def.name}Scraper] ACTIVE`); } catch (e) {}
+    }
   }
 
-  app.use((req, res) => res.status(404).json({ error: 'Not Found', path: req.path, version: VERSION }));
+  // ── MINHELET crons ───────────────────────────────────────────────────────────
+  if (isMinhelet) {
+    try { const zcal = require('./services/zohoCalendarService'); if (zcal.isConfigured()) logger.info('[ZohoCal] Configured'); } catch (e) {}
+
+    try { const { startOptimizationCron } = require('./cron/optimizationCron'); startOptimizationCron(); logger.info('[ScheduleOptimization] ACTIVE'); } catch (e) {}
+
+    try {
+      const cron = require('node-cron');
+      const axios = require('axios');
+      cron.schedule('*/2 * * * *', async () => {
+        try { await axios.post(`http://localhost:${PORT}/api/campaigns/followup/run`, {}, { timeout: 30000 }); }
+        catch (e) { if (e.code !== 'ECONNREFUSED') logger.warn('[CampaignFollowup]', e.message); }
+      });
+      logger.info('[CampaignFollowup] ACTIVE - every 2 min');
+    } catch (e) {}
+
+    try {
+      const cron = require('node-cron');
+      const { runCampaignFlowEngine } = require('./cron/campaignFlowEngine');
+      cron.schedule('*/5 * * * *', async () => { try { await runCampaignFlowEngine(); } catch (e) {} });
+      logger.info('[CampaignFlowEngine] ACTIVE - every 5 min');
+    } catch (e) {}
+
+    // Appointment Vapi fallback: stale appointments → call
+    try {
+      const cron = require('node-cron');
+      cron.schedule('*/15 * * * *', async () => {
+        try {
+          const { rows: stale } = await pool.query(`SELECT a.* FROM appointments a WHERE a.status='whatsapp_sent' AND a.created_at < NOW() - INTERVAL '1 hour' AND a.vapi_call_id IS NULL LIMIT 5`);
+          if (!stale.length) return;
+          const axios = require('axios');
+          const apiKey = process.env.VAPI_API_KEY, phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+          const assistantId = process.env.VAPI_ASSISTANT_COLD || process.env.VAPI_ASSISTANT_SELLER;
+          if (!apiKey || !phoneNumberId) return;
+          for (const appt of stale) {
+            const p = appt.phone.replace(/\D/g,'');
+            const ip = p.startsWith('0') ? '+972'+p.slice(1) : '+'+p;
+            const r = await axios.post('https://api.vapi.ai/call/phone', { phoneNumberId, assistantId, customer: { number: ip, name: appt.lead_name||'לקוח' }, assistantOverrides: { variableValues: { appointment_id: appt.id.toString() } } }, { headers: { Authorization: `Bearer ${apiKey}` } });
+            await pool.query(`UPDATE appointments SET status='vapi_called', vapi_call_id=$1 WHERE id=$2`, [r.data?.id, appt.id]);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
+  // ── Shared crons (both modes) ────────────────────────────────────────────────
+  try { const { initializeBackupService } = require('./services/backupService'); await initializeBackupService(); } catch (e) {}
+  try { const { initializeGithubBackup } = require('./services/githubBackupService'); await initializeGithubBackup(); } catch (e) {}
+
+  try {
+    const { processReminderQueue } = require('./jobs/reminderJob');
+    const cron = require('node-cron');
+    cron.schedule('* * * * *', async () => { try { await processReminderQueue(); } catch (e) {} });
+    logger.info('[ReminderQueue] ACTIVE');
+  } catch (e) {}
+
+  app.use((req, res) => res.status(404).json({ error: 'Not Found', path: req.path, version: VERSION, mode: START_MODE }));
   app.use((err, req, res, next) => { logger.error('Unhandled error:', err); res.status(500).json({ error: err.message, version: VERSION }); });
 
   app.listen(PORT, '0.0.0.0', () => {
-    logger.info(`Server running on port ${PORT} | ${loaded.length} routes loaded`);
+    logger.info(`=== QUANTUM ${VERSION} | mode=${START_MODE} | port=${PORT} | routes=${loaded.length} ===`);
   });
 }
 
