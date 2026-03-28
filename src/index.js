@@ -14,8 +14,8 @@ const pool = require('./db/pool');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const VERSION = '5.1.0';
-const BUILD = '2026-03-28-start-mode-routing';
+const VERSION = '5.2.0';
+const BUILD = '2026-03-28-multilingual-newsletter';
 
 // ── START_MODE: 'quantum' | 'minhelet' | 'both' (default: 'both') ─────────────
 const START_MODE = (process.env.START_MODE || 'both').toLowerCase();
@@ -86,7 +86,8 @@ const limiter = rateLimit({
     req.path.startsWith('/pro/') || req.path.startsWith('/attend/') ||
     req.path.startsWith('/api/outreach/') ||
     req.path.startsWith('/api/comms/') ||
-    req.path.startsWith('/api/morning/'),
+    req.path.startsWith('/api/morning/') ||
+    req.path.startsWith('/api/newsletter/'),
   message: { error: 'Too many requests, please try again later' }
 });
 app.use('/api/', limiter);
@@ -295,6 +296,8 @@ app.get('/api/debug', async (req, res) => {
   try { const { rows } = await pool.query('SELECT COUNT(*) AS total FROM quantum_events'); eventStats = { total_events: parseInt(rows[0].total) }; } catch (e) {}
   let outreachStats = {};
   try { const { rows } = await pool.query(`SELECT COUNT(*) FILTER (WHERE message_status='sent') as wa_sent, COUNT(*) FILTER (WHERE message_status='replied') as replied FROM listings WHERE is_active=TRUE`); outreachStats = rows[0]; } catch (e) {}
+  let newsletterStats = {};
+  try { const { rows } = await pool.query(`SELECT COUNT(*) FILTER (WHERE confirmed AND is_active) AS active, COUNT(DISTINCT lang) AS langs FROM newsletter_subscribers`); newsletterStats = rows[0]; } catch (e) {}
   res.json({
     version: VERSION, build: BUILD, mode: START_MODE, timestamp: new Date().toISOString(),
     quantum: isQuantum, minhelet: isMinhelet,
@@ -302,6 +305,7 @@ app.get('/api/debug', async (req, res) => {
     wa_bot_escalation: escalationStatus,
     event_scheduler: JSON.stringify(eventStats),
     outreach: JSON.stringify(outreachStats),
+    newsletter: JSON.stringify(newsletterStats),
     routes: { loaded: loaded.map(r => `${r.path} (${r.file})`), failed: failed.map(r => ({ path: r.path, error: r.error })) }
   });
 });
@@ -313,7 +317,6 @@ app.get('/', (req, res) => res.redirect('/dashboard'));
 async function start() {
   logger.info(`=== QUANTUM ANALYZER ${VERSION} | mode=${START_MODE} ===`);
 
-  // Shared migrations (always run)
   await runAutoMigrations();
   await runMigrationFile('Scheduling schema', path.join(__dirname, 'models', 'schedulingSchema.sql'));
   await runMigrationFile('Campaigns schema', path.join(__dirname, 'db', 'migrations', 'campaigns_schema.sql'));
@@ -324,6 +327,7 @@ async function start() {
   await runMigrationFile('CRM deals (013)', path.join(__dirname, 'db', 'migrations', '013_crm_deals.sql'));
   await runMigrationFile('Perf indexes (014)', path.join(__dirname, 'db', 'migrations', '014_add_performance_indexes.sql'));
   await runMigrationFile('Newsletter (015)', path.join(__dirname, 'db', 'migrations', '015_newsletter_subscribers.sql'));
+  await runMigrationFile('Newsletter lang (016)', path.join(__dirname, 'db', 'migrations', '016_newsletter_lang.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
@@ -439,7 +443,6 @@ async function start() {
       logger.info('[CampaignFlowEngine] ACTIVE - every 5 min');
     } catch (e) {}
 
-    // Appointment Vapi fallback: stale appointments → call
     try {
       const cron = require('node-cron');
       cron.schedule('*/15 * * * *', async () => {
