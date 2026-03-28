@@ -1394,6 +1394,23 @@ router.get('/phone-coverage', async (req, res) => {
   }
 });
 
+// POST /api/scan/enrich-missing-addresses
+// Fills in the `addresses` field for complexes that have none,
+// so complexMatcher can start matching listings to them.
+router.post('/enrich-missing-addresses', async (req, res) => {
+  try {
+    const { limit = 120, dryRun = false } = req.body || {};
+    const { enrichMissingAddresses } = require('../services/enrichMissingAddresses');
+    // Respond immediately, run in background
+    res.json({ message: 'enrich-missing-addresses started', limit, dryRun });
+    enrichMissingAddresses({ limit: parseInt(limit), dryRun })
+      .then(r => logger.info(`[EnrichAddr] Done: ${r.enriched}/${r.total} enriched`))
+      .catch(err => logger.error(`[EnrichAddr] Error: ${err.message}`));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
 router.get('/:id', async (req, res) => {
   try {

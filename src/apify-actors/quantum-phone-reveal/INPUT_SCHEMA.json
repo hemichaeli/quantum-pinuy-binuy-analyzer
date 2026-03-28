@@ -12,12 +12,12 @@
       "items": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer" },
-          "url": { "type": "string" },
-          "source": { "type": "string", "enum": ["yad2", "yad1", "dira", "homeless", "banknadlan", "komo", "madlan"] },
-          "sourceListingId": { "type": "string" },
-          "address": { "type": "string" },
-          "city": { "type": "string" }
+          "id":              { "title": "Listing ID",        "description": "Internal DB listing ID",          "type": "integer" },
+          "url":             { "title": "URL",               "description": "Direct URL to the listing page",  "type": "string" },
+          "source":          { "title": "Source",            "description": "Platform the listing came from",  "type": "string", "enum": ["yad2","yad1","dira","homeless","banknadlan","komo","madlan"] },
+          "sourceListingId": { "title": "Source Listing ID", "description": "Original ID on the source site",  "type": "string" },
+          "address":         { "title": "Address",           "description": "Street address of the property",  "type": "string" },
+          "city":            { "title": "City",              "description": "City of the property",            "type": "string" }
         },
         "required": ["id", "url", "source"]
       }
@@ -32,13 +32,9 @@
     },
     "proxyConfig": {
       "title": "Proxy Configuration",
+      "description": "Apify proxy settings for residential proxies",
       "type": "object",
-      "description": "Apify proxy settings",
-      "default": {
-        "useApifyProxy": true,
-        "apifyProxyGroups": ["RESIDENTIAL"],
-        "countryCode": "IL"
-      }
+      "editor": "proxy"
     }
   },
   "required": ["listings"]
