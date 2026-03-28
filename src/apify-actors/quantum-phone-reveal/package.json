@@ -8,8 +8,7 @@
   },
   "dependencies": {
     "apify": "^3.1.0",
-    "crawlee": "^3.5.0",
-    "puppeteer": "^21.0.0"
+    "crawlee": "^3.5.0"
   },
   "apify": {
     "title": "QUANTUM Phone Reveal",

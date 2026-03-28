@@ -1450,7 +1450,7 @@ router.post('/apify-deploy', async (req, res) => {
           actorSpecification: 1, name: 'quantum-phone-reveal', title: 'QUANTUM Phone Reveal',
           input: './INPUT_SCHEMA.json', dockerfile: './Dockerfile'
         }, null, 2) },
-        { name: 'Dockerfile', format: 'TEXT', content: 'FROM apify/actor-node-puppeteer-chrome:20\nCOPY package.json ./\nRUN npm install --omit=dev\nCOPY . ./\nCMD npm start\n' },
+        { name: 'Dockerfile', format: 'TEXT', content: 'FROM apify/actor-node-puppeteer-chrome:18\nCOPY package.json ./\nRUN npm install --omit=dev --prefer-offline\nCOPY . ./\nCMD npm start\n' },
         { name: '.actorignore', format: 'TEXT', content: 'node_modules\n' }
       ]
     };
