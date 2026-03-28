@@ -1,13 +1,14 @@
 /**
  * complexMatcher.js
- * 
+ *
  * Matches listing addresses to pinuy-binuy complexes.
- * Used by city-based scrapers (homeless, dira, banknadlan, yad1, winwin)
- * to only save listings that belong to known pinuy-binuy complexes.
- * 
- * Matching logic:
- * 1. City must match (exact or partial)
- * 2. Street name from listing address must appear in complex addresses/name
+ *
+ * Matching pipeline (in order):
+ *  1. City filter  — normalised city comparison (handles hyphens: "רמת-גן" = "רמת גן")
+ *  2. Street match — extracts street name from listing, handles REVERSED addresses
+ *                   like "עיר, שכונה, רחוב מספר" (Dira / Komo format).
+ *  3. Neighborhood fallback — when no street found, checks if listing address
+ *                             contains the complex's neighborhood name.
  */
 
 const pool = require('../db/pool');
@@ -71,10 +72,11 @@ async function loadComplexCache() {
       }
 
       return {
-        id: c.id,
-        name: c.name,
-        city: c.city,
-        streetNames: Array.from(streetNames)
+        id:           c.id,
+        name:         c.name,
+        city:         c.city,
+        neighborhood: c.neighborhood || null,  // kept raw for neighborhood fallback
+        streetNames:  Array.from(streetNames)
       };
     });
 
@@ -113,10 +115,29 @@ function extractStreetName(address) {
 function normalizeCity(city) {
   if (!city) return '';
   return city
-    .replace(/^עיר\s+/, '')
     .replace(/^עיריית\s+/, '')
+    .replace(/^עיר\s+/, '')
+    .replace(/[-–]/g, ' ')   // "רמת-גן" → "רמת גן"
     .trim()
     .toLowerCase();
+}
+
+/**
+ * Extract street name with awareness of reversed-address format.
+ * Dira / Komo often return "עיר, שכונה, רחוב מספר".
+ * When the first part matches the city, the street is the LAST part.
+ */
+function extractStreetSmarter(address, listingCity) {
+  if (!address) return null;
+  const parts = address.split(/[,،،]/);
+  if (parts.length >= 2 && listingCity) {
+    const firstPart = parts[0].trim();
+    if (citiesMatch(firstPart, listingCity)) {
+      // Reversed format detected — street is the last segment
+      return extractStreetName(parts[parts.length - 1].trim());
+    }
+  }
+  return extractStreetName(address);
 }
 
 /**
@@ -143,29 +164,54 @@ async function findMatchingComplex(listingAddress, listingCity) {
   const complexes = await loadComplexCache();
   if (!complexes.length) return null;
 
-  const listingStreet = extractStreetName(listingAddress || '');
-
-  // Filter complexes by city first
+  // Step 1 — city filter
   const cityMatches = complexes.filter(c => citiesMatch(c.city, listingCity));
   if (!cityMatches.length) return null;
 
-  // If no street in listing, can't match further
-  if (!listingStreet || listingStreet.length < 2) return null;
+  // Step 2 — street match (reversed-address aware)
+  const listingStreet = extractStreetSmarter(listingAddress || '', listingCity);
 
-  // Find complexes where listing street matches one of the complex streets
-  for (const complex of cityMatches) {
-    for (const street of complex.streetNames) {
-      if (!street || street.length < 2) continue;
-      // Check if street names overlap (either contains the other)
-      const s1 = listingStreet.toLowerCase();
-      const s2 = street.toLowerCase();
-      if (s1 === s2 || s1.includes(s2) || s2.includes(s1)) {
-        logger.debug(`[ComplexMatcher] Matched: "${listingAddress}" (${listingCity}) -> ${complex.name} [street: ${street}]`);
+  if (listingStreet && listingStreet.length >= 2) {
+    for (const complex of cityMatches) {
+      for (const street of complex.streetNames) {
+        if (!street || street.length < 2) continue;
+        const s1 = listingStreet.toLowerCase();
+        const s2 = street.toLowerCase();
+        if (s1 === s2 || s1.includes(s2) || s2.includes(s1)) {
+          logger.debug(
+            `[ComplexMatcher] Street match: "${listingAddress}" (${listingCity}) → ${complex.name} [${street}]`
+          );
+          return {
+            complexId:     complex.id,
+            complexName:   complex.name,
+            matchedStreet: street,
+            confidence:    s1 === s2 ? 'exact' : 'partial'
+          };
+        }
+      }
+    }
+  }
+
+  // Step 3 — neighborhood fallback (e.g. Homeless returns "רמת הנשיא" with no street)
+  if (listingAddress) {
+    const normAddr = listingAddress
+      .replace(/[•\-–]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+    for (const complex of cityMatches) {
+      if (!complex.neighborhood) continue;
+      const normNeighborhood = complex.neighborhood.trim().toLowerCase();
+      if (normNeighborhood.length >= 3 && normAddr.includes(normNeighborhood)) {
+        logger.debug(
+          `[ComplexMatcher] Neighborhood match: "${listingAddress}" (${listingCity}) → ${complex.name} [${complex.neighborhood}]`
+        );
         return {
-          complexId: complex.id,
-          complexName: complex.name,
-          matchedStreet: street,
-          confidence: s1 === s2 ? 'exact' : 'partial'
+          complexId:     complex.id,
+          complexName:   complex.name,
+          matchedStreet: complex.neighborhood,
+          confidence:    'neighborhood'
         };
       }
     }
@@ -186,5 +232,6 @@ module.exports = {
   findMatchingComplex,
   loadComplexCache,
   invalidateCache,
-  extractStreetName
+  extractStreetName,
+  extractStreetSmarter
 };

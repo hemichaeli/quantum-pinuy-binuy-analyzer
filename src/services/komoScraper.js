@@ -145,8 +145,34 @@ async function queryKomoPerplexity(city) {
   }
 }
 
+/**
+ * Returns true when the listing looks like a new-project / contractor ad.
+ * We only want resale of OLD apartments inside pinuy-binuy complexes.
+ */
+function isNewProjectListing(listing) {
+  const text = [
+    listing.description || '',
+    listing.contact_name || '',
+    listing.address || ''
+  ].join(' ');
+
+  const NEW_PROJECT_KEYWORDS = [
+    'קבלן', 'יזם', 'פרויקט חדש', 'בנייה חדשה',
+    'מחיר למשתכן', 'דירה חדשה מקבלן',
+    'מכירה ראשונה', 'מסירה', 'מפרט טכני'
+  ];
+
+  return NEW_PROJECT_KEYWORDS.some(kw => text.includes(kw));
+}
+
 async function saveListing(listing) {
   try {
+    // Skip new-project / contractor listings — we only want resale of old apartments
+    if (isNewProjectListing(listing)) {
+      logger.debug(`[Komo] Skipping new-project listing: ${listing.address}`);
+      return 'skipped';
+    }
+
     const sourceId = listing.listing_id || `${listing.address}-${listing.price}`;
     const existing = await pool.query(
       `SELECT id, asking_price FROM listings WHERE source = 'komo' AND source_listing_id = $1`,
