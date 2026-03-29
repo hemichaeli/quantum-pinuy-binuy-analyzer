@@ -1606,7 +1606,7 @@ router.post('/apify-test-run', async (req, res) => {
     const actor = (actorsResp.data?.data?.items || []).find(a => a.name === 'quantum-phone-reveal');
     if (!actor) return res.status(404).json({ error: 'Actor not found' });
 
-    const count = Math.min(parseInt(req.body?.count) || 3, 10);
+    const count = Math.min(parseInt(req.body?.count) || 3, 100);
     const source = req.body?.source || null;
 
     // Get phoneless listings — prefer those with source_listing_id (Actor builds direct URLs)
