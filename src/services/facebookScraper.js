@@ -359,19 +359,22 @@ async function queryFacebookApify(city) {
   const fbCookies = loadFbCookies();
   const cookieStr = cookiesToString(fbCookies);
 
+  logger.info(`FB cookies loaded: ${fbCookies ? fbCookies.length + ' cookies, c_user=' + (fbCookies.find(c=>c.name==='c_user')?.value||'?') : 'none'}`);
+
   // Try official actor first with cookies if available
   const officialInput = {
     startUrls: [{ url: marketplaceUrl }],
     maxItems: 50,
     proxy: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'], countryCode: 'IL' }
   };
-  if (cookieStr) {
+  if (fbCookies) {
     officialInput.cookies = cookieStr;
+    officialInput.cookieArray = fbCookies;
   }
 
   let items = await runApifyActor(officialInput, { actorId: APIFY_ACTOR_ID });
 
-  // Fallback to curious_coder actor with cookies
+  // Fallback to curious_coder actor with cookies (expects array format)
   if (!items || items.length === 0) {
     logger.info(`Official actor returned empty for ${city}, trying fallback with cookies...`);
     const fallbackInput = {
@@ -379,11 +382,13 @@ async function queryFacebookApify(city) {
       getListingDetails: true,
       getAllListingPhotos: false,
       strictFiltering: true,
-      maxPagesPerUrl: 2,
+      maxPagesPerUrl: 3,
       proxy: { useApifyProxy: true, apifyProxyCountryCode: 'IL' }
     };
-    if (cookieStr) {
-      fallbackInput.cookies = cookieStr;
+    if (fbCookies) {
+      // curious_coder actor accepts cookies as array of {name, value, domain}
+      fallbackInput.cookies = fbCookies;
+      fallbackInput.cookieString = cookieStr;
     }
     items = await runApifyActor(fallbackInput, { actorId: APIFY_ACTOR_ID_FALLBACK });
   }
