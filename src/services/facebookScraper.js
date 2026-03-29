@@ -20,8 +20,10 @@ const { detectKeywords } = require('./ssiCalculator');
 
 // Apify configuration
 const APIFY_BASE_URL = 'https://api.apify.com/v2';
-// curious_coder/facebook-marketplace - most popular FB Marketplace actor (3M+ runs)
-const APIFY_ACTOR_ID = 'Y0QGH7cuqgKtNbEgt';
+// apify/facebook-marketplace-scraper - official actor with built-in session pooling & proxy rotation
+const APIFY_ACTOR_ID = 'apify~facebook-marketplace-scraper';
+// Fallback: curious_coder/facebook-marketplace (3M+ runs, needs cookies)
+const APIFY_ACTOR_ID_FALLBACK = 'Y0QGH7cuqgKtNbEgt';
 const APIFY_TIMEOUT = 180000; // 3 minutes max wait for sync run
 const DELAY_BETWEEN_SCANS = 5000; // 5s between city scans
 
@@ -327,16 +329,29 @@ async function queryFacebookApify(city) {
 
   logger.info(`Querying Apify for Facebook Marketplace: ${city} → ${marketplaceUrl}`);
 
-  const input = {
-    urls: [marketplaceUrl],
-    getListingDetails: true,
-    getAllListingPhotos: false,
-    strictFiltering: true,
-    maxPagesPerUrl: 2,
-    proxy: { useApifyProxy: true, apifyProxyCountryCode: 'IL' }
+  // Try official actor first (built-in session pooling, no cookies needed)
+  const officialInput = {
+    startUrls: [{ url: marketplaceUrl }],
+    maxItems: 50,
+    proxy: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'], countryCode: 'IL' }
   };
 
-  const items = await runApifyActor(input);
+  let items = await runApifyActor(officialInput, { actorId: APIFY_ACTOR_ID });
+
+  // Fallback to curious_coder actor if official returns nothing
+  if (!items || items.length === 0) {
+    logger.info(`Official actor returned empty for ${city}, trying fallback...`);
+    const fallbackInput = {
+      urls: [marketplaceUrl],
+      getListingDetails: true,
+      getAllListingPhotos: false,
+      strictFiltering: true,
+      maxPagesPerUrl: 2,
+      proxy: { useApifyProxy: true, apifyProxyCountryCode: 'IL' }
+    };
+    items = await runApifyActor(fallbackInput, { actorId: APIFY_ACTOR_ID_FALLBACK });
+  }
+
   if (!items || items.length === 0) {
     return { listings: [], source: 'apify_empty' };
   }
