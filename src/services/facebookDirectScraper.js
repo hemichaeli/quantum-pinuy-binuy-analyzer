@@ -438,10 +438,95 @@ async function checkCookies() {
   }
 }
 
+/**
+ * Debug: fetch raw HTML and return analysis of what patterns exist
+ */
+async function debugHtml(marketplaceUrl) {
+  const cookieStr = getCookieString();
+  if (!cookieStr) return { error: 'No cookies' };
+
+  try {
+    const resp = await axios.get(marketplaceUrl || `${FB_BASE}/marketplace/tel-aviv/propertyforsale`, {
+      headers: { ...BROWSER_HEADERS, Cookie: cookieStr },
+      timeout: 30000,
+      maxRedirects: 5
+    });
+
+    const html = resp.data;
+    const patterns = {
+      htmlLength: html.length,
+      hasMarketplaceListing: html.includes('marketplace_listing'),
+      hasMarketplaceListingTitle: html.includes('marketplace_listing_title'),
+      hasFormattedAmount: html.includes('formatted_amount'),
+      hasListingPrice: html.includes('listing_price'),
+      hasListingId: html.includes('listing_id'),
+      hasMarketplaceFeed: html.includes('MarketplaceFeed'),
+      hasMarketplaceSearch: html.includes('MarketplaceSearch'),
+      hasPropertyForSale: html.includes('propertyforsale'),
+      hasLogin: html.includes('/login/'),
+      hasRedact: html.includes('redacted_description'),
+      hasReverseGeocode: html.includes('reverse_geocode'),
+      hasCreationTime: html.includes('creation_time'),
+      hasMarketplaceListingType: html.includes('MarketplaceListing'),
+      hasNodeType: html.includes('"__typename":"MarketplaceListing"'),
+    };
+
+    // Find all unique keys that contain "marketplace" or "listing"
+    const marketplaceKeys = [];
+    const mkMatch = html.matchAll(/"(marketplace[^"]{0,50})"/gi);
+    const seen = new Set();
+    for (const m of mkMatch) {
+      const k = m[1].substring(0, 60);
+      if (!seen.has(k)) { seen.add(k); marketplaceKeys.push(k); }
+      if (seen.size > 30) break;
+    }
+
+    // Try to find listing IDs
+    const idMatches = html.matchAll(/"listing_id":"(\d+)"/g);
+    const ids = [];
+    for (const m of idMatches) { ids.push(m[1]); if (ids.length > 10) break; }
+
+    // Alt: find any long numeric IDs near marketplace context
+    const altIds = [];
+    const altMatch = html.matchAll(/"id":"(\d{12,20})"/g);
+    for (const m of altMatch) { altIds.push(m[1]); if (altIds.length > 10) break; }
+
+    // Find price patterns
+    const prices = [];
+    const priceMatch = html.matchAll(/"formatted_amount":"([^"]+)"/g);
+    for (const m of priceMatch) { prices.push(m[1]); if (prices.length > 10) break; }
+
+    // Find title patterns
+    const titles = [];
+    const titleMatch = html.matchAll(/"marketplace_listing_title":"([^"]{0,100})"/g);
+    for (const m of titleMatch) { titles.push(m[1]); if (titles.length > 10) break; }
+
+    // Snippet around first "marketplace_listing" occurrence
+    let snippet = '';
+    const idx = html.indexOf('marketplace_listing');
+    if (idx > -1) {
+      snippet = html.substring(Math.max(0, idx - 50), idx + 200);
+    }
+
+    return {
+      patterns,
+      marketplaceKeys: marketplaceKeys.slice(0, 20),
+      listingIds: ids,
+      altIds: altIds.slice(0, 10),
+      prices: prices.slice(0, 10),
+      titles: titles.slice(0, 10),
+      snippet: snippet.substring(0, 300)
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
 module.exports = {
   scrapeMarketplace,
   scrapeListingDetails,
   normalizeDirectListing,
   checkCookies,
-  getCookieString
+  getCookieString,
+  debugHtml
 };

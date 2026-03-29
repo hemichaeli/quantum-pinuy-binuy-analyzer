@@ -82,6 +82,20 @@ router.get('/test', async (req, res) => {
 });
 
 /**
+ * GET /direct/debug - Debug HTML patterns for marketplace scraping
+ */
+router.get('/direct/debug', async (req, res) => {
+  try {
+    const city = req.query.city || 'תל אביב';
+    const url = facebookScraper.buildMarketplaceUrl(city) || 'https://www.facebook.com/marketplace/tel-aviv/propertyforsale';
+    const result = await getDirectScraper().debugHtml(url);
+    res.json({ status: 'ok', url, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /direct/check - Check if direct scraper cookies are valid
  */
 router.get('/direct/check', async (req, res) => {
