@@ -718,7 +718,7 @@ router.post('/detect-channels', async (req, res) => {
 
     const { limit = 500 } = req.body;
     const listings = await pool.query(`
-      SELECT id, source, url, source_listing_id, phone, contact_phone
+      SELECT id, source, url, source_listing_id, phone
       FROM listings WHERE is_active = TRUE
       ORDER BY id DESC LIMIT $1
     `, [limit]);
