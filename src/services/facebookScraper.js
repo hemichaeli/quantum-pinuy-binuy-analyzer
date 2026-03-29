@@ -318,6 +318,33 @@ function normalizeApifyListing(item, city) {
 }
 
 /**
+ * Load Facebook cookies from env (base64-encoded JSON array)
+ */
+function loadFbCookies() {
+  const b64 = process.env.FB_COOKIES_BASE64;
+  if (!b64) return null;
+  try {
+    const json = Buffer.from(b64, 'base64').toString('utf-8');
+    const cookies = JSON.parse(json);
+    if (Array.isArray(cookies) && cookies.length > 0) {
+      logger.info(`Loaded ${cookies.length} FB cookies from env`);
+      return cookies;
+    }
+  } catch (err) {
+    logger.warn(`Failed to parse FB_COOKIES_BASE64: ${err.message}`);
+  }
+  return null;
+}
+
+/**
+ * Convert our cookie format to Apify cookie string (name=value pairs)
+ */
+function cookiesToString(cookies) {
+  if (!cookies) return null;
+  return cookies.map(c => `${c.name}=${c.value}`).join('; ');
+}
+
+/**
  * Query Facebook Marketplace via Apify for a specific city
  */
 async function queryFacebookApify(city) {
@@ -329,18 +356,24 @@ async function queryFacebookApify(city) {
 
   logger.info(`Querying Apify for Facebook Marketplace: ${city} → ${marketplaceUrl}`);
 
-  // Try official actor first (built-in session pooling, no cookies needed)
+  const fbCookies = loadFbCookies();
+  const cookieStr = cookiesToString(fbCookies);
+
+  // Try official actor first with cookies if available
   const officialInput = {
     startUrls: [{ url: marketplaceUrl }],
     maxItems: 50,
     proxy: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'], countryCode: 'IL' }
   };
+  if (cookieStr) {
+    officialInput.cookies = cookieStr;
+  }
 
   let items = await runApifyActor(officialInput, { actorId: APIFY_ACTOR_ID });
 
-  // Fallback to curious_coder actor if official returns nothing
+  // Fallback to curious_coder actor with cookies
   if (!items || items.length === 0) {
-    logger.info(`Official actor returned empty for ${city}, trying fallback...`);
+    logger.info(`Official actor returned empty for ${city}, trying fallback with cookies...`);
     const fallbackInput = {
       urls: [marketplaceUrl],
       getListingDetails: true,
@@ -349,11 +382,14 @@ async function queryFacebookApify(city) {
       maxPagesPerUrl: 2,
       proxy: { useApifyProxy: true, apifyProxyCountryCode: 'IL' }
     };
+    if (cookieStr) {
+      fallbackInput.cookies = cookieStr;
+    }
     items = await runApifyActor(fallbackInput, { actorId: APIFY_ACTOR_ID_FALLBACK });
   }
 
   if (!items || items.length === 0) {
-    return { listings: [], source: 'apify_empty' };
+    return { listings: [], source: fbCookies ? 'apify_empty_with_cookies' : 'apify_empty' };
   }
 
   const listings = items
@@ -371,6 +407,8 @@ async function queryFacebookForComplex(complex) {
   const marketplaceUrl = buildMarketplaceUrl(complex.city);
   if (!marketplaceUrl) return null;
 
+  const cookieStr = cookiesToString(loadFbCookies());
+
   const input = {
     urls: [marketplaceUrl],
     getListingDetails: true,
@@ -379,6 +417,9 @@ async function queryFacebookForComplex(complex) {
     maxPagesPerUrl: 1,
     proxy: { useApifyProxy: true, apifyProxyCountryCode: 'IL' }
   };
+  if (cookieStr) {
+    input.cookies = cookieStr;
+  }
 
   const items = await runApifyActor(input);
   if (!items || items.length === 0) return null;
