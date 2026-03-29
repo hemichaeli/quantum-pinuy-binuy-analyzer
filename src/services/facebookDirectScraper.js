@@ -109,116 +109,113 @@ async function scrapeViaHtml(marketplaceUrl, cookieStr) {
     });
 
     const html = resp.data;
-    const listings = [];
 
-    // Method 1: Extract from embedded JSON (relay data)
-    const jsonMatches = html.matchAll(/"marketplace_listing_title":"([^"]*)".*?"listing_price":\{[^}]*"formatted_amount":"([^"]*)"[^}]*\}.*?"location":\{[^}]*"reverse_geocode":\{[^}]*"city":"([^"]*)"[^}]*\}/g);
-    for (const m of jsonMatches) {
-      listings.push({
-        title: m[1],
-        price: m[2],
-        city: m[3],
-        source: 'html_json'
-      });
-    }
-
-    // Method 2: Extract listing IDs and basic data from script tags
-    const scriptData = [];
-    const idPattern = /"listing_id":"(\d+)"/g;
-    const pricePattern = /"formatted_amount":"([^"]+)"/g;
-    const titlePattern = /"marketplace_listing_title":"([^"]+)"/g;
-
-    let idMatch;
-    const ids = [];
-    while ((idMatch = idPattern.exec(html)) !== null) {
-      ids.push(idMatch[1]);
-    }
-
-    // Extract structured data from require/define blocks
-    const dataBlocks = html.matchAll(/\{"__typename":"MarketplaceListing"[^}]*"id":"(\d+)"[^]*?"marketplace_listing_title":"([^"]*)"[^]*?"listing_price":\{"formatted_amount":"([^"]*)"/g);
-    for (const block of dataBlocks) {
-      listings.push({
-        id: block[1],
-        title: block[2],
-        price: block[3],
-        url: `${FB_BASE}/marketplace/item/${block[1]}/`,
-        source: 'html_structured'
-      });
-    }
-
-    // Method 3: Parse any JSON-LD or embedded marketplace data
-    const $ = getCheerio().load(html);
-
-    // Look for marketplace listing cards in the HTML
-    const relayData = [];
-    const scriptTags = $('script');
-    scriptTags.each((_, el) => {
-      const content = $(el).html() || '';
-      // Find marketplace listing data in script tags
-      const listingMatches = content.matchAll(/"node":\{[^]*?"__typename":"MarketplaceListing"[^]*?"id":"(\d+)"[^]*?"marketplace_listing_title":"([^"]*)"[^]*?"listing_price":\{[^}]*?"formatted_amount":"([^"]*)"[^]*?"location":\{[^}]*?"reverse_geocode":\{[^}]*?"city":"([^"]*)"/g);
-      for (const lm of listingMatches) {
-        relayData.push({
-          id: lm[1],
-          title: lm[2],
-          price: lm[3],
-          city: lm[4],
-          url: `${FB_BASE}/marketplace/item/${lm[1]}/`,
-          source: 'html_relay'
-        });
-      }
-    });
-
-    if (relayData.length > 0) {
-      logger.info(`[FB-Direct] Found ${relayData.length} listings via relay data`);
-      return relayData;
-    }
-
-    // Method 4: Broader regex for any listing-like data
-    const broadMatches = [];
-    const broadPattern = /"id":"(\d{10,20})"[^]*?"marketplace_listing_title":"([^"]*)"[^]*?"formatted_amount":"([^"]*)"/g;
-    let bm;
-    while ((bm = broadPattern.exec(html)) !== null) {
-      broadMatches.push({
-        id: bm[1],
-        title: bm[2],
-        price: bm[3],
-        url: `${FB_BASE}/marketplace/item/${bm[1]}/`,
-        source: 'html_broad'
-      });
-    }
-
-    if (broadMatches.length > 0) {
-      logger.info(`[FB-Direct] Found ${broadMatches.length} listings via broad regex`);
-      return broadMatches;
-    }
-
-    if (listings.length > 0) {
-      logger.info(`[FB-Direct] Found ${listings.length} listings via HTML JSON`);
-      return listings;
-    }
-
-    // Check if we got redirected to login
-    if (html.includes('login') && !html.includes('marketplace_listing_title')) {
-      logger.warn('[FB-Direct] Appears to be redirected to login - cookies may be expired');
+    // Check if redirected to login
+    if (html.includes('/login/') && !html.includes('marketplace_listing_title')) {
+      logger.warn('[FB-Direct] Redirected to login - cookies may be expired');
       return [];
     }
 
-    // Log snippet for debugging
-    const snippet = html.substring(0, 500);
-    const hasMarketplace = html.includes('marketplace');
-    const hasListing = html.includes('listing');
-    logger.info(`[FB-Direct] HTML parse found 0 listings. hasMarketplace=${hasMarketplace}, hasListing=${hasListing}, htmlLen=${html.length}, snippet=${snippet.substring(0, 100)}...`);
+    const listings = [];
+    const seenIds = new Set();
 
-    // Try to find unique listing IDs even without full data
-    if (ids.length > 0) {
-      logger.info(`[FB-Direct] Found ${ids.length} listing IDs without full data: ${ids.slice(0, 5).join(', ')}`);
-      return ids.map(id => ({
+    // Strategy: FB embeds listing data in script tags as JSON relay data.
+    // Each listing has: marketplace_listing_title, formatted_amount, and an ID nearby.
+    // We extract title+price pairs, then correlate with nearby IDs.
+
+    // Step 1: Find all title occurrences with their positions
+    const titlePattern = /"marketplace_listing_title":"([^"]+)"/g;
+    const titlePositions = [];
+    let tm;
+    while ((tm = titlePattern.exec(html)) !== null) {
+      titlePositions.push({ title: tm[1], pos: tm.index });
+    }
+
+    // Step 2: For each title, search nearby for price and ID
+    for (const tp of titlePositions) {
+      // Look in a window around the title (5000 chars before and after)
+      const start = Math.max(0, tp.pos - 5000);
+      const end = Math.min(html.length, tp.pos + 5000);
+      const window = html.substring(start, end);
+
+      // Find price
+      const priceMatch = window.match(/"formatted_amount":"([^"]+)"/);
+      const price = priceMatch ? priceMatch[1] : null;
+
+      // Find ID (long numeric string)
+      const idMatch = window.match(/"id":"(\d{10,20})"/);
+      const id = idMatch ? idMatch[1] : null;
+
+      // Find location
+      const cityMatch = window.match(/"reverse_geocode":\{[^}]*?"city":"([^"]+)"/);
+      const city = cityMatch ? cityMatch[1] : null;
+
+      const locMatch = window.match(/"location_text":\{[^}]*?"text":"([^"]+)"/);
+      const location = locMatch ? locMatch[1] : null;
+
+      // Find creation time
+      const timeMatch = window.match(/"creation_time":(\d+)/);
+      const createdAt = timeMatch ? new Date(parseInt(timeMatch[1]) * 1000).toISOString() : null;
+
+      // Find image
+      const imgMatch = window.match(/"image":\{"uri":"([^"]+)"/);
+      const image = imgMatch ? imgMatch[1].replace(/\\\//g, '/') : null;
+
+      // Decode unicode escapes in title
+      let title = tp.title;
+      try {
+        title = JSON.parse(`"${tp.title}"`);
+      } catch (e) { /* keep as-is */ }
+
+      let decodedPrice = price;
+      if (price) {
+        try { decodedPrice = JSON.parse(`"${price}"`); } catch (e) { /* keep as-is */ }
+      }
+
+      if (id && !seenIds.has(id)) {
+        seenIds.add(id);
+        listings.push({
+          id,
+          title,
+          price: decodedPrice,
+          city,
+          location,
+          createdAt,
+          image,
+          url: `${FB_BASE}/marketplace/item/${id}/`,
+          source: 'html_window'
+        });
+      }
+    }
+
+    if (listings.length > 0) {
+      logger.info(`[FB-Direct] Found ${listings.length} listings via window matching (${titlePositions.length} titles found)`);
+      return listings;
+    }
+
+    // Fallback: just get IDs from the page
+    const altIds = [];
+    const altPattern = /"id":"(\d{12,20})"/g;
+    let am;
+    while ((am = altPattern.exec(html)) !== null) {
+      const aid = am[1];
+      if (!seenIds.has(aid)) {
+        seenIds.add(aid);
+        altIds.push(aid);
+      }
+      if (altIds.length > 50) break;
+    }
+
+    if (altIds.length > 0) {
+      logger.info(`[FB-Direct] Found ${altIds.length} potential listing IDs (no title match)`);
+      return altIds.map(id => ({
         id,
         url: `${FB_BASE}/marketplace/item/${id}/`,
         source: 'html_id_only'
       }));
     }
 
+    logger.info(`[FB-Direct] 0 listings found. htmlLen=${html.length}, titles=${titlePositions.length}`);
     return [];
   } catch (err) {
     logger.warn(`[FB-Direct] HTML scrape failed: ${err.message}`);
