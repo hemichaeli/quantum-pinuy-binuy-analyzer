@@ -370,9 +370,11 @@ Actor.main(async () => {
   const validListings = listings.filter(l => {
     if (!l.url || l.url === 'NULL') return false;
     // Skip search result pages — these don't have individual listing phones
-    // Note: komo uses apartments-for-sale.asp for individual listings too, so only filter yad2/madlan search URLs
-    if (l.url.includes('yad2.co.il') && l.url.includes('/forsale?')) return false;
+    // yad2 individual listings use /item/xxxxx format; /realestate/forsale/ are search pages
+    if (l.url.includes('yad2.co.il') && l.url.includes('/forsale')) return false;
     if (l.url.includes('madlan.co.il') && l.url.includes('/city/')) return false;
+    // Skip non-real-estate domains that got into the DB by mistake
+    if (l.url.includes('agrisupportonline.com')) return false;
     return true;
   });
 

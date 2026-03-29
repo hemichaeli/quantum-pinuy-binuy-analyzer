@@ -1615,7 +1615,11 @@ router.post('/apify-test-run', async (req, res) => {
       SELECT id, url, source, source_listing_id, address, city
       FROM listings
       WHERE (phone IS NULL OR phone = '') AND url IS NOT NULL AND url != 'NULL'
-        AND url NOT LIKE '%forsale?%' AND url NOT LIKE '%/city/%'
+        AND url NOT LIKE '%/forsale/%' AND url NOT LIKE '%/forsale?%'
+        AND url NOT LIKE '%/city/%' AND url NOT LIKE '%agrisupportonline%'
+        AND (url LIKE '%/item/%' OR url LIKE '%komo.co.il%' OR url LIKE '%homeless.co.il%'
+             OR url LIKE '%dira.co.il%' OR url LIKE '%banknadlan.co.il%'
+             OR url LIKE '%ad.co.il/nadlan%' OR url LIKE '%modaaNum=%')
         ${sourceFilter}
       ORDER BY RANDOM() LIMIT $1
     `, [count]);
