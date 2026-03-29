@@ -357,6 +357,29 @@ function getHandler(source, url) {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Construct the best individual listing URL from source + sourceListingId.
+ * The DB often stores search-page URLs; we need direct listing pages.
+ */
+function buildDirectUrl(listing) {
+  const { source, sourceListingId, url } = listing;
+  const sid = sourceListingId;
+
+  // yad2: individual pages are /item/{id}
+  if (source === 'yad2' && sid && /^[a-zA-Z0-9_-]+$/.test(sid) && !sid.startsWith('yad2-') && !sid.startsWith('ai-')) {
+    return `https://www.yad2.co.il/item/${sid}`;
+  }
+  // komo: individual pages use modaaNum param
+  if (source === 'komo' && sid && /^\d+$/.test(sid)) {
+    return `https://www.komo.co.il/code/nadlan/apartments-for-sale.asp?modaaNum=${sid}`;
+  }
+  // For other sources, use the URL as-is if it looks like an individual page
+  if (url && !url.includes('/forsale') && !url.includes('/city/') && !url.includes('agrisupportonline')) {
+    return url;
+  }
+  return null; // No usable URL
+}
+
 Actor.main(async () => {
   const input = await Actor.getInput();
   const { listings = [], maxConcurrency = 5, proxyConfig = {} } = input;
@@ -366,19 +389,18 @@ Actor.main(async () => {
   const results = [];
   const failed = [];
 
-  // Filter out listings without usable URLs
-  const validListings = listings.filter(l => {
-    if (!l.url || l.url === 'NULL') return false;
-    // Skip search result pages — these don't have individual listing phones
-    // yad2 individual listings use /item/xxxxx format; /realestate/forsale/ are search pages
-    if (l.url.includes('yad2.co.il') && l.url.includes('/forsale')) return false;
-    if (l.url.includes('madlan.co.il') && l.url.includes('/city/')) return false;
-    // Skip non-real-estate domains that got into the DB by mistake
-    if (l.url.includes('agrisupportonline.com')) return false;
-    return true;
-  });
+  // Build direct URLs and filter out unusable listings
+  const validListings = [];
+  for (const l of listings) {
+    const directUrl = buildDirectUrl(l);
+    if (directUrl) {
+      validListings.push({ ...l, url: directUrl });
+    } else {
+      log.debug(`Skipping listing ${l.id} [${l.source}] — no usable individual URL (sid=${l.sourceListingId || 'none'}, url=${l.url?.substring(0, 60) || 'none'})`);
+    }
+  }
 
-  log.info(`${validListings.length} listings have valid URLs (filtered from ${listings.length})`);
+  log.info(`${validListings.length} listings have usable URLs (filtered from ${listings.length})`);
 
   const crawler = new PuppeteerCrawler({
     maxConcurrency,

@@ -1609,17 +1609,14 @@ router.post('/apify-test-run', async (req, res) => {
     const count = Math.min(parseInt(req.body?.count) || 3, 10);
     const source = req.body?.source || null;
 
-    // Get phoneless listings with URLs
+    // Get phoneless listings — prefer those with source_listing_id (Actor builds direct URLs)
     const sourceFilter = source ? `AND source = '${source.replace(/[^a-z0-9]/gi, '')}'` : '';
     const { rows: listings } = await pool.query(`
       SELECT id, url, source, source_listing_id, address, city
       FROM listings
       WHERE (phone IS NULL OR phone = '') AND url IS NOT NULL AND url != 'NULL'
-        AND url NOT LIKE '%/forsale/%' AND url NOT LIKE '%/forsale?%'
-        AND url NOT LIKE '%/city/%' AND url NOT LIKE '%agrisupportonline%'
-        AND (url LIKE '%/item/%' OR url LIKE '%komo.co.il%' OR url LIKE '%homeless.co.il%'
-             OR url LIKE '%dira.co.il%' OR url LIKE '%banknadlan.co.il%'
-             OR url LIKE '%ad.co.il/nadlan%' OR url LIKE '%modaaNum=%')
+        AND source_listing_id IS NOT NULL AND source_listing_id != '' AND source_listing_id != 'NULL'
+        AND source_listing_id NOT LIKE 'yad2-%' AND source_listing_id NOT LIKE 'ai-%'
         ${sourceFilter}
       ORDER BY RANDOM() LIMIT $1
     `, [count]);
