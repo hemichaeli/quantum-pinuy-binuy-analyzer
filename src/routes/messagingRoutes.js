@@ -736,4 +736,173 @@ router.post('/detect-channels', async (req, res) => {
   }
 });
 
+// ============================================================
+// CONVERSATIONS — grouped by listing+channel
+// ============================================================
+
+/**
+ * GET /api/messaging/conversations — List conversations with summary
+ * Returns conversations grouped by listing, with unread/unanswered indicators
+ */
+router.get('/conversations', async (req, res) => {
+  try {
+    const { channel, status, search, limit = 50, offset = 0 } = req.query;
+    let conditions = [];
+    let params = [];
+    let idx = 1;
+
+    if (channel) { conditions.push(`cs.channel = $${idx++}`); params.push(channel); }
+    if (status === 'unread') { conditions.push(`cs.has_unread = TRUE`); }
+    if (status === 'unanswered') { conditions.push(`cs.is_unanswered = TRUE`); }
+    if (search) {
+      conditions.push(`(l.address ILIKE $${idx} OR l.city ILIKE $${idx} OR cs.contact_name ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
+
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await pool.query(`
+      SELECT cs.*,
+             l.address, l.city, l.source as listing_source, l.asking_price, l.url,
+             c.name as complex_name,
+             (SELECT message_text FROM unified_messages WHERE conversation_id = cs.conversation_id ORDER BY created_at DESC LIMIT 1) as last_message
+      FROM conversation_summary cs
+      LEFT JOIN listings l ON cs.listing_id = l.id
+      LEFT JOIN complexes c ON l.complex_id = c.id
+      ${where}
+      ORDER BY
+        cs.has_unread DESC,
+        cs.is_unanswered DESC,
+        cs.last_message_at DESC
+      LIMIT $${idx++} OFFSET $${idx++}
+    `, params);
+
+    const countResult = await pool.query(`
+      SELECT COUNT(*) as total FROM conversation_summary cs
+      LEFT JOIN listings l ON cs.listing_id = l.id
+      ${where}
+    `, params.slice(0, -2));
+
+    res.json({
+      success: true,
+      conversations: result.rows,
+      total: parseInt(countResult.rows[0].total),
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (err) {
+    // Fallback if view doesn't exist yet
+    logger.warn('[Messaging] conversations query failed, using fallback:', err.message);
+    try {
+      const fallback = await pool.query(`
+        SELECT um.listing_id, um.channel, um.contact_name,
+               COUNT(*) as total_messages,
+               COUNT(*) FILTER (WHERE um.direction = 'outgoing') as sent_count,
+               COUNT(*) FILTER (WHERE um.direction = 'incoming') as received_count,
+               MAX(um.created_at) as last_message_at,
+               l.address, l.city, l.source as listing_source, l.asking_price
+        FROM unified_messages um
+        LEFT JOIN listings l ON um.listing_id = l.id
+        GROUP BY um.listing_id, um.channel, um.contact_name, l.address, l.city, l.source, l.asking_price
+        ORDER BY MAX(um.created_at) DESC LIMIT 50
+      `);
+      res.json({ success: true, conversations: fallback.rows, total: fallback.rows.length, fallback: true });
+    } catch (e2) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+});
+
+/**
+ * GET /api/messaging/conversations/:conversationId — Get full conversation thread
+ */
+router.get('/conversations/:conversationId', async (req, res) => {
+  try {
+    const convId = req.params.conversationId;
+    const messages = await pool.query(`
+      SELECT um.* FROM unified_messages um
+      WHERE um.conversation_id = $1
+      ORDER BY um.created_at ASC
+    `, [convId]);
+
+    // Get listing info
+    const listingId = messages.rows[0]?.listing_id;
+    let listing = null;
+    if (listingId) {
+      const lr = await pool.query(`
+        SELECT l.*, c.name as complex_name FROM listings l
+        LEFT JOIN complexes c ON l.complex_id = c.id WHERE l.id = $1
+      `, [listingId]);
+      listing = lr.rows[0] || null;
+    }
+
+    res.json({ success: true, conversation_id: convId, listing, messages: messages.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PUT /api/messaging/conversations/:conversationId/read — Mark conversation as read
+ */
+router.put('/conversations/:conversationId/read', async (req, res) => {
+  try {
+    const convId = req.params.conversationId;
+    await pool.query(`
+      UPDATE unified_messages SET is_read = TRUE, read_at = NOW()
+      WHERE conversation_id = $1 AND direction = 'incoming' AND is_read = FALSE
+    `, [convId]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/messaging/conversations/:conversationId/reply — Reply in a conversation
+ */
+router.post('/conversations/:conversationId/reply', async (req, res) => {
+  try {
+    const convId = req.params.conversationId;
+    const { message_text } = req.body;
+    if (!message_text) return res.status(400).json({ error: 'message_text required' });
+
+    // Get conversation info (listing, channel)
+    const convInfo = await pool.query(`
+      SELECT listing_id, channel, platform, contact_phone FROM unified_messages
+      WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1
+    `, [convId]);
+
+    if (convInfo.rows.length === 0) return res.status(404).json({ error: 'Conversation not found' });
+    const { listing_id, channel, platform, contact_phone } = convInfo.rows[0];
+
+    // Get listing for context
+    const listingResult = await pool.query(
+      `SELECT l.*, c.name as complex_name FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id WHERE l.id = $1`,
+      [listing_id]
+    );
+    const listing = listingResult.rows[0];
+    if (!listing) return res.status(404).json({ error: 'Listing not found' });
+
+    // Send via orchestrator
+    const orch = getOrchestrator();
+    let sendResult = { success: false };
+    if (orch) {
+      sendResult = await orch.sendToListing(listing, message_text, { preferredChannel: channel });
+    }
+
+    // Log reply to unified_messages
+    await pool.query(`
+      INSERT INTO unified_messages (listing_id, complex_id, contact_phone, direction, channel, platform, message_text, status, conversation_id)
+      VALUES ($1, $2, $3, 'outgoing', $4, $5, $6, $7, $8)
+    `, [listing_id, listing.complex_id, contact_phone, channel, platform, message_text,
+        sendResult.success ? 'sent' : 'failed', convId]);
+
+    res.json({ success: sendResult.success, channel, result: sendResult });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;

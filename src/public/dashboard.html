@@ -458,21 +458,28 @@
     <div id="tab-messages" class="tab-content" style="padding:0;">
         <div class="section" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
-                <h2 style="margin:0;">💬 שיחות WhatsApp</h2>
+                <h2 style="margin:0;">💬 שיחות - כל הערוצים</h2>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <input type="text" class="filter-input" id="convSearchFilter" placeholder="חיפוש לפי שם/טלפון..." style="width:200px;" onkeyup="if(event.key==='Enter')loadConversations()">
+                    <input type="text" class="filter-input" id="convSearchFilter" placeholder="חיפוש לפי כתובת/שם..." style="width:200px;" onkeyup="if(event.key==='Enter')loadConversations()">
+                    <select class="filter-select" id="convChannelFilter" style="width:130px;" onchange="loadConversations()">
+                        <option value="">כל הערוצים</option>
+                        <option value="fb_messenger">💬 פייסבוק</option>
+                        <option value="yad2_chat">🟧 יד2</option>
+                        <option value="whatsapp">📱 וואטסאפ</option>
+                        <option value="sms">📲 SMS</option>
+                        <option value="komo_chat">🏠 קומו</option>
+                    </select>
                     <select class="filter-select" id="convStatusFilter" style="width:130px;" onchange="loadConversations()">
                         <option value="">כל הסטטוסים</option>
-                        <option value="active">פעילות</option>
-                        <option value="closed">סגורות</option>
-                        <option value="agent_needed">דורש טיפול</option>
+                        <option value="unread">🔴 לא נקרא</option>
+                        <option value="unanswered">⏰ ללא מענה 5+ שעות</option>
                     </select>
                     <button class="btn" onclick="loadConversations()">🔄 רענן</button>
                     <button class="btn btn-secondary" onclick="exportData('messages')">📊 ייצוא</button>
                 </div>
             </div>
         </div>
-        <div style="display:grid;grid-template-columns:290px 1fr;height:calc(100vh - 210px);background:var(--bg-primary);" id="conv-panel">
+        <div style="display:grid;grid-template-columns:320px 1fr;height:calc(100vh - 210px);background:var(--bg-primary);" id="conv-panel">
             <div style="border-left:1px solid var(--border-subtle);overflow-y:auto;background:var(--bg-secondary);" id="conv-list">
                 <div class="loading">טוען שיחות...</div>
             </div>
@@ -1239,6 +1246,7 @@
                         + '<div style="display:flex;justify-content:space-between;align-items:center;padding-top:7px;border-top:1px solid var(--border-subtle);">'
                         + '<div style="font-size:10px;color:var(--text-muted);">' + published + (isEnriched ? ' ✨' : '') + '</div>'
                         + '<div style="display:flex;gap:7px;">'
+                        + '<button onclick="openSendModal(' + ad.id + ',\'' + (ad.source||'').replace(/\'/g,'') + '\',\'' + encodeURIComponent(title||'') + '\',\'' + (ad.url||'').replace(/\'/g,'') + '\',\'' + (ad.phone||'').replace(/\'/g,'') + '\')" style="background:var(--green);color:#000;border:none;padding:3px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">💬 שלח</button>'
                         + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:var(--blue);font-size:11px;text-decoration:none;">' + ad.phone + '</a>' : '')
                         + (ad.url ? '<a href="' + ad.url + '" target="_blank" style="color:var(--blue);font-size:11px;text-decoration:none;">&#128279; פתח</a>' : '')
                         + '</div></div>'
@@ -1329,12 +1337,90 @@
                     + '<td style="color:' + ssiColor + ';font-weight:600;" title="SSI: ' + ssi + ' | זמן: ' + (ad.ssi_time_score||0) + ' | מחיר: ' + (ad.ssi_price_score||0) + ' | אינדיקטורים: ' + (ad.ssi_indicator_score||0) + '">' + (ssi || '\u2014') + '</td>'
                     + '<td>' + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:var(--blue);font-size:12px;">' + ad.phone + '</a>' : '<span style="color:var(--text-muted);font-size:11px;">אין</span>') + '</td>'
                     + '<td><div style="display:flex;gap:6px;">'
+                    + '<button class="btn" style="padding:5px 12px;font-size:12px;background:var(--green);color:#000;" onclick="openSendModal(' + ad.id + ',\'' + (ad.source||'').replace(/\'/g,'') + '\',\'' + encodeURIComponent(title||'') + '\',\'' + (ad.url||'').replace(/\'/g,'') + '\',\'' + (ad.phone||'').replace(/\'/g,'') + '\')">💬 שלח</button>'
                     + '<button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;" onclick="return false">ערוך</button>'
                     + (ad.url ? '<a href="' + ad.url + '" target="_blank" class="btn" style="padding:5px 12px;font-size:12px;">צפה</a>' : '')
                     + '</div></td>'
                     + '</tr>';
             }).join('');
         }
+
+        // ═══════════════════════════════════════════════════
+        // SEND MESSAGE MODAL
+        // ═══════════════════════════════════════════════════
+        let _sendModalListingId = null;
+        function openSendModal(listingId, source, titleEncoded, url, phone) {
+            _sendModalListingId = listingId;
+            const title = decodeURIComponent(titleEncoded);
+            let modal = document.getElementById('send-msg-modal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'send-msg-modal';
+                modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+                document.body.appendChild(modal);
+            }
+            // Detect channels
+            const channels = [];
+            if (source === 'yad2' && url) channels.push({id:'yad2_chat',label:'💬 Yad2 Chat'});
+            if (source === 'facebook' && url) channels.push({id:'fb_messenger',label:'💬 FB Messenger'});
+            if (source === 'komo') channels.push({id:'komo_chat',label:'💬 Komo Chat'});
+            if (phone) channels.push({id:'whatsapp',label:'📱 WhatsApp'});
+            if (phone) channels.push({id:'sms',label:'📲 SMS'});
+            if (channels.length === 0) channels.push({id:'manual',label:'📋 ידני'});
+
+            const channelOpts = channels.map(ch => '<option value="' + ch.id + '">' + ch.label + '</option>').join('');
+            const templateOpts = '<option value="facebook_seller">📘 פייסבוק</option><option value="yad2_seller">🟧 יד2</option><option value="whatsapp_seller">📱 וואטסאפ</option><option value="sms_seller">📲 SMS</option><option value="kones_inquiry">⚖️ כינוס</option>';
+
+            modal.innerHTML = '<div style="background:var(--bg-card);border-radius:12px;padding:24px;width:480px;max-width:90vw;max-height:80vh;overflow-y:auto;border:1px solid var(--border-subtle);">'
+                + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+                + '<h3 style="margin:0;color:var(--text-primary);">💬 שליחת הודעה</h3>'
+                + '<button onclick="closeSendModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;">✕</button></div>'
+                + '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">' + title + ' | ' + source + '</div>'
+                + '<div style="display:flex;gap:10px;margin-bottom:12px;">'
+                + '<div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">ערוץ</label><select id="send-channel" class="filter-select" style="width:100%;">' + channelOpts + '</select></div>'
+                + '<div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">תבנית</label><select id="send-template" class="filter-select" style="width:100%;" onchange="loadTemplate()">' + templateOpts + '</select></div></div>'
+                + '<label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">הודעה</label>'
+                + '<textarea id="send-msg-text" style="width:100%;height:120px;background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:8px;padding:10px;color:var(--text-primary);font-size:13px;resize:vertical;" placeholder="הקלד הודעה..."></textarea>'
+                + '<div style="display:flex;gap:10px;margin-top:14px;">'
+                + '<button onclick="executeSendMessage()" class="btn" style="flex:1;padding:10px;font-size:14px;background:var(--green);color:#000;font-weight:600;">📤 שלח</button>'
+                + '<button onclick="closeSendModal()" class="btn btn-secondary" style="padding:10px;">ביטול</button></div>'
+                + '<div id="send-result" style="margin-top:10px;font-size:12px;display:none;"></div>'
+                + '</div>';
+            modal.style.display = 'flex';
+            loadTemplate();
+        }
+        function closeSendModal() {
+            const m = document.getElementById('send-msg-modal');
+            if (m) m.style.display = 'none';
+        }
+        async function loadTemplate() {
+            const tid = document.getElementById('send-template')?.value;
+            if (!tid || !_sendModalListingId) return;
+            try {
+                const r = await fetchJSON('/api/messaging/preview', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({listing_id: _sendModalListingId, template_id: tid}) });
+                if (r.message) document.getElementById('send-msg-text').value = r.message;
+            } catch(e) {}
+        }
+        async function executeSendMessage() {
+            const text = document.getElementById('send-msg-text')?.value;
+            const channel = document.getElementById('send-channel')?.value;
+            const resultDiv = document.getElementById('send-result');
+            if (!text || !_sendModalListingId) return;
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<span style="color:var(--gold);">⏳ שולח...</span>';
+            try {
+                const r = await fetchJSON('/api/messaging/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({listing_id: _sendModalListingId, message_text: text, channel: channel}) });
+                if (r.success || r.whatsapp_link) {
+                    resultDiv.innerHTML = '<span style="color:var(--green);">✅ נשלח בהצלחה' + (r.channel ? ' (' + r.channel + ')' : '') + '</span>' + (r.whatsapp_link ? ' <a href="' + r.whatsapp_link + '" target="_blank" style="color:var(--blue);">פתח WhatsApp</a>' : '');
+                } else {
+                    resultDiv.innerHTML = '<span style="color:var(--red);">❌ שגיאה: ' + (r.error || 'unknown') + '</span>' + (r.manual_url ? ' <a href="' + r.manual_url + '" target="_blank" style="color:var(--blue);">שלח ידנית</a>' : '');
+                }
+            } catch(e) {
+                resultDiv.innerHTML = '<span style="color:var(--red);">❌ שגיאה: ' + e.message + '</span>';
+            }
+        }
+
+        let _activeConvId = null;
 
         async function loadConversations() {
             const container = document.getElementById('conv-list');
@@ -1343,80 +1429,143 @@
                 const params = new URLSearchParams();
                 const search = document.getElementById('convSearchFilter')?.value;
                 const status = document.getElementById('convStatusFilter')?.value;
+                const channel = document.getElementById('convChannelFilter')?.value;
                 if (search) params.append('search', search);
                 if (status) params.append('status', status);
-                const data = await fetchJSON('/api/whatsapp/conversations?' + params);
-                if (!data.success) throw new Error(data.error);
-                if (!data.data.length) {
+                if (channel) params.append('channel', channel);
+                // Try unified conversations first, fallback to WhatsApp
+                let data;
+                try {
+                    data = await fetchJSON('/api/messaging/conversations?' + params);
+                } catch(e) {
+                    data = await fetchJSON('/api/whatsapp/conversations?' + params);
+                    if (data.success && data.data) {
+                        data.conversations = data.data.map(c => ({
+                            conversation_id: 'wa_' + c.phone,
+                            address: c.address, city: c.city, channel: 'whatsapp',
+                            contact_name: c.display_name || c.phone, contact_phone: c.phone,
+                            last_message: c.last_message, last_message_at: c.updated_at,
+                            total_messages: c.message_count || 0, unread_count: 0,
+                            is_unanswered: false, has_unread: false, listing_source: 'whatsapp'
+                        }));
+                    }
+                }
+                const convs = data.conversations || [];
+                if (!convs.length) {
                     container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:10px;">📭</div><p>אין שיחות</p></div>';
                     return;
                 }
-                container.innerHTML = data.data.map(conv => renderConvItem(conv)).join('');
-                if (activeConvPhone) {
-                    const el = container.querySelector('[data-phone="' + activeConvPhone + '"]');
+                container.innerHTML = convs.map(conv => renderConvItem(conv)).join('');
+                if (_activeConvId) {
+                    const el = container.querySelector('[data-convid="' + _activeConvId + '"]');
                     if (el) el.classList.add('active');
                 }
             } catch (e) { container.innerHTML = '<div style="padding:20px;color:#fca5a5;">שגיאה: ' + e.message + '</div>'; }
         }
 
         function renderConvItem(conv) {
-            const name = conv.display_name || conv.phone;
+            const cid = conv.conversation_id || ('wa_' + (conv.contact_phone || conv.phone));
+            const name = conv.contact_name || conv.address || conv.city || conv.contact_phone || 'שיחה';
             const preview = conv.last_message ? conv.last_message.substring(0, 45) + (conv.last_message.length > 45 ? '...' : '') : 'אין הודעות';
-            const dir = conv.last_direction === 'outgoing' ? '← ' : '→ ';
-            const date = conv.updated_at ? new Date(conv.updated_at).toLocaleDateString('he-IL') : '';
-            const statusColors = { active: 'var(--green)', closed: 'var(--text-muted)', agent_needed: 'var(--red)' };
-            const dot = statusColors[conv.status] || 'var(--text-muted)';
-            return '<div class="conv-item" data-phone="' + conv.phone + '" onclick="openConversation(this.dataset.phone)">'
-                + '<div style="display:flex;align-items:center;gap:7px;">'
-                + '<div style="width:7px;height:7px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></div>'
-                + '<div class="conv-name">' + name + '</div></div>'
-                + '<div class="conv-preview">' + dir + preview + '</div>'
-                + '<div class="conv-meta"><span>' + conv.phone + '</span><span>' + date + '</span></div>'
+            const date = conv.last_message_at ? new Date(conv.last_message_at).toLocaleDateString('he-IL') : '';
+            const channelIcons = { fb_messenger: '💬', yad2_chat: '🟧', whatsapp: '📱', sms: '📲', komo_chat: '🏠', manual: '📋' };
+            const chIcon = channelIcons[conv.channel] || '💬';
+            // Color indicators
+            let dotColor = 'var(--text-muted)';
+            if (conv.has_unread) dotColor = 'var(--red)';
+            else if (conv.is_unanswered) dotColor = 'var(--gold)';
+            else if (conv.received_count > 0) dotColor = 'var(--green)';
+            const unreadBadge = conv.unread_count > 0 ? '<span style="background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:5px;">' + conv.unread_count + '</span>' : '';
+            const unansweredBadge = conv.is_unanswered ? '<span style="font-size:10px;color:var(--gold);">⏰ ללא מענה</span>' : '';
+            return '<div class="conv-item" data-convid="' + cid + '" onclick="openConversation(\'' + cid + '\')">'
+                + '<div style="display:flex;align-items:center;gap:7px;justify-content:space-between;">'
+                + '<div style="display:flex;align-items:center;gap:5px;flex:1;min-width:0;">'
+                + '<div style="width:7px;height:7px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;"></div>'
+                + '<div style="font-weight:600;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + name + '</div></div>'
+                + '<div style="display:flex;align-items:center;gap:3px;">' + unreadBadge + '<span style="font-size:12px;">' + chIcon + '</span></div></div>'
+                + '<div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:2px 0;">' + preview + '</div>'
+                + '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);">'
+                + '<span>' + (conv.city || conv.listing_source || '') + ' | ' + (conv.total_messages || 0) + ' הודעות</span>'
+                + '<span>' + date + '</span></div>'
+                + unansweredBadge
                 + '</div>';
         }
 
-        async function openConversation(phone) {
-            activeConvPhone = phone;
+        async function openConversation(convId) {
+            _activeConvId = convId;
             document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
-            const item = document.querySelector('[data-phone="' + phone + '"]');
+            const item = document.querySelector('[data-convid="' + convId + '"]');
             if (item) item.classList.add('active');
             const thread = document.getElementById('conv-thread');
             thread.innerHTML = '<div class="loading">טוען הודעות...</div>';
             thread.classList.add('active');
             try {
-                const data = await fetchJSON('/api/whatsapp/conversations/' + encodeURIComponent(phone) + '/messages');
+                // If it's a WA conversation, use old API
+                let data;
+                if (convId.startsWith('wa_')) {
+                    const phone = convId.replace('wa_', '');
+                    data = await fetchJSON('/api/whatsapp/conversations/' + encodeURIComponent(phone) + '/messages');
+                    if (data.success) {
+                        data.messages = data.data || [];
+                        data.listing = data.conversation ? { address: data.conversation.address, city: data.conversation.city } : null;
+                    }
+                } else {
+                    data = await fetchJSON('/api/messaging/conversations/' + encodeURIComponent(convId));
+                    // Mark as read
+                    fetch('/api/messaging/conversations/' + encodeURIComponent(convId) + '/read', { method: 'PUT' }).catch(() => {});
+                }
                 if (!data.success) throw new Error(data.error);
-                const conv = data.conversation;
-                const name = conv?.display_name || phone;
-                const location = conv?.city || conv?.address || '';
+                const listing = data.listing;
+                const addr = listing?.address || listing?.city || '';
                 let html = '<div style="background:var(--bg-secondary);padding:14px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between;">'
-                    + '<div><div style="font-weight:700;font-size:15px;">' + name + '</div>'
-                    + '<div style="font-size:11px;color:var(--text-muted);">' + phone + (location ? ' | ' + location : '') + '</div></div>'
+                    + '<div><div style="font-weight:700;font-size:15px;">' + addr + '</div>'
+                    + '<div style="font-size:11px;color:var(--text-muted);">' + (listing?.source || '') + (listing?.asking_price ? ' | ₪' + parseInt(listing.asking_price).toLocaleString() : '') + '</div></div>'
                     + '<div style="display:flex;gap:7px;">'
-                    + '<a href="tel:' + phone + '" class="btn btn-secondary" style="padding:5px 10px;font-size:11px;">📞 התקשר</a>'
-                    + '<a href="https://wa.me/' + phone.replace(/[^0-9]/g,'') + '" target="_blank" class="btn btn-green" style="padding:5px 10px;font-size:11px;">WhatsApp</a>'
+                    + (listing?.url ? '<a href="' + listing.url + '" target="_blank" class="btn btn-secondary" style="padding:5px 10px;font-size:11px;">🔗 פתח מודעה</a>' : '')
                     + '</div></div>';
-                if (!data.data.length) {
+                const msgs = data.messages || [];
+                if (!msgs.length) {
                     html += '<div style="text-align:center;padding:40px;color:var(--text-muted);">אין הודעות בשיחה זו</div>';
                 } else {
                     html += '<div style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:4px;">';
-                    for (const msg of data.data) {
-                        const isOut = msg.direction === 'outgoing';
+                    for (const msg of msgs) {
+                        const isOut = msg.direction === 'outgoing' || msg.direction === 'sent';
                         const time = msg.created_at ? new Date(msg.created_at).toLocaleString('he-IL', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+                        const channelLabel = msg.channel ? '<span style="font-size:9px;color:var(--text-muted);margin-left:5px;">' + msg.channel + '</span>' : '';
+                        const statusIcon = msg.status === 'failed' ? ' ❌' : msg.status === 'sent' ? ' ✓' : '';
                         html += '<div style="display:flex;justify-content:' + (isOut ? 'flex-end' : 'flex-start') + ';">'
                             + '<div class="bubble ' + (isOut ? 'bubble-out' : 'bubble-in') + '">'
-                            + '<div>' + (msg.message || '').replace(/\\n/g, '<br>') + '</div>'
-                            + '<div class="bubble-time" style="text-align:' + (isOut ? 'left' : 'right') + ';">' + time + '</div>'
+                            + '<div>' + (msg.message_text || msg.message || '').replace(/\n/g, '<br>') + '</div>'
+                            + '<div class="bubble-time" style="text-align:' + (isOut ? 'left' : 'right') + ';">' + time + statusIcon + channelLabel + '</div>'
                             + '</div></div>';
                     }
                     html += '</div>';
                 }
+                // Reply input
+                html += '<div style="padding:10px;border-top:1px solid var(--border-subtle);display:flex;gap:8px;">'
+                    + '<input type="text" id="conv-reply-input" style="flex:1;background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:8px;padding:8px 12px;color:var(--text-primary);font-size:13px;" placeholder="הקלד תשובה..." onkeyup="if(event.key===\'Enter\')sendConvReply()">'
+                    + '<button onclick="sendConvReply()" class="btn" style="padding:8px 16px;font-size:13px;">📤 שלח</button></div>';
                 thread.innerHTML = html;
                 const msgDiv = thread.querySelector('[style*="overflow-y:auto"]');
                 if (msgDiv) msgDiv.scrollTop = msgDiv.scrollHeight;
             } catch (e) {
                 thread.innerHTML = '<div style="padding:20px;color:#fca5a5;">שגיאה: ' + e.message + '</div>';
             }
+        }
+
+        async function sendConvReply() {
+            if (!_activeConvId) return;
+            const input = document.getElementById('conv-reply-input');
+            const text = input?.value?.trim();
+            if (!text) return;
+            input.value = '';
+            try {
+                await fetchJSON('/api/messaging/conversations/' + encodeURIComponent(_activeConvId) + '/reply', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ message_text: text })
+                });
+                openConversation(_activeConvId);
+            } catch(e) { alert('שגיאה: ' + e.message); }
         }
 
         let _leadsData = [], _leadsSortField = 'created_at', _leadsSortDir = 'desc';

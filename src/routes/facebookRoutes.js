@@ -23,6 +23,16 @@ function getDirectScraper() {
   if (!_directScraper) _directScraper = require('../services/facebookDirectScraper');
   return _directScraper;
 }
+let _fbMessenger;
+function getFbMessenger() {
+  if (!_fbMessenger) { try { _fbMessenger = require('../services/facebookMessenger'); } catch(e) { _fbMessenger = null; } }
+  return _fbMessenger;
+}
+let _fbAccountPool;
+function getFbAccountPool() {
+  if (!_fbAccountPool) { try { _fbAccountPool = require('../services/fbAccountPool'); } catch(e) { _fbAccountPool = null; } }
+  return _fbAccountPool;
+}
 const pool = require('../db/pool');
 const { logger } = require('../services/logger');
 
@@ -398,6 +408,66 @@ router.post('/match', async (req, res) => {
     res.json({ status: 'ok', message: `Listing ${listingId} matched to complex ${complexId}` });
   } catch (err) {
     logger.error('Facebook match error', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /pool/status — FB account pool status for monitoring
+ */
+router.get('/pool/status', (req, res) => {
+  try {
+    const pool = getFbAccountPool();
+    if (!pool) return res.json({ status: 'not_configured', accounts: [] });
+    res.json({ status: 'ok', ...pool.getPoolStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /messenger/status — FB messenger service status
+ */
+router.get('/messenger/status', (req, res) => {
+  try {
+    const fbm = getFbMessenger();
+    if (!fbm) return res.json({ status: 'not_configured' });
+    res.json({ status: 'ok', ...fbm.getStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /messenger/send — Send a message to a FB marketplace listing
+ * Body: { listing_url: string, message: string }
+ */
+router.post('/messenger/send', async (req, res) => {
+  try {
+    const { listing_url, message } = req.body;
+    if (!listing_url || !message) return res.status(400).json({ error: 'listing_url and message required' });
+
+    const fbm = getFbMessenger();
+    if (!fbm) return res.status(503).json({ error: 'FB Messenger not configured' });
+
+    const result = await fbm.sendToMarketplaceListing(listing_url, message);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /messenger/check-inbox — Check FB inbox for replies
+ */
+router.post('/messenger/check-inbox', async (req, res) => {
+  try {
+    const fbm = getFbMessenger();
+    if (!fbm) return res.status(503).json({ error: 'FB Messenger not configured' });
+
+    const result = await fbm.checkInbox();
+    res.json(result);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
