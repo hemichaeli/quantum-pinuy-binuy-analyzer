@@ -265,8 +265,17 @@ async function fetchYad2CityListings(cityCode, page = 1) {
       headers: YAD2_HEADERS,
       timeout: 15000
     });
-    if (response.data?.feed?.feed_items) {
-      return response.data.feed.feed_items.filter(i => i.type === 'ad' && i.id);
+    let data = response.data;
+    // Handle string responses (for(;;); prefix or HTML)
+    if (typeof data === 'string') {
+      const cleaned = data.replace(/^for\s*\(;;\);?\s*/, '');
+      try { data = JSON.parse(cleaned); } catch (e) {
+        logger.debug(`[PhoneOrch] yad2 API returned non-JSON for city ${cityCode}: ${data.substring(0, 100)}`);
+        return [];
+      }
+    }
+    if (data?.feed?.feed_items) {
+      return data.feed.feed_items.filter(i => i.type === 'ad' && i.id);
     }
   } catch (e) {
     logger.debug(`[PhoneOrch] Direct yad2 API failed for city ${cityCode}: ${e.message}`);
@@ -544,17 +553,24 @@ async function testYad2ApiConnectivity() {
       headers: YAD2_HEADERS,
       timeout: 10000
     });
-    const allItems = r.data?.feed?.feed_items || [];
+    const isString = typeof r.data === 'string';
+    let parsed = r.data;
+    // yad2 sometimes returns "for(;;);" prefix or HTML
+    if (isString) {
+      const cleaned = r.data.replace(/^for\s*\(;;\);?\s*/, '');
+      try { parsed = JSON.parse(cleaned); } catch (e) { parsed = null; }
+    }
+    const allItems = parsed?.feed?.feed_items || [];
     const adItems = allItems.filter(i => i.type === 'ad');
     results.direct = {
-      success: true,
+      success: adItems.length > 0,
       totalItems: allItems.length,
       adItems: adItems.length,
       sampleId: adItems[0]?.id || null,
-      responseKeys: Object.keys(r.data || {}),
-      feedKeys: Object.keys(r.data?.feed || {}),
-      itemTypes: [...new Set(allItems.map(i => i.type))],
-      status: r.status
+      responseType: isString ? 'string' : typeof r.data,
+      responsePreview: isString ? r.data.substring(0, 300) : 'json',
+      status: r.status,
+      contentType: r.headers?.['content-type'] || 'unknown'
     };
   } catch (e) {
     results.direct = { success: false, error: e.message, status: e.response?.status, data: JSON.stringify(e.response?.data || '').substring(0, 200) };
