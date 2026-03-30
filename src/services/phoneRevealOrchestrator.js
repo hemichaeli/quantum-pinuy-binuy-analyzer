@@ -97,16 +97,32 @@ async function enrichKomoListings(listings) {
       const match = listing.url.match(/modaaNum=(\d+)/i);
       if (match) modaaNum = match[1];
     }
-    if (!modaaNum) continue;
 
-    const result = await fetchKomoPhone(modaaNum);
-    if (result.phone) {
-      await pool.query(
-        `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), updated_at = NOW() WHERE id = $3`,
-        [result.phone, result.contact_name, listing.id]
-      );
-      enriched++;
-      logger.debug(`[PhoneOrch] Komo: ${listing.address} → ${result.phone}`);
+    if (modaaNum) {
+      const result = await fetchKomoPhone(modaaNum);
+      if (result.phone) {
+        await pool.query(
+          `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), updated_at = NOW() WHERE id = $3`,
+          [result.phone, result.contact_name, listing.id]
+        );
+        enriched++;
+        logger.debug(`[PhoneOrch] Komo: ${listing.address} → ${result.phone}`);
+        await sleep(600);
+        continue;
+      }
+    }
+
+    // Fallback: search Komo HTML page by city+address to find modaaNum
+    if (listing.city && listing.address) {
+      const result = await tryKomoForYad2Listing(listing);
+      if (result && result.phone) {
+        await pool.query(
+          `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), updated_at = NOW() WHERE id = $3`,
+          [result.phone, result.contact_name, listing.id]
+        );
+        enriched++;
+        logger.debug(`[PhoneOrch] Komo (search): ${listing.address} → ${result.phone}`);
+      }
     }
     await sleep(800);
   }
