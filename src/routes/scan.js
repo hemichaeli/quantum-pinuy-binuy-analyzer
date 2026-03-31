@@ -1787,17 +1787,6 @@ router.get('/apify-runs', async (req, res) => {
   }
 });
 
-// GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
-router.get('/:id', async (req, res) => {
-  try {
-    const scanId = parseInt(req.params.id);
-    if (isNaN(scanId)) return res.status(400).json({ error: `Unknown scan route: ${req.params.id}. Valid routes: /status, /health, /morning-report, /results, /scheduler/status` });
-    const result = await pool.query('SELECT * FROM scan_logs WHERE id = $1', [scanId]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Scan not found' });
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Failed to fetch scan' }); }
-});
-
 // ═══════════════════════════════════════════════════════════════════
 // BACKUP: metadata tracking + GitHub backup trigger
 // ═══════════════════════════════════════════════════════════════════
@@ -1891,6 +1880,17 @@ router.get('/backups', async (req, res) => {
       res.json({ success: true, backups: [], total: 0 });
     }
   }
+});
+
+// GET /api/scan/:id - MUST BE LAST (catch-all for numeric scan IDs)
+router.get('/:id', async (req, res) => {
+  try {
+    const scanId = parseInt(req.params.id);
+    if (isNaN(scanId)) return res.status(400).json({ error: `Unknown scan route: ${req.params.id}. Valid routes: /status, /health, /morning-report, /results, /scheduler/status, /backups, /backup` });
+    const result = await pool.query('SELECT * FROM scan_logs WHERE id = $1', [scanId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Scan not found' });
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch scan' }); }
 });
 
 module.exports = router;
