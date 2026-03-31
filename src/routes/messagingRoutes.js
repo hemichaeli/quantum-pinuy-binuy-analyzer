@@ -968,4 +968,132 @@ router.post('/conversations/:conversationId/reply', async (req, res) => {
   }
 });
 
+// ============================================================
+// MESSAGING CONFIG (InForu template + escalation settings)
+// ============================================================
+
+router.get('/config', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT key, value FROM system_settings
+      WHERE key IN ('default_inforu_template_id', 'wa_bot_escalation_minutes', 'outreach_escalation_enabled')
+    `);
+    const config = {};
+    for (const r of rows) config[r.key] = r.value;
+    res.json({
+      default_template_id: config.default_inforu_template_id || null,
+      escalation_minutes: parseInt(config.wa_bot_escalation_minutes) || 300,
+      escalation_enabled: config.outreach_escalation_enabled === 'true'
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/config', async (req, res) => {
+  try {
+    const { default_template_id, escalation_minutes, escalation_enabled } = req.body;
+    const settings = [];
+    if (default_template_id !== undefined) settings.push({ key: 'default_inforu_template_id', value: String(default_template_id), label: 'תבנית InForu ברירת מחדל' });
+    if (escalation_minutes !== undefined) settings.push({ key: 'wa_bot_escalation_minutes', value: String(parseInt(escalation_minutes)), label: 'זמן המתנה להסלמה (דקות)' });
+    if (escalation_enabled !== undefined) settings.push({ key: 'outreach_escalation_enabled', value: String(!!escalation_enabled), label: 'הסלמה אוטומטית פעילה' });
+
+    for (const s of settings) {
+      await pool.query(`
+        INSERT INTO system_settings (key, value, label, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+      `, [s.key, s.value, s.label]);
+    }
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ============================================================
+// INFORU TEMPLATE PROXY
+// ============================================================
+
+router.get('/inforu-template/:id', async (req, res) => {
+  try {
+    const templateId = parseInt(req.params.id);
+    if (!templateId || templateId < 1) return res.status(400).json({ error: 'Invalid template ID' });
+
+    const username = process.env.INFORU_USERNAME;
+    const password = process.env.INFORU_PASSWORD;
+    if (!username || !password) return res.status(503).json({ error: 'InForu credentials not configured' });
+
+    const auth = Buffer.from(`${username}:${password}`).toString('base64');
+    const axios = require('axios');
+    const response = await axios.get(
+      `https://capi.inforu.co.il/api/v2/WhatsApp/GetTemplate/${templateId}`,
+      {
+        headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+        timeout: 10000,
+        validateStatus: () => true
+      }
+    );
+    if (response.data?.StatusId === 1) {
+      res.json({ success: true, template: response.data.Data || response.data });
+    } else {
+      res.json({ success: false, error: response.data?.Message || 'Template not found', raw: response.data });
+    }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ============================================================
+// BOT ESCALATION STATUS & STATS
+// ============================================================
+
+router.get('/bot-escalation/status', async (req, res) => {
+  try {
+    const escalationService = require('../services/waBotEscalationService');
+    const stats = await escalationService.getEscalationStats();
+    const minutes = await escalationService.getEscalationMinutes();
+
+    // Get outreach escalation config
+    let enabled = false;
+    try {
+      const { rows } = await pool.query("SELECT value FROM system_settings WHERE key = 'outreach_escalation_enabled'");
+      enabled = rows.length && rows[0].value === 'true';
+    } catch (e) {}
+
+    // Recent escalations from unified_messages
+    let recentEscalations = [];
+    try {
+      const { rows } = await pool.query(`
+        SELECT um.listing_id, um.contact_phone, um.created_at, um.status, um.channel,
+               l.address, l.city
+        FROM unified_messages um
+        LEFT JOIN listings l ON um.listing_id = l.id
+        WHERE um.channel = 'vapi_call' OR um.metadata->>'escalation_source' IS NOT NULL
+        ORDER BY um.created_at DESC LIMIT 20
+      `);
+      recentEscalations = rows;
+    } catch (e) {
+      // Fallback: check leads table
+      try {
+        const { rows } = await pool.query(`
+          SELECT id, phone, name, status, updated_at
+          FROM leads
+          WHERE status IN ('vapi_called', 'vapi_failed')
+          ORDER BY updated_at DESC LIMIT 20
+        `);
+        recentEscalations = rows.map(r => ({
+          contact_phone: r.phone, contact_name: r.name, status: r.status,
+          created_at: r.updated_at, channel: 'vapi_call'
+        }));
+      } catch (e2) {}
+    }
+
+    res.json({
+      enabled,
+      escalation_minutes: minutes,
+      stats: {
+        total_escalated: parseInt(stats.total_escalated) || 0,
+        active_bot_leads: parseInt(stats.active_bot_leads) || 0,
+        total_bot_leads: parseInt(stats.total_bot_leads) || 0
+      },
+      recent: recentEscalations
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;

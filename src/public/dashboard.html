@@ -456,6 +456,56 @@
 
     <!-- MESSAGES TAB -->
     <div id="tab-messages" class="tab-content" style="padding:0;">
+        <!-- InForu Template Config Panel -->
+        <div class="section" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;padding:14px 20px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+                <h2 style="margin:0;font-size:14px;">📋 תבנית InForu</h2>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <input type="number" class="filter-input" id="inforuTemplateId" placeholder="מזהה תבנית..." style="width:140px;" min="1">
+                    <button class="btn btn-secondary" onclick="loadInforuTemplate()" style="padding:6px 14px;font-size:12px;">טען תבנית</button>
+                    <button class="btn btn-gold" onclick="saveDefaultTemplate()" style="padding:6px 14px;font-size:12px;">שמור כברירת מחדל</button>
+                </div>
+            </div>
+            <div id="inforu-template-preview" style="display:none;background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:6px;padding:12px;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;max-height:120px;overflow-y:auto;"></div>
+        </div>
+
+        <!-- QUANTUM BOT Escalation Panel -->
+        <div class="section" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;padding:14px 20px;border-bottom:1px solid var(--border-subtle);">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+                <h2 style="margin:0;font-size:14px;">🤖 QUANTUM BOT — הסלמה אוטומטית</h2>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+                        <input type="checkbox" id="botEscalationEnabled" onchange="toggleBotEscalation()" style="accent-color:var(--teal);width:16px;height:16px;">
+                        פעיל
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
+                        השהיה:
+                        <input type="number" class="filter-input" id="botEscalationDelay" value="300" min="30" max="1440" style="width:70px;padding:4px 8px;font-size:12px;" onchange="saveBotEscalationConfig()"> דקות
+                    </label>
+                    <button class="btn btn-secondary" onclick="loadBotEscalationStatus()" style="padding:5px 12px;font-size:11px;">🔄</button>
+                </div>
+            </div>
+            <div id="bot-escalation-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:10px;">
+                <div style="background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--teal);" id="bot-stat-triggered">-</div>
+                    <div style="font-size:11px;color:var(--text-muted);">הסלמות שהופעלו</div>
+                </div>
+                <div style="background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--green);" id="bot-stat-success">-</div>
+                    <div style="font-size:11px;color:var(--text-muted);">הצלחה</div>
+                </div>
+                <div style="background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--gold);" id="bot-stat-pending">-</div>
+                    <div style="font-size:11px;color:var(--text-muted);">ממתינים (בוט פעיל)</div>
+                </div>
+                <div style="background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:6px;padding:10px;text-align:center;">
+                    <div style="font-size:20px;font-weight:700;color:var(--red);" id="bot-stat-failed">-</div>
+                    <div style="font-size:11px;color:var(--text-muted);">נכשלו</div>
+                </div>
+            </div>
+            <div id="bot-recent-escalations" style="max-height:140px;overflow-y:auto;font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+
         <div class="section" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
                 <h2 style="margin:0;">💬 שיחות - כל הערוצים</h2>
@@ -1066,7 +1116,7 @@
             try { history.replaceState(null, '', '#' + tabName + (filter ? '/' + filter : '')); } catch(e) {}
             window.scrollTo(0, 0);
             if (tabName === 'ads') loadAds();
-            else if (tabName === 'messages') loadConversations();
+            else if (tabName === 'messages') { initMessagesTab(); loadConversations(); }
             else if (tabName === 'leads') loadLeads(filter || null);
             else if (tabName === 'complexes') loadComplexes(filter === 'hot' ? 'hot' : null);
             else if (tabName === 'kones') loadKones(filter || null);
@@ -1421,6 +1471,95 @@
         }
 
         let _activeConvId = null;
+
+        // ==================== INFORU TEMPLATE ====================
+        async function loadInforuTemplate() {
+            const tid = document.getElementById('inforuTemplateId').value;
+            if (!tid) { alert('הזן מזהה תבנית'); return; }
+            const preview = document.getElementById('inforu-template-preview');
+            preview.style.display = 'block';
+            preview.textContent = 'טוען תבנית...';
+            try {
+                const data = await fetchJSON('/api/messaging/inforu-template/' + tid);
+                if (data.success && data.template) {
+                    const tpl = data.template;
+                    preview.textContent = tpl.Body || tpl.Text || tpl.Content || JSON.stringify(tpl, null, 2);
+                } else {
+                    preview.textContent = 'שגיאה: ' + (data.error || 'תבנית לא נמצאה');
+                    preview.style.color = 'var(--red)';
+                }
+            } catch(e) { preview.textContent = 'שגיאה: ' + e.message; preview.style.color = 'var(--red)'; }
+        }
+
+        async function saveDefaultTemplate() {
+            const tid = document.getElementById('inforuTemplateId').value;
+            if (!tid) { alert('הזן מזהה תבנית קודם'); return; }
+            try {
+                await fetchJSON('/api/messaging/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ default_template_id: tid })
+                });
+                alert('תבנית ברירת מחדל נשמרה');
+            } catch(e) { alert('שגיאה: ' + e.message); }
+        }
+
+        // ==================== BOT ESCALATION ====================
+        async function loadBotEscalationStatus() {
+            try {
+                const data = await fetchJSON('/api/messaging/bot-escalation/status');
+                document.getElementById('botEscalationEnabled').checked = !!data.enabled;
+                document.getElementById('botEscalationDelay').value = data.escalation_minutes || 300;
+                const s = data.stats || {};
+                document.getElementById('bot-stat-triggered').textContent = s.total_escalated || 0;
+                document.getElementById('bot-stat-success').textContent = s.total_escalated || 0;
+                document.getElementById('bot-stat-pending').textContent = s.active_bot_leads || 0;
+                document.getElementById('bot-stat-failed').textContent = (s.total_bot_leads - s.total_escalated - s.active_bot_leads) || 0;
+
+                const container = document.getElementById('bot-recent-escalations');
+                if (data.recent && data.recent.length) {
+                    container.innerHTML = data.recent.map(r => {
+                        const date = r.created_at ? new Date(r.created_at).toLocaleString('he-IL') : '';
+                        const addr = r.address || r.contact_name || r.contact_phone || '';
+                        const st = r.status === 'vapi_called' || r.status === 'sent' ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+                        return '<div style="padding:4px 0;border-bottom:1px solid var(--border-subtle);display:flex;justify-content:space-between;">' +
+                            '<span>' + st + ' ' + addr + ' — ' + (r.contact_phone || '') + '</span>' +
+                            '<span style="color:var(--text-muted);">' + date + '</span></div>';
+                    }).join('');
+                } else {
+                    container.innerHTML = '<div style="padding:8px;color:var(--text-muted);text-align:center;">אין הסלמות אחרונות</div>';
+                }
+            } catch(e) {
+                document.getElementById('bot-recent-escalations').innerHTML = '<div style="padding:8px;color:var(--red);">שגיאה: ' + e.message + '</div>';
+            }
+        }
+
+        async function toggleBotEscalation() {
+            const enabled = document.getElementById('botEscalationEnabled').checked;
+            const minutes = parseInt(document.getElementById('botEscalationDelay').value) || 300;
+            try {
+                await fetchJSON('/api/messaging/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ escalation_enabled: enabled, escalation_minutes: minutes })
+                });
+            } catch(e) { alert('שגיאה: ' + e.message); }
+        }
+
+        async function saveBotEscalationConfig() {
+            await toggleBotEscalation();
+        }
+
+        // Load config on messages tab open
+        async function initMessagesTab() {
+            try {
+                const cfg = await fetchJSON('/api/messaging/config');
+                if (cfg.default_template_id) document.getElementById('inforuTemplateId').value = cfg.default_template_id;
+                document.getElementById('botEscalationEnabled').checked = !!cfg.escalation_enabled;
+                document.getElementById('botEscalationDelay').value = cfg.escalation_minutes || 300;
+            } catch(e) {}
+            loadBotEscalationStatus();
+        }
 
         async function loadConversations() {
             const container = document.getElementById('conv-list');

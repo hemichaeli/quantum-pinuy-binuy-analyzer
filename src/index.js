@@ -389,6 +389,13 @@ async function start() {
       cron.schedule('0 9 */3 * *', async () => { try { await checkVapiKeytermsSupport(); } catch (e) {} });
     } catch (e) {}
 
+    try {
+      const cron = require('node-cron');
+      const { runOutreachEscalation } = require('./cron/outreachEscalationCron');
+      cron.schedule('*/30 * * * *', async () => { try { await runOutreachEscalation(); } catch (e) {} });
+      logger.info('[OutreachEscalation] ACTIVE - checking every 30 min');
+    } catch (e) { logger.warn('[OutreachEscalation] Failed:', e.message); }
+
     try { require('./jobs/weeklyScanner').startScheduler(); } catch (e) {}
     try { require('./jobs/stuckScanWatcher').startWatcher(); } catch (e) {}
     try { require('./jobs/discoveryScheduler').startDiscoveryScheduler(); } catch (e) {}
