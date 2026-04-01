@@ -87,7 +87,9 @@ const limiter = rateLimit({
     req.path.startsWith('/api/outreach/') ||
     req.path.startsWith('/api/comms/') ||
     req.path.startsWith('/api/morning/') ||
-    req.path.startsWith('/api/newsletter/'),
+    req.path.startsWith('/api/newsletter/') ||
+    req.path.startsWith('/api/callcenter/') ||
+    req.path.startsWith('/callcenter/'),
   message: { error: 'Too many requests, please try again later' }
 });
 app.use('/api/', limiter);
@@ -150,6 +152,8 @@ function loadAllRoutes() {
     { path: '/api/facebook',           file: 'routes/facebookRoute.js' },
     { path: '/api/facebook',           file: 'routes/facebookRoutes.js' },
     { path: '/api/messaging',          file: 'routes/messagingRoutes.js' },
+    { path: '/api/callcenter',         file: 'routes/callcenterRoutes.js' },
+    { path: '/callcenter',             file: 'routes/callcenterRoutes.js' },
     { path: '/api/morning',            file: 'routes/morningReportRoutes.js' },
     { path: '/api/kones',              file: 'routes/konesRoutes.js' },
     { path: '/api/ssi',                file: 'routes/ssiRoutes.js' },

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QUANTUM — מוקד חיצוני</title>
+<style>
+:root {
+  --bg: #0f1117; --bg2: #1a1d27; --bg3: #242836;
+  --border: #2d3148; --text: #e2e4e9; --muted: #8b8fa3;
+  --teal: #2dd4bf; --green: #22c55e; --gold: #f59e0b;
+  --red: #ef4444; --blue: #3b82f6; --purple: #a78bfa;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; position: sticky; top: 0; z-index: 100; }
+.header h1 { font-size: 16px; color: var(--teal); }
+.header .info { font-size: 12px; color: var(--muted); }
+
+.stats-bar { display: flex; gap: 8px; padding: 12px 20px; flex-wrap: wrap; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.stat-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; text-align: center; min-width: 90px; flex: 1; }
+.stat-card .num { font-size: 22px; font-weight: 700; }
+.stat-card .label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.toolbar { padding: 10px 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--bg); border-bottom: 1px solid var(--border); }
+.toolbar input, .toolbar select { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 7px 12px; border-radius: 6px; font-size: 13px; }
+.toolbar input { width: 200px; }
+
+.agent-input { background: var(--bg3); border: 1px solid var(--teal); color: var(--teal); padding: 7px 12px; border-radius: 6px; font-size: 13px; width: 140px; }
+.agent-input::placeholder { color: var(--muted); }
+
+.items { padding: 10px 20px 80px; }
+.item { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 8px; transition: border-color 0.2s; }
+.item:hover { border-color: var(--teal); }
+.item.status-called { border-right: 3px solid var(--blue); }
+.item.status-interested { border-right: 3px solid var(--green); }
+.item.status-agreement { border-right: 3px solid var(--gold); }
+.item.status-not-interested { border-right: 3px solid var(--red); opacity: 0.6; }
+.item.status-no_answer { border-right: 3px solid var(--muted); }
+.item.status-callback { border-right: 3px solid var(--purple); }
+
+.item-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+.item-info h3 { font-size: 14px; margin-bottom: 3px; }
+.item-info .meta { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; }
+.item-phone { font-size: 18px; font-weight: 700; color: var(--teal); direction: ltr; letter-spacing: 1px; }
+.item-phone a { color: var(--teal); text-decoration: none; }
+.item-phone a:hover { text-decoration: underline; }
+
+.item-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.btn { padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px; transition: all 0.15s; font-family: inherit; }
+.btn:hover { background: var(--border); }
+.btn.active-green { background: var(--green); color: #000; border-color: var(--green); }
+.btn.active-gold { background: var(--gold); color: #000; border-color: var(--gold); }
+.btn.active-red { background: var(--red); color: #fff; border-color: var(--red); }
+.btn.active-blue { background: var(--blue); color: #fff; border-color: var(--blue); }
+.btn.active-purple { background: var(--purple); color: #000; border-color: var(--purple); }
+.btn.active-muted { background: var(--muted); color: #000; border-color: var(--muted); }
+
+.item-notes { margin-top: 8px; display: flex; gap: 6px; }
+.item-notes input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 12px; font-family: inherit; }
+
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--teal); color: #000; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; z-index: 999; display: none; }
+
+.loading { text-align: center; padding: 60px; color: var(--muted); font-size: 15px; }
+
+@media (max-width: 600px) {
+  .item-top { flex-direction: column; }
+  .toolbar input { width: 100%; }
+  .stats-bar { gap: 4px; }
+  .stat-card { min-width: 70px; padding: 8px 6px; }
+  .stat-card .num { font-size: 18px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>QUANTUM — מוקד חיצוני</h1>
+    <div class="info" id="list-name">טוען...</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <span style="font-size:12px;color:var(--muted);">שם נציג:</span>
+    <input type="text" class="agent-input" id="agentName" placeholder="הזן שמך..." onchange="saveAgentName()">
+  </div>
+</div>
+
+<div class="stats-bar" id="stats-bar">
+  <div class="stat-card"><div class="num" id="s-total">-</div><div class="label">סה"כ</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--muted)" id="s-pending">-</div><div class="label">ממתין</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--blue)" id="s-called">-</div><div class="label">נוצר קשר</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--muted)" id="s-no-answer">-</div><div class="label">לא ענו</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--green)" id="s-interested">-</div><div class="label">מעוניין</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--gold)" id="s-agreements">-</div><div class="label">הסכם נשלח</div></div>
+</div>
+
+<div class="toolbar">
+  <input type="text" id="search" placeholder="חיפוש כתובת / שם / טלפון..." oninput="filterItems()">
+  <select id="statusFilter" onchange="filterItems()">
+    <option value="">הכל</option>
+    <option value="pending">ממתין</option>
+    <option value="called">נוצר קשר</option>
+    <option value="no_answer">לא ענו</option>
+    <option value="callback">חזרה מאוחר</option>
+    <option value="interested">מעוניין</option>
+    <option value="not_interested">לא מעוניין</option>
+    <option value="agreement">הסכם נשלח</option>
+  </select>
+  <button class="btn" onclick="loadData()" style="padding:7px 16px;">🔄 רענן</button>
+  <span style="font-size:12px;color:var(--muted);margin-right:auto;" id="last-update"></span>
+</div>
+
+<div class="items" id="items-container">
+  <div class="loading">טוען רשימה...</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = window.location.pathname.split('/').pop();
+let allItems = [];
+let listData = null;
+
+// Agent name persistence
+function saveAgentName() {
+  localStorage.setItem('quantum_agent_name', document.getElementById('agentName').value);
+}
+function getAgentName() {
+  return document.getElementById('agentName').value || localStorage.getItem('quantum_agent_name') || '';
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('quantum_agent_name');
+  if (saved) document.getElementById('agentName').value = saved;
+  loadData();
+});
+
+async function loadData() {
+  try {
+    const resp = await fetch(`/api/callcenter/ext/${TOKEN}`);
+    if (!resp.ok) throw new Error('Failed to load');
+    const data = await resp.json();
+    listData = data.list;
+    allItems = data.items;
+
+    document.getElementById('list-name').textContent = `${data.list.name} — ${data.stats.total} מודעות`;
+    document.getElementById('s-total').textContent = data.stats.total;
+    document.getElementById('s-pending').textContent = data.stats.pending;
+    document.getElementById('s-called').textContent = data.stats.called;
+    document.getElementById('s-no-answer').textContent = data.stats.no_answer;
+    document.getElementById('s-interested').textContent = data.stats.interested;
+    document.getElementById('s-agreements').textContent = data.stats.agreements_sent;
+    document.getElementById('last-update').textContent = 'עדכון: ' + new Date().toLocaleTimeString('he-IL');
+
+    filterItems();
+  } catch (err) {
+    document.getElementById('items-container').innerHTML = '<div class="loading">שגיאה בטעינת הנתונים. בדוק שהקישור תקין.</div>';
+  }
+}
+
+function filterItems() {
+  const search = (document.getElementById('search').value || '').toLowerCase();
+  const status = document.getElementById('statusFilter').value;
+
+  let filtered = allItems;
+  if (search) {
+    filtered = filtered.filter(i =>
+      (i.address || '').toLowerCase().includes(search) ||
+      (i.contact_name || '').toLowerCase().includes(search) ||
+      (i.phone || '').includes(search) ||
+      (i.city || '').toLowerCase().includes(search)
+    );
+  }
+  if (status) {
+    if (status === 'interested') filtered = filtered.filter(i => i.interested === true);
+    else if (status === 'not_interested') filtered = filtered.filter(i => i.interested === false);
+    else if (status === 'agreement') filtered = filtered.filter(i => i.agreement_sent === true);
+    else filtered = filtered.filter(i => i.call_status === status);
+  }
+
+  renderItems(filtered);
+}
+
+function renderItems(items) {
+  const container = document.getElementById('items-container');
+  if (items.length === 0) {
+    container.innerHTML = '<div class="loading">אין פריטים מתאימים</div>';
+    return;
+  }
+
+  container.innerHTML = items.map(item => {
+    let statusClass = '';
+    if (item.agreement_sent) statusClass = 'status-agreement';
+    else if (item.interested === true) statusClass = 'status-interested';
+    else if (item.interested === false) statusClass = 'status-not-interested';
+    else if (item.call_status === 'called') statusClass = 'status-called';
+    else if (item.call_status === 'no_answer') statusClass = 'status-no_answer';
+    else if (item.call_status === 'callback') statusClass = 'status-callback';
+
+    const phone = item.phone || '';
+    const displayPhone = phone.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+
+    return `
+    <div class="item ${statusClass}" id="item-${item.id}">
+      <div class="item-top">
+        <div class="item-info">
+          <h3>${item.address || 'ללא כתובת'}${item.city ? ', ' + item.city : ''}</h3>
+          <div class="meta">
+            ${item.contact_name ? '<span>👤 ' + item.contact_name + '</span>' : ''}
+            ${item.rooms ? '<span>🛏 ' + item.rooms + ' חד\'</span>' : ''}
+            ${item.price ? '<span>💰 ' + item.price + '</span>' : ''}
+            ${item.agent_name ? '<span>📞 ' + item.agent_name + '</span>' : ''}
+            ${item.call_status !== 'pending' ? '<span>🕐 ' + (item.called_at ? new Date(item.called_at).toLocaleString('he-IL') : '') + '</span>' : ''}
+          </div>
+        </div>
+        <div class="item-phone">
+          <a href="tel:${phone}">${displayPhone}</a>
+        </div>
+      </div>
+      <div class="item-actions">
+        <button class="btn ${item.call_status === 'called' ? 'active-blue' : ''}" onclick="markCalled(${item.id})">📞 נוצר קשר</button>
+        <button class="btn ${item.call_status === 'no_answer' ? 'active-muted' : ''}" onclick="markNoAnswer(${item.id})">❌ לא ענה</button>
+        <button class="btn ${item.call_status === 'callback' ? 'active-purple' : ''}" onclick="markCallback(${item.id})">🔄 חזרה</button>
+        <span style="width:1px;height:24px;background:var(--border);"></span>
+        <button class="btn ${item.interested === true ? 'active-green' : ''}" onclick="markInterested(${item.id}, true)">✅ מעוניין</button>
+        <button class="btn ${item.interested === false ? 'active-red' : ''}" onclick="markInterested(${item.id}, false)">🚫 לא מעוניין</button>
+        <span style="width:1px;height:24px;background:var(--border);"></span>
+        <button class="btn ${item.agreement_sent ? 'active-gold' : ''}" onclick="markAgreement(${item.id})">${item.agreement_sent ? '📜 הסכם נשלח ✓' : '📜 שלח הסכם'}</button>
+      </div>
+      <div class="item-notes">
+        <input type="text" placeholder="הערות..." value="${(item.notes || '').replace(/"/g, '&quot;')}" onchange="saveNotes(${item.id}, this.value)" id="notes-${item.id}">
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function updateItem(itemId, data) {
+  data.agent_name = getAgentName();
+  try {
+    const resp = await fetch(`/api/callcenter/ext/${TOKEN}/item/${itemId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await resp.json();
+    if (result.success) {
+      // Update local data
+      const idx = allItems.findIndex(i => i.id === itemId);
+      if (idx >= 0) Object.assign(allItems[idx], result.item);
+      filterItems();
+      updateLocalStats();
+      showToast('עודכן בהצלחה');
+    }
+  } catch (err) {
+    showToast('שגיאה בעדכון', true);
+  }
+}
+
+function markCalled(id) { updateItem(id, { call_status: 'called' }); }
+function markNoAnswer(id) { updateItem(id, { call_status: 'no_answer' }); }
+function markCallback(id) { updateItem(id, { call_status: 'callback' }); }
+function markInterested(id, val) { updateItem(id, { interested: val, call_status: 'called' }); }
+function markAgreement(id) { updateItem(id, { agreement_sent: true, interested: true, call_status: 'called' }); }
+function saveNotes(id, notes) { updateItem(id, { notes }); }
+
+function updateLocalStats() {
+  document.getElementById('s-pending').textContent = allItems.filter(i => i.call_status === 'pending').length;
+  document.getElementById('s-called').textContent = allItems.filter(i => i.call_status === 'called').length;
+  document.getElementById('s-no-answer').textContent = allItems.filter(i => i.call_status === 'no_answer').length;
+  document.getElementById('s-interested').textContent = allItems.filter(i => i.interested === true).length;
+  document.getElementById('s-agreements').textContent = allItems.filter(i => i.agreement_sent === true).length;
+}
+
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = isError ? 'var(--red)' : 'var(--teal)';
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 2000);
+}
+</script>
+</body>
+</html>

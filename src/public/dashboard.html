@@ -548,6 +548,49 @@
             </div>
         </div>
 
+        <!-- External Call Center Panel -->
+        <div class="section" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;padding:14px 20px;border-bottom:1px solid var(--border-subtle);">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+                <h2 style="margin:0;font-size:14px;">📞 מוקד חיצוני — רשימות שיחה</h2>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <button class="btn btn-gold" onclick="showCreateCallList()" style="padding:6px 14px;font-size:12px;">➕ צור רשימה חדשה</button>
+                    <button class="btn btn-secondary" onclick="loadCallLists()" style="padding:5px 12px;font-size:11px;">🔄</button>
+                </div>
+            </div>
+            <!-- Create call list form (hidden) -->
+            <div id="callcenter-create-form" style="display:none;background:var(--bg-primary);border:1px solid var(--border-subtle);border-radius:8px;padding:14px;margin-bottom:10px;">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:10px;">
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">שם הרשימה</label>
+                        <input type="text" class="filter-input" id="ccListName" placeholder="לדוגמה: יד2 תל אביב" style="width:180px;"></div>
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">עיר</label>
+                        <input type="text" class="filter-input" id="ccFilterCity" placeholder="עיר..." style="width:120px;"></div>
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">מקור</label>
+                        <select class="filter-select" id="ccFilterSource" style="width:100px;">
+                            <option value="">הכל</option><option value="yad2">יד2</option><option value="facebook">פייסבוק</option><option value="komo">קומו</option><option value="kones">כונס</option>
+                        </select></div>
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">מחיר מינימום</label>
+                        <input type="number" class="filter-input" id="ccFilterMinPrice" placeholder="0" style="width:100px;"></div>
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">מחיר מקסימום</label>
+                        <input type="number" class="filter-input" id="ccFilterMaxPrice" placeholder="0" style="width:100px;"></div>
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">חדרים מ-</label>
+                        <input type="number" class="filter-input" id="ccFilterMinRooms" placeholder="" style="width:60px;"></div>
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">עד</label>
+                        <input type="number" class="filter-input" id="ccFilterMaxRooms" placeholder="" style="width:60px;"></div>
+                    <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">כמות מקס'</label>
+                        <input type="number" class="filter-input" id="ccFilterLimit" value="200" style="width:70px;"></div>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+                        <input type="checkbox" id="ccFilterNoMessage" checked style="accent-color:var(--teal);"> רק ללא הודעה
+                    </label>
+                </div>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-gold" onclick="createCallList()" style="padding:6px 18px;font-size:12px;">📞 צור רשימה ושתף</button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('callcenter-create-form').style.display='none'" style="padding:6px 12px;font-size:12px;">ביטול</button>
+                </div>
+            </div>
+            <!-- Existing call lists -->
+            <div id="callcenter-lists" style="max-height:200px;overflow-y:auto;font-size:12px;"></div>
+        </div>
+
         <div class="section" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
                 <h2 style="margin:0;">💬 שיחות - כל הערוצים</h2>
@@ -1643,6 +1686,90 @@
             loadCampaignStatus();
         }
 
+        // ── Call Center controls ──────────────────────────────────────────
+        function showCreateCallList() {
+            document.getElementById('callcenter-create-form').style.display = 'block';
+        }
+        async function createCallList() {
+            const name = document.getElementById('ccListName').value;
+            if (!name) { showToast('נא להזין שם לרשימה', 'error'); return; }
+            const filters = {};
+            const city = document.getElementById('ccFilterCity').value;
+            const source = document.getElementById('ccFilterSource').value;
+            const min_price = document.getElementById('ccFilterMinPrice').value;
+            const max_price = document.getElementById('ccFilterMaxPrice').value;
+            const min_rooms = document.getElementById('ccFilterMinRooms').value;
+            const max_rooms = document.getElementById('ccFilterMaxRooms').value;
+            const limit = document.getElementById('ccFilterLimit').value;
+            const no_message = document.getElementById('ccFilterNoMessage').checked;
+            if (city) filters.city = city;
+            if (source) filters.source = source;
+            if (min_price) filters.min_price = parseInt(min_price);
+            if (max_price) filters.max_price = parseInt(max_price);
+            if (min_rooms) filters.min_rooms = parseInt(min_rooms);
+            if (max_rooms) filters.max_rooms = parseInt(max_rooms);
+            if (limit) filters.limit = parseInt(limit);
+            if (no_message) filters.no_message = true;
+            try {
+                const result = await fetchJSON('/api/callcenter/lists', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ name, filters })
+                });
+                if (result.success) {
+                    showToast(`רשימה נוצרה: ${result.list.item_count} מודעות`);
+                    document.getElementById('callcenter-create-form').style.display = 'none';
+                    // Copy share URL
+                    if (navigator.clipboard) {
+                        await navigator.clipboard.writeText(result.share_url);
+                        showToast(`הקישור הועתק! ${result.share_url}`);
+                    } else {
+                        prompt('קישור לשיתוף:', result.share_url);
+                    }
+                    loadCallLists();
+                } else {
+                    showToast(result.error || 'שגיאה ביצירת רשימה', 'error');
+                }
+            } catch(e) { showToast('שגיאה: ' + e.message, 'error'); }
+        }
+        async function loadCallLists() {
+            const container = document.getElementById('callcenter-lists');
+            try {
+                const data = await fetchJSON('/api/callcenter/lists');
+                if (!data.lists || data.lists.length === 0) {
+                    container.innerHTML = '<div style="color:var(--text-muted);padding:10px;">אין רשימות פעילות. צור רשימה חדשה.</div>';
+                    return;
+                }
+                container.innerHTML = data.lists.map(l => `
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--border-subtle);gap:8px;">
+                        <div>
+                            <strong>${l.name}</strong>
+                            <span style="color:var(--text-muted);margin-right:8px;">${l.total_items} מודעות</span>
+                            <span style="color:var(--blue);">${l.called || 0} טופלו</span>
+                            <span style="color:var(--green);">${l.interested || 0} מעוניינים</span>
+                            <span style="color:var(--gold);">${l.agreements_sent || 0} הסכמים</span>
+                        </div>
+                        <div style="display:flex;gap:6px;">
+                            <button class="btn btn-secondary" onclick="copyCallListLink('${l.token}')" style="padding:4px 10px;font-size:11px;">🔗 העתק קישור</button>
+                            <button class="btn btn-secondary" onclick="window.open('/callcenter/${l.token}','_blank')" style="padding:4px 10px;font-size:11px;">👁 צפה</button>
+                            <button class="btn" onclick="deleteCallList(${l.id})" style="padding:4px 8px;font-size:11px;color:var(--red);">🗑</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch(e) { container.innerHTML = '<div style="color:var(--red);padding:10px;">שגיאה בטעינה</div>'; }
+        }
+        async function copyCallListLink(token) {
+            const url = window.location.origin + '/callcenter/' + token;
+            if (navigator.clipboard) {
+                await navigator.clipboard.writeText(url);
+                showToast('🔗 הקישור הועתק!');
+            } else { prompt('קישור:', url); }
+        }
+        async function deleteCallList(id) {
+            if (!confirm('למחוק את הרשימה?')) return;
+            await fetchJSON('/api/callcenter/lists/' + id, { method: 'DELETE' });
+            loadCallLists();
+        }
+
         // Load config on messages tab open
         async function initMessagesTab() {
             try {
@@ -1653,6 +1780,7 @@
             } catch(e) {}
             loadBotEscalationStatus();
             loadCampaignStatus();
+            loadCallLists();
         }
 
         async function loadConversations() {
