@@ -491,6 +491,15 @@ async function start() {
     } catch (e) {}
   }
 
+  // ── Quantum Scheduler (morning report cron + tier scans) ─────────────────────
+  if (isQuantum) {
+    try {
+      const { initScheduler } = require('./jobs/quantumScheduler');
+      await initScheduler();
+      logger.info('[QuantumScheduler] ACTIVE');
+    } catch (e) { logger.warn('[QuantumScheduler] Failed to init:', e.message); }
+  }
+
   // ── Shared crons (both modes) ────────────────────────────────────────────────
   try { const { initializeBackupService } = require('./services/backupService'); await initializeBackupService(); } catch (e) {}
   try { const { initializeGithubBackup } = require('./services/githubBackupService'); await initializeGithubBackup(); } catch (e) {}
