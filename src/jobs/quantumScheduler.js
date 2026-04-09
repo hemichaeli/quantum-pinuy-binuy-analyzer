@@ -9,8 +9,9 @@ function getNotificationService() { try { return require('../services/notificati
 function getWhatsAppFollowUp() { try { return require('./whatsappFollowUp'); } catch(e) { return null; } }
 
 /**
- * QUANTUM Intelligent Scan Scheduler v2.2 - WhatsApp Automation
+ * QUANTUM Intelligent Scan Scheduler v2.3 - WhatsApp Automation
  * 
+ * v2.3: complexAddressScraper limit 729→80, onlyNew=true (prevent stuck scan)
  * v2.2: Added WhatsApp follow-up automation
  * v2.1: Fixed missing getNotificationService lazy-loader
  * v2.0: Job persistence across Railway deploys
@@ -259,7 +260,7 @@ async function resumeInterruptedJobs() {
 // CRON INIT
 // ============================================================
 function initScheduler() {
-  logger.info('[SCHEDULER] QUANTUM Scheduler v2.2 (WhatsApp automation) initializing...');
+  logger.info('[SCHEDULER] QUANTUM Scheduler v2.3 (WhatsApp automation) initializing...');
 
   // Job Monitor: every 2 min
   schedulerState.scheduledTasks.push(
@@ -383,13 +384,14 @@ function initScheduler() {
   );
 
   // Complex Address Scan: Daily 06:00 (Homeless/Yad1/Winwin - before morning report)
+  // limit=80 (was 729) + onlyNew=true — completes in ~15min, prevents stuck scan
   schedulerState.scheduledTasks.push(
     cron.schedule('0 6 * * *', async () => {
       if (!isEnrichmentDay()) return;
-      logger.info('[SCHEDULER] Daily complex address scan (Homeless/Yad1/Winwin)');
+      logger.info('[SCHEDULER] Daily complex address scan (Homeless/Yad1/Winwin) — batch 80');
       try {
         const complexScraper = require('../services/complexAddressScraper');
-        const result = await complexScraper.scanAll({ limit: 729, minIai: 0, onlyNew: false });
+        const result = await complexScraper.scanAll({ limit: 80, minIai: 0, onlyNew: true });
         logger.info(`[SCHEDULER] Complex scan done: ${result.total_inserted} new, ${result.total_updated} updated across ${result.total_complexes} complexes`);
       } catch (e) { logger.warn('[SCHEDULER] Complex address scan failed', { error: e.message }); }
     }, { timezone: 'Asia/Jerusalem' })
@@ -499,7 +501,7 @@ function initScheduler() {
 // ============================================================
 function getSchedulerStatus() {
   return {
-    version: '2.2-whatsapp-automation',
+    version: '2.3-address-scan-fix',
     activeJobs: Object.keys(schedulerState.activeJobs).length,
     activeJobDetails: schedulerState.activeJobs,
     chainQueue: schedulerState.chainQueue,
