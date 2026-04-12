@@ -17,14 +17,11 @@ const PORT = process.env.PORT || 3000;
 const VERSION = '5.2.0';
 const BUILD = '2026-03-28-multilingual-newsletter';
 
-// ── START_MODE: 'quantum' | 'minhelet' | 'both' (default: 'both') ─────────────
 const START_MODE = (process.env.START_MODE || 'both').toLowerCase();
 const isQuantum  = START_MODE === 'quantum' || START_MODE === 'both';
 const isMinhelet = START_MODE === 'minhelet' || START_MODE === 'both';
 
 logger.info(`=== START_MODE: ${START_MODE.toUpperCase()} | quantum=${isQuantum} minhelet=${isMinhelet} ===`);
-
-// ── Migrations ─────────────────────────────────────────────────────────────────
 
 async function runAutoMigrations() {
   try {
@@ -49,8 +46,6 @@ async function runOutreachMigration() {
     logger.info('[MIGRATIONS] Outreach columns applied');
   } catch (err) { logger.error('[MIGRATIONS] Outreach migration failed:', err.message); }
 }
-
-// ── Middleware ─────────────────────────────────────────────────────────────────
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -108,8 +103,6 @@ app.use((req, res, next) => {
 
 const routeLoadResults = [];
 
-// ── Route loader ───────────────────────────────────────────────────────────────
-
 function loadRoute(routePath, file) {
   try {
     const fullPath = require.resolve(`./${file}`);
@@ -122,7 +115,6 @@ function loadRoute(routePath, file) {
 }
 
 function loadAllRoutes() {
-  // ── SHARED: loaded for both QUANTUM and MINHELET ────────────────────────────
   const shared = [
     { path: '/api/vapi',               file: 'routes/vapiRoutes.js' },
     { path: '/api/inforu',             file: 'routes/inforuRoutes.js' },
@@ -138,8 +130,9 @@ function loadAllRoutes() {
     { path: '/api/comms',              file: 'routes/unifiedCommsRoutes.js' },
   ];
 
-  // ── QUANTUM only: listings, IAI/SSI, scrapers, outreach, morning report ─────
   const quantumRoutes = [
+    // ── Pilot stats patch BEFORE dashboardRoute so it can intercept /api/stats ──
+    { path: '/dashboard',              file: 'routes/pilotStatsPatch.js' },
     { path: '/dashboard',              file: 'routes/dashboardRoute.js' },
     { path: '/sandbox',                file: 'routes/sandboxRoute.js' },
     { path: '/api/projects',           file: 'routes/projects.js' },
@@ -175,7 +168,6 @@ function loadAllRoutes() {
     { path: '/api/pilot',              file: 'routes/pilotOutreachRoutes.js' },
   ];
 
-  // ── MINHELET only: resident coordination, scheduling, events, campaigns ──────
   const minheletRoutes = [
     { path: '/campaigns',              file: 'routes/campaignDashboardRoute.js' },
     { path: '/booking',                file: 'routes/bookingRoute.js' },
@@ -187,7 +179,6 @@ function loadAllRoutes() {
     { path: '/api/test/optimization',  file: 'routes/optimizationTestRoute.js' },
     { path: '/api/notifications',      file: 'routes/notificationRoutes.js' },
     { path: '/api/campaigns',          file: 'routes/campaignRoutes.js' },
-    // Event Scheduler: Admin UI MUST come before scheduler (avoids :id conflict)
     { path: '/events',                 file: 'routes/eventAdminRoute.js' },
     { path: '/events',                 file: 'routes/eventSchedulerRoutes.js' },
   ];
@@ -245,8 +236,6 @@ function loadAutoContactRoutes() {
   }
 }
 
-// ── Vapi keyterms ──────────────────────────────────────────────────────────────
-
 const VAPI_QUANTUM_KEYTERMS = [
   'פינוי-בינוי', 'ועדה מקומית', 'כינוס נכסים', 'פרמיה', 'דייר סרבן', 'יזם',
   'נסח טאבו', 'QUANTUM', 'קוונטום', 'תשואה', 'השקעה', 'תמורה', 'חוזה פינוי',
@@ -273,8 +262,6 @@ async function checkVapiKeytermsSupport() {
     }
   } catch (err) { logger.warn('[VapiKeyterms]', err.response?.data?.message || err.message); }
 }
-
-// ── Health / version / complexes / debug ───────────────────────────────────────
 
 app.get('/health', async (req, res) => {
   try {
@@ -325,8 +312,6 @@ app.get('/api/debug', async (req, res) => {
 
 app.get('/', (req, res) => res.redirect('/dashboard'));
 
-// ── Main start ─────────────────────────────────────────────────────────────────
-
 async function start() {
   logger.info(`=== QUANTUM ANALYZER ${VERSION} | mode=${START_MODE} ===`);
 
@@ -353,7 +338,6 @@ async function start() {
   logger.info(`=== ROUTES: ${loaded.length} ok / ${failed.length} failed ===`);
   failed.forEach(r => logger.error(`  FAILED: ${r.path} (${r.file}) -> ${r.error}`));
 
-  // ── QUANTUM crons ────────────────────────────────────────────────────────────
   if (isQuantum) {
     try { const gcal = require('./services/googleCalendarService'); if (gcal.isConfigured()) logger.info('[GCal] Configured'); } catch (e) {}
 
@@ -402,7 +386,6 @@ async function start() {
       logger.info('[OutreachEscalation] ACTIVE - checking every 30 min');
     } catch (e) { logger.warn('[OutreachEscalation] Failed:', e.message); }
 
-    // ── Bulk Outreach Campaign ─────────────────────────────────────────────────
     try {
       const cron = require('node-cron');
       const { runBulkOutreach } = require('./cron/bulkOutreachCron');
@@ -449,10 +432,8 @@ async function start() {
     }
   }
 
-  // ── MINHELET crons ───────────────────────────────────────────────────────────
   if (isMinhelet) {
     try { const zcal = require('./services/zohoCalendarService'); if (zcal.isConfigured()) logger.info('[ZohoCal] Configured'); } catch (e) {}
-
     try { const { startOptimizationCron } = require('./cron/optimizationCron'); startOptimizationCron(); logger.info('[ScheduleOptimization] ACTIVE'); } catch (e) {}
 
     try {
@@ -493,7 +474,6 @@ async function start() {
     } catch (e) {}
   }
 
-  // ── Quantum Scheduler (morning report cron + tier scans) ─────────────────────
   if (isQuantum) {
     try {
       const { initScheduler } = require('./jobs/quantumScheduler');
@@ -502,7 +482,6 @@ async function start() {
     } catch (e) { logger.warn('[QuantumScheduler] Failed to init:', e.message); }
   }
 
-  // ── Shared crons (both modes) ────────────────────────────────────────────────
   try { const { initializeBackupService } = require('./services/backupService'); await initializeBackupService(); } catch (e) {}
   try { const { initializeGithubBackup } = require('./services/githubBackupService'); await initializeGithubBackup(); } catch (e) {}
 
