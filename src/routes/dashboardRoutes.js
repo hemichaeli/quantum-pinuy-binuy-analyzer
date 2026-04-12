@@ -1,5 +1,10 @@
 /**
- * QUANTUM Dashboard API Routes v2.2
+ * QUANTUM Dashboard API Routes v2.3
+ *
+ * v2.3: Investor-grade ranking
+ *   - Complexes: ranked by TRUE investor premium (entry discount × theoretical premium)
+ *   - Listings: ranked by SSI + investor context, known agents flagged
+ *   - Construction-stage complexes deprioritized for investors
  */
 
 const express = require('express');
@@ -7,26 +12,78 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { enrichNewListings } = require('../services/adEnrichmentService');
 
+// Known recurring agent phones — flag but don't exclude
+const KNOWN_AGENT_PHONES = ['0508005958', '0508005971', '0508005995'];
+
+// Plan stages that indicate active construction — premium already captured
+const CONSTRUCTION_STAGES = ['under_construction', 'ביצוע', 'בביצוע'];
+
 router.get('/', (req, res) => { res.redirect('/dashboard'); });
 
-// API: All Ads
+// ============================================================
+// API: All Ads — with true investor premium per listing
+// ============================================================
 router.get('/ads/all', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT l.*,
-        c.name as complex_name, c.city as complex_city,
+      SELECT
+        l.*,
+        c.name                    AS complex_name,
+        c.city                    AS complex_city,
         c.iai_score,
-        l.asking_price as price,
-        CASE WHEN l.asking_price > 0 AND c.iai_score > 0 THEN l.asking_price * (1 + (c.iai_score * 0.003)) ELSE l.asking_price * 1.2 END as potential_price,
-        CASE WHEN l.asking_price > 0 AND c.iai_score > 0 THEN (c.iai_score * 0.3) ELSE 20 END as premium_percent
-      FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id
-      WHERE l.is_active = true ORDER BY l.created_at DESC LIMIT 1000
-    `);
-    res.json({ ads: rows.map(row => ({ ...row, premium_amount: (row.potential_price||0) - (row.price||0) })) });
+        c.accurate_price_sqm,
+        c.city_avg_price_sqm,
+        c.theoretical_premium_min,
+        c.theoretical_premium_max,
+        c.plan_stage,
+        c.developer_strength,
+        c.certainty_factor,
+        c.has_negative_news,
+        l.asking_price            AS price,
+
+        -- Entry discount: how far below market is this listing today?
+        CASE
+          WHEN l.price_per_sqm > 0 AND c.city_avg_price_sqm > 0
+          THEN ROUND(((c.city_avg_price_sqm - l.price_per_sqm)::numeric / c.city_avg_price_sqm) * 100, 1)
+          WHEN c.accurate_price_sqm > 0 AND c.city_avg_price_sqm > 0
+          THEN ROUND(((c.city_avg_price_sqm - c.accurate_price_sqm)::numeric / c.city_avg_price_sqm) * 100, 1)
+          ELSE NULL
+        END                       AS entry_discount_pct,
+
+        -- Total investor premium from entry price to post-realisation value
+        CASE
+          WHEN c.accurate_price_sqm > 0 AND c.city_avg_price_sqm > 0 AND c.theoretical_premium_min IS NOT NULL
+          THEN ROUND(
+            ((c.city_avg_price_sqm * (1 + c.theoretical_premium_min::numeric/100) - c.accurate_price_sqm)::numeric
+              / c.accurate_price_sqm) * 100, 1)
+          ELSE NULL
+        END                       AS total_investor_premium_min,
+
+        -- Is this an active-construction project? (premium mostly captured)
+        CASE WHEN c.plan_stage = ANY($1) THEN true ELSE false END AS is_construction,
+
+        -- Is this a known recurring agent?
+        CASE WHEN l.phone = ANY($2) THEN true ELSE false END AS is_known_agent
+
+      FROM listings l
+      LEFT JOIN complexes c ON l.complex_id = c.id
+      WHERE l.is_active = true
+      ORDER BY l.created_at DESC
+      LIMIT 1000
+    `, [CONSTRUCTION_STAGES, KNOWN_AGENT_PHONES]);
+
+    res.json({ ads: rows.map(row => ({
+      ...row,
+      premium_amount: row.total_investor_premium_min
+        ? Math.round((row.total_investor_premium_min / 100) * (row.price || 0))
+        : null
+    })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================================
 // API: Ads Statistics
+// ============================================================
 router.get('/ads/stats', async (req, res) => {
   try {
     const [t, n, a, p, h] = await Promise.all([
@@ -43,10 +100,84 @@ router.get('/ads/stats', async (req, res) => {
 router.get('/messages/all', (req, res) => res.json({ messages: [] }));
 router.get('/messages/stats', (req, res) => res.json({ new: 15, whatsapp: 40, email: 10, response_rate: 70 }));
 
-// API: All Complexes
+// ============================================================
+// API: All Complexes — with investor score
+// ============================================================
 router.get('/complexes/all', async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT id, name, city, existing_units, planned_units, iai_score, status, updated_at, address, developer, approval_date, signature_percent FROM complexes ORDER BY iai_score DESC NULLS LAST LIMIT 1000`);
+    const { rows } = await pool.query(`
+      SELECT
+        id, name, city, existing_units, planned_units,
+        iai_score, status, updated_at, address, developer,
+        approval_date, signature_percent,
+        accurate_price_sqm, city_avg_price_sqm,
+        theoretical_premium_min, theoretical_premium_max,
+        plan_stage, developer_strength, developer_risk_level,
+        certainty_factor, has_negative_news,
+
+        -- Entry discount: how much below market today
+        CASE
+          WHEN accurate_price_sqm > 0 AND city_avg_price_sqm > 0
+          THEN ROUND(((city_avg_price_sqm - accurate_price_sqm)::numeric / city_avg_price_sqm) * 100, 1)
+          ELSE NULL
+        END AS entry_discount_pct,
+
+        -- True total investor premium (from entry price to post-realisation)
+        CASE
+          WHEN accurate_price_sqm > 0 AND city_avg_price_sqm > 0 AND theoretical_premium_min IS NOT NULL
+          THEN ROUND(
+            ((city_avg_price_sqm * (1 + theoretical_premium_min::numeric/100) - accurate_price_sqm)::numeric
+              / accurate_price_sqm) * 100, 1)
+          ELSE NULL
+        END AS total_investor_premium_min,
+
+        CASE
+          WHEN accurate_price_sqm > 0 AND city_avg_price_sqm > 0 AND theoretical_premium_max IS NOT NULL
+          THEN ROUND(
+            ((city_avg_price_sqm * (1 + theoretical_premium_max::numeric/100) - accurate_price_sqm)::numeric
+              / accurate_price_sqm) * 100, 1)
+          ELSE NULL
+        END AS total_investor_premium_max,
+
+        -- Is entry below market? (key investor criterion)
+        CASE
+          WHEN accurate_price_sqm > 0 AND city_avg_price_sqm > 0
+            AND accurate_price_sqm < city_avg_price_sqm
+          THEN true ELSE false
+        END AS entry_below_market,
+
+        -- Construction stage flag (premium mostly captured, skip for investors)
+        CASE WHEN plan_stage = ANY($1) THEN true ELSE false END AS is_construction,
+
+        -- Composite investor score:
+        --   50% total_investor_premium + 30% certainty + 20% iai
+        --   Penalise: construction (-30), negative news (-20), weak developer (-10)
+        CASE
+          WHEN accurate_price_sqm > 0 AND city_avg_price_sqm > 0 AND theoretical_premium_min IS NOT NULL
+          THEN ROUND(
+            (
+              -- Premium component (0-100 mapped from 0-200% premium)
+              LEAST(50, ((city_avg_price_sqm * (1 + theoretical_premium_min::numeric/100) - accurate_price_sqm)::numeric
+                / accurate_price_sqm) * 25)
+              -- Certainty component
+              + COALESCE(certainty_factor::numeric, 0.5) * 30
+              -- IAI component
+              + COALESCE(iai_score, 50)::numeric * 0.2
+              -- Penalties
+              - CASE WHEN plan_stage = ANY($1) THEN 30 ELSE 0 END
+              - CASE WHEN has_negative_news THEN 20 ELSE 0 END
+              - CASE WHEN developer_strength = 'weak' THEN 10
+                     WHEN developer_strength = 'unknown' THEN 5
+                     ELSE 0 END
+            ), 1)
+          ELSE iai_score::numeric * 0.7
+        END AS investor_score
+
+      FROM complexes
+      ORDER BY investor_score DESC NULLS LAST
+      LIMIT 1000
+    `, [CONSTRUCTION_STAGES]);
+
     res.json({ complexes: rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -65,58 +196,132 @@ router.get('/complex/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// API: Get listings with full outreach filter support
-// Params: city, complex_slug, source, sort, limit, is_active,
-//         min_rooms, max_rooms, min_price, max_price, min_ssi, min_iai, message_status
+// ============================================================
+// API: Listings — investor-aware ranking
+// Sort options: iai | ssi | price | days | new | investor
+// investor = composite: SSI × 0.4 + IAI × 0.3 + entry_discount × 0.3
+// ============================================================
 router.get('/listings', async (req, res) => {
   try {
-    const { city, complex_slug, source, sort = 'iai', limit = 200, is_active, min_rooms, max_rooms, min_price, max_price, min_ssi, min_iai, message_status } = req.query;
+    const {
+      city, complex_slug, source, sort = 'investor', limit = 200,
+      is_active, min_rooms, max_rooms, min_price, max_price,
+      min_ssi, min_iai, message_status,
+      exclude_construction, exclude_agents
+    } = req.query;
 
     const params = [];
     const conditions = [is_active === 'false' ? 'l.is_active = false' : 'l.is_active = true'];
 
-    if (city) { params.push(`%${city}%`); conditions.push(`l.city ILIKE $${params.length}`); }
-    if (complex_slug) { params.push(complex_slug); conditions.push(`c.slug = $${params.length}`); }
-    if (source) { params.push(source); conditions.push(`l.source = $${params.length}`); }
-    if (min_rooms) { params.push(parseFloat(min_rooms)); conditions.push(`l.rooms >= $${params.length}`); }
-    if (max_rooms) { params.push(parseFloat(max_rooms)); conditions.push(`l.rooms <= $${params.length}`); }
-    if (min_price) { params.push(parseFloat(min_price)); conditions.push(`l.asking_price >= $${params.length}`); }
-    if (max_price) { params.push(parseFloat(max_price)); conditions.push(`l.asking_price <= $${params.length}`); }
-    if (min_ssi) { params.push(parseFloat(min_ssi)); conditions.push(`l.ssi_score >= $${params.length}`); }
-    if (min_iai) { params.push(parseFloat(min_iai)); conditions.push(`c.iai_score >= $${params.length}`); }
+    if (city)         { params.push(`%${city}%`);           conditions.push(`l.city ILIKE $${params.length}`); }
+    if (complex_slug) { params.push(complex_slug);          conditions.push(`c.slug = $${params.length}`); }
+    if (source)       { params.push(source);                conditions.push(`l.source = $${params.length}`); }
+    if (min_rooms)    { params.push(parseFloat(min_rooms)); conditions.push(`l.rooms >= $${params.length}`); }
+    if (max_rooms)    { params.push(parseFloat(max_rooms)); conditions.push(`l.rooms <= $${params.length}`); }
+    if (min_price)    { params.push(parseFloat(min_price)); conditions.push(`l.asking_price >= $${params.length}`); }
+    if (max_price)    { params.push(parseFloat(max_price)); conditions.push(`l.asking_price <= $${params.length}`); }
+    if (min_ssi)      { params.push(parseFloat(min_ssi));   conditions.push(`l.ssi_score >= $${params.length}`); }
+    if (min_iai)      { params.push(parseFloat(min_iai));   conditions.push(`c.iai_score >= $${params.length}`); }
+
+    if (exclude_construction === 'true') {
+      params.push(CONSTRUCTION_STAGES);
+      conditions.push(`(c.plan_stage IS NULL OR NOT c.plan_stage = ANY($${params.length}))`);
+    }
+    if (exclude_agents === 'true') {
+      params.push(KNOWN_AGENT_PHONES);
+      conditions.push(`(l.phone IS NULL OR NOT l.phone = ANY($${params.length}))`);
+    }
 
     if (message_status) {
-      if (message_status === 'none') conditions.push(`(l.message_status IS NULL OR l.message_status IN ('לא נשלחה','none','not_sent',''))`);
-      else if (message_status === 'sent') conditions.push(`l.message_status IN ('sent','נשלחה')`);
-      else if (message_status === 'replied') conditions.push(`l.message_status IN ('replied','ענה')`);
+      if (message_status === 'none')     conditions.push(`(l.message_status IS NULL OR l.message_status IN ('לא נשלחה','none','not_sent',''))`);
+      else if (message_status === 'sent')     conditions.push(`l.message_status IN ('sent','נשלחה')`);
+      else if (message_status === 'replied')  conditions.push(`l.message_status IN ('replied','ענה')`);
       else if (message_status === 'no_reply') conditions.push(`l.message_status IN ('no_reply','ללא מענה')`);
       else { params.push(message_status); conditions.push(`l.message_status = $${params.length}`); }
     }
 
-    const sortMap = { iai: 'c.iai_score DESC NULLS LAST', price: 'l.asking_price ASC NULLS LAST', days: 'l.days_on_market DESC NULLS LAST', ssi: 'l.ssi_score DESC NULLS LAST', new: 'l.created_at DESC' };
+    const sortMap = {
+      iai:      'c.iai_score DESC NULLS LAST',
+      price:    'l.asking_price ASC NULLS LAST',
+      days:     'l.days_on_market DESC NULLS LAST',
+      ssi:      'l.ssi_score DESC NULLS LAST',
+      new:      'l.created_at DESC',
+      investor: `
+        (
+          COALESCE(l.ssi_score, 0) * 0.4
+          + COALESCE(c.iai_score, 0)::numeric * 0.3
+          + CASE
+              WHEN c.accurate_price_sqm > 0 AND c.city_avg_price_sqm > 0
+                AND c.accurate_price_sqm < c.city_avg_price_sqm
+              THEN ((c.city_avg_price_sqm - c.accurate_price_sqm)::numeric / c.city_avg_price_sqm) * 30
+              ELSE 0
+            END
+          - CASE WHEN c.plan_stage = ANY(ARRAY['under_construction','ביצוע','בביצוע']) THEN 20 ELSE 0 END
+          - CASE WHEN c.has_negative_news THEN 10 ELSE 0 END
+          - CASE WHEN l.phone = ANY(ARRAY['0508005958','0508005971','0508005995']) THEN 5 ELSE 0 END
+        ) DESC NULLS LAST
+      `
+    };
+
     const lim = Math.min(parseInt(limit) || 200, 500);
 
     const { rows } = await pool.query(`
       SELECT
         l.id, l.address, l.title, l.city, l.rooms, l.asking_price, l.area_sqm,
-        l.ssi_score, l.message_status, l.contact_attempts,
+        l.price_per_sqm, l.ssi_score, l.message_status, l.contact_attempts,
         l.last_message_sent_at, l.last_reply_at, l.deal_status, l.source,
         l.phone, l.contact_name, l.thumbnail_url, l.created_at,
-        c.name   AS complex_name,
-        c.city   AS complex_city,
-        c.slug   AS complex_slug,
-        c.id     AS cid,
+        l.days_on_market, l.total_price_drop_percent,
+        l.has_urgent_keywords, l.urgent_keywords_found,
+        l.is_foreclosure, l.is_inheritance,
+        c.name          AS complex_name,
+        c.city          AS complex_city,
+        c.slug          AS complex_slug,
+        c.id            AS cid,
         c.iai_score,
-        c.status AS complex_status,
-        c.developer
+        c.status        AS complex_status,
+        c.developer,
+        c.developer_strength,
+        c.plan_stage,
+        c.accurate_price_sqm,
+        c.city_avg_price_sqm,
+        c.theoretical_premium_min,
+        c.certainty_factor,
+        c.has_negative_news,
+
+        -- Entry discount
+        CASE
+          WHEN c.accurate_price_sqm > 0 AND c.city_avg_price_sqm > 0
+          THEN ROUND(((c.city_avg_price_sqm - c.accurate_price_sqm)::numeric / c.city_avg_price_sqm) * 100, 1)
+          ELSE NULL
+        END AS entry_discount_pct,
+
+        -- True total investor premium
+        CASE
+          WHEN c.accurate_price_sqm > 0 AND c.city_avg_price_sqm > 0 AND c.theoretical_premium_min IS NOT NULL
+          THEN ROUND(
+            ((c.city_avg_price_sqm * (1 + c.theoretical_premium_min::numeric/100) - c.accurate_price_sqm)::numeric
+              / c.accurate_price_sqm) * 100, 1)
+          ELSE NULL
+        END AS total_investor_premium_min,
+
+        -- Flags
+        CASE WHEN c.plan_stage = ANY(ARRAY['under_construction','ביצוע','בביצוע']) THEN true ELSE false END AS is_construction,
+        CASE WHEN l.phone = ANY(ARRAY['0508005958','0508005971','0508005995']) THEN true ELSE false END AS is_known_agent
+
       FROM listings l
       LEFT JOIN complexes c ON l.complex_id = c.id
       WHERE ${conditions.join(' AND ')}
-      ORDER BY ${sortMap[sort] || sortMap.iai}
+      ORDER BY ${sortMap[sort] || sortMap.investor}
       LIMIT ${lim}
     `, params);
 
-    res.json({ listings: rows, cities: [...new Set(rows.map(r => r.city||r.complex_city).filter(Boolean))].sort(), sources: [...new Set(rows.map(r => r.source).filter(Boolean))].sort(), total: rows.length });
+    res.json({
+      listings: rows,
+      cities: [...new Set(rows.map(r => r.city||r.complex_city).filter(Boolean))].sort(),
+      sources: [...new Set(rows.map(r => r.source).filter(Boolean))].sort(),
+      total: rows.length
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -140,7 +345,7 @@ router.get('/committees', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// API: Get all complexes
+// API: Get all complexes (slim, for dropdowns)
 router.get('/complexes', async (req, res) => {
   try {
     const { rows } = await pool.query(`SELECT id, name, city, iai_score, signature_percent FROM complexes ORDER BY iai_score DESC NULLS LAST LIMIT 500`);
@@ -280,39 +485,27 @@ router.post('/ads/bulk-insert', express.json(), async (req, res) => {
       } catch(e) { console.error('[bulk-insert] Row error:', e.message); }
     }
     res.json({ success: true, inserted, updated, total: listings.length });
-    // Trigger async Perplexity+Gemini enrichment for newly inserted listings (non-blocking)
     if (newListingIds.length > 0) {
       setImmediate(async () => {
         try {
           const { enrichListing } = require('../services/adEnrichmentService');
           for (const lid of newListingIds) {
             try {
-              const { rows } = await pool.query(
-                `SELECT l.id, l.address, l.city, l.asking_price, l.area_sqm, l.rooms, l.floor,
-                        l.description_snippet, l.title, l.source, l.phone,
-                        COALESCE(c.iai_score, 0) as iai_score
-                 FROM listings l
-                 LEFT JOIN complexes c ON l.complex_id = c.id
-                 WHERE l.id = $1`, [lid]
-              );
-              if (rows[0]) {
-                await enrichListing(rows[0]);
-              }
-            } catch(e) { /* ignore per-listing errors */ }
+              const { rows } = await pool.query(`SELECT l.id, l.address, l.city, l.asking_price, l.area_sqm, l.rooms, l.floor, l.description_snippet, l.title, l.source, l.phone, COALESCE(c.iai_score, 0) as iai_score FROM listings l LEFT JOIN complexes c ON l.complex_id = c.id WHERE l.id = $1`, [lid]);
+              if (rows[0]) await enrichListing(rows[0]);
+            } catch(e) { /* ignore */ }
           }
-        } catch(e) { /* ignore enrichment errors */ }
+        } catch(e) { /* ignore */ }
       });
     }
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Diagnostic endpoint - check DB state
+// Diagnostic endpoint
 router.get('/ads/diag', async (req, res) => {
   try {
-    // Check if unique index exists
     const idx = await pool.query(`SELECT indexname FROM pg_indexes WHERE tablename='listings' AND indexname='idx_listings_source_id'`);
     const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name='listings' ORDER BY ordinal_position`);
-    // Try raw insert
     const ts = Date.now();
     let insertErr = null, insertResult = null;
     try {
