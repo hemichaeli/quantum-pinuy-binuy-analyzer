@@ -1,11 +1,8 @@
 /**
- * VAPI Call Routes v5
+ * VAPI Call Routes v6
  *
- * Key changes:
- * - bookSlot accepts slot_label (Hebrew text) and finds matching ISO internally
- * - scheduleCallback tool for when customer can't talk now
- * - Both send WhatsApp summary
- * - No ISO datetime passed by LLM → no hallucination
+ * Key fix: VAPI wraps tool arguments in message.toolCallList[0].function.arguments
+ * extractArgs() handles both flat and wrapped formats.
  */
 
 const express = require('express');
@@ -24,6 +21,33 @@ const HOUR_HE = {
   6:'שש',7:'שבע',8:'שמונה',9:'תשע',10:'עשר',11:'אחת עשרה',
   12:'שתים עשרה',13:'אחת',14:'שתיים',15:'שלוש',16:'ארבע',17:'חמש'
 };
+
+// ── Extract tool args from VAPI's wrapped OR flat body ────────────────────────
+function extractArgs(body) {
+  try {
+    // VAPI wrapped format
+    const toolCalls = body?.message?.toolCallList || body?.message?.toolCalls || [];
+    if (toolCalls.length > 0) {
+      const args = toolCalls[0]?.function?.arguments;
+      if (args) return typeof args === 'string' ? JSON.parse(args) : args;
+    }
+    // Some VAPI versions put it here
+    const args2 = body?.function?.arguments;
+    if (args2) return typeof args2 === 'string' ? JSON.parse(args2) : args2;
+  } catch (e) {}
+  // Flat format (direct args in body)
+  return body || {};
+}
+
+// ── Extract call phone from VAPI message ──────────────────────────────────────
+function extractCallPhone(body) {
+  try {
+    const num = body?.message?.call?.customer?.number
+      || body?.call?.customer?.number;
+    if (num) return num.replace(/^\+972/, '0').replace(/\D/g, '');
+  } catch (e) {}
+  return null;
+}
 
 function heTime(il) {
   const h = il.getHours(), m = il.getMinutes();
@@ -122,22 +146,16 @@ async function computeSlots() {
     if (day !== 5 && day !== 6 && hour >= 9 && hour < 18) {
       const slotEnd = new Date(cursor.getTime() + 30 * 60 * 1000);
       if (!allBusy.some(b => cursor < b.end && slotEnd > b.start)) {
-        slots.push({
-          label: heDate(cursor),
-          start: cursor.toISOString(),
-          end:   slotEnd.toISOString()
-        });
+        slots.push({ label: heDate(cursor), start: cursor.toISOString(), end: slotEnd.toISOString() });
       }
     }
     cursor.setTime(cursor.getTime() + 30 * 60 * 1000);
   }
-
   return { today: heToday(), slots };
 }
 
-// ── WA helper ─────────────────────────────────────────────────────────────────
 async function sendWA(phone, message) {
-  const normalized = phone.replace(/^\+972/, '0').replace(/\D/g, '');
+  const normalized = String(phone || '').replace(/^\+972/, '0').replace(/\D/g, '');
   if (!normalized || normalized.length < 9) return;
   const { sendWhatsAppChat } = require('../services/inforuService');
   await sendWhatsAppChat(normalized, message, {
@@ -147,7 +165,6 @@ async function sendWA(phone, message) {
   logger.info(`[VapiCall] WA → ${normalized}`);
 }
 
-// ── Calendar insert helper ────────────────────────────────────────────────────
 async function insertCalendarEvent(startDt, endDt, phone, rooms, price) {
   try {
     const cal = getCalendar();
@@ -161,7 +178,6 @@ async function insertCalendarEvent(startDt, endDt, phone, rooms, price) {
       }
     });
   } catch (e) { logger.warn('[VapiCall] GCal insert:', e.message); }
-
   try {
     await pool.query(
       `INSERT INTO quantum_events (title, event_type, event_date, notes, status, created_at)
@@ -174,21 +190,21 @@ async function insertCalendarEvent(startDt, endDt, phone, rooms, price) {
 
 // ── POST /api/vapi-call/slots ─────────────────────────────────────────────────
 router.post('/slots', async (req, res) => {
+  logger.info('[VapiCall] slots called, body keys:', Object.keys(req.body || {}));
   try {
     const { slots, today } = await computeSlots();
     const top4 = slots.slice(0, 4);
     if (top4.length === 0) {
-      return res.json({ today, slots: [], message: `אין מועד פנוי בקרוב. שאל מתי נוח לו ועבר לתיאום חזרה.` });
+      return res.json({ today, slots: [], message: `אין מועד פנוי בקרוב. עברי לתיאום חזרה.` });
     }
-    // Return ONLY labels — LLM will use label to book, not ISO
     res.json({
       today,
-      slots: top4.map((s, i) => ({ index: i + 1, label: s.label })),
-      message: `היום ${today}.\nמועדים פנויים:\n${top4.map((s, i) => `${i+1}. ${s.label}`).join('\n')}\n\nלהזמנה: השתמשי ב-bookSlot עם slot_index (1-${top4.length}).`
+      slots: top4.map((s, i) => ({ index: i + 1, label: s.label, start: s.start, end: s.end })),
+      message: `היום ${today}. מועדים פנויים:\n${top4.map((s, i) => `${i+1}. ${s.label}`).join('\n')}`
     });
   } catch (err) {
     logger.error('[VapiCall] Slots error:', err.message);
-    res.json({ message: 'שגיאה בבדיקת יומן. שאל מתי נוח לו ועבר לתיאום חזרה.' });
+    res.json({ message: 'שגיאה בבדיקת יומן. עברי לתיאום חזרה.' });
   }
 });
 
@@ -198,16 +214,25 @@ router.get('/slots', async (req, res) => {
 });
 
 // ── POST /api/vapi-call/book ──────────────────────────────────────────────────
-// Accepts slot_index (1-4) — finds the actual ISO times internally
 router.post('/book', async (req, res) => {
-  const { slot_index, phone, rooms, price } = req.body;
+  const raw  = req.body;
+  const args = extractArgs(raw);
+  const callPhone = extractCallPhone(raw);
+
+  logger.info('[VapiCall] book args:', JSON.stringify(args));
+
+  const slot_index = parseInt(args.slot_index || args.slotIndex || 1);
+  const phone      = args.phone || callPhone || '';
+  const rooms      = args.rooms || '';
+  const price      = args.price || '';
+
   try {
     const { slots } = await computeSlots();
-    const idx = parseInt(slot_index) - 1;
-    const slot = slots[idx];
+    const slot = slots[slot_index - 1];
 
     if (!slot) {
-      return res.json({ success: false, message: 'הסלוט לא נמצא. בקש מהלקוח לבחור מהרשימה שוב.' });
+      logger.warn(`[VapiCall] slot ${slot_index} not found in ${slots.length} slots`);
+      return res.json({ success: false, message: `לא מצאתי את המועד. הציגי שוב את הרשימה ובקשי בחירה.` });
     }
 
     const startDt = new Date(slot.start);
@@ -227,7 +252,7 @@ router.post('/book', async (req, res) => {
       } catch (e) { logger.warn('[VapiCall] WA book:', e.message); }
     }
 
-    logger.info(`[VapiCall] Booked slot ${slot_index}: ${label} | ${phone}`);
+    logger.info(`[VapiCall] Booked: ${label} | ${phone}`);
     res.json({ success: true, label, message: `הפגישה נקבעה ל${label}. נשלחה הודעת אישור בוואטסאפ.` });
   } catch (err) {
     logger.error('[VapiCall] Book error:', err.message);
@@ -236,18 +261,25 @@ router.post('/book', async (req, res) => {
 });
 
 // ── POST /api/vapi-call/schedule-callback ─────────────────────────────────────
-// When customer can't talk now — record callback time + send WA
 router.post('/schedule-callback', async (req, res) => {
-  const { phone, callback_time, callback_day } = req.body;
-  try {
-    const timeDesc = callback_time || callback_day || 'בהקדם';
+  const raw  = req.body;
+  const args = extractArgs(raw);
+  const callPhone = extractCallPhone(raw);
 
-    // Record in DB
+  logger.info('[VapiCall] schedule-callback args:', JSON.stringify(args));
+
+  const phone         = args.phone || callPhone || '';
+  const callback_time = args.callback_time || args.callbackTime || '';
+  const callback_day  = args.callback_day  || args.callbackDay  || '';
+
+  try {
+    const timeDesc = [callback_day, callback_time].filter(Boolean).join(' ') || 'בהקדם';
+
     try {
       await pool.query(
         `INSERT INTO quantum_events (title, event_type, event_date, notes, status, created_at)
-         VALUES ($1, 'חזרה_אל_לקוח', NOW(), $2, 'confirmed', NOW())`,
-        [`חזרה ללקוח ${phone || ''}`, `מועד: ${timeDesc} | מקור: VAPI הילה`]
+         VALUES ($1, 'חזרה_ללקוח', NOW(), $2, 'confirmed', NOW())`,
+        [`חזרה ללקוח ${phone}`, `מועד: ${timeDesc} | מקור: VAPI הילה`]
       );
     } catch (e) {}
 
@@ -255,7 +287,7 @@ router.post('/schedule-callback', async (req, res) => {
       try {
         await sendWA(phone,
           `שלום רב,\n` +
-          `נשמח לחזור אליך ${timeDesc}.\n` +
+          `בהמשך לשיחתנו נרשמנו לחזור אליך ${timeDesc}.\n` +
           `אם תרצה לדבר לפני כן — אנחנו זמינים.\n\n` +
           `המשך יום נעים,\n` +
           `הילה | קוונטום נדל"ן`
@@ -263,11 +295,11 @@ router.post('/schedule-callback', async (req, res) => {
       } catch (e) { logger.warn('[VapiCall] WA callback:', e.message); }
     }
 
-    logger.info(`[VapiCall] Callback scheduled: ${timeDesc} | ${phone}`);
+    logger.info(`[VapiCall] Callback: ${timeDesc} | ${phone}`);
     res.json({ success: true, message: `נרשמנו לחזור אליך ${timeDesc}. נשלחה הודעה בוואטסאפ.` });
   } catch (err) {
     logger.error('[VapiCall] Callback error:', err.message);
-    res.json({ success: false, message: 'שגיאה ברישום. נחזור אליך.' });
+    res.json({ success: false, message: 'שגיאה. נחזור אליך.' });
   }
 });
 
