@@ -71,6 +71,7 @@ const limiter = rateLimit({
     req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' ||
     req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') ||
     req.path.startsWith('/api/vapi/book-slot') ||
+    req.path.startsWith('/api/vapi-call/') ||
     req.path.startsWith('/api/scheduling/') || req.path.startsWith('/api/backup/') ||
     req.path.startsWith('/api/notifications/') || req.path.startsWith('/api/search/') ||
     req.path.startsWith('/api/docs') || req.path.startsWith('/api/auto-contact') ||
@@ -131,7 +132,6 @@ function loadAllRoutes() {
   ];
 
   const quantumRoutes = [
-    // ── Pilot stats patch BEFORE dashboardRoute so it can intercept /api/stats ──
     { path: '/dashboard',              file: 'routes/pilotStatsPatch.js' },
     { path: '/dashboard',              file: 'routes/dashboardRoute.js' },
     { path: '/sandbox',                file: 'routes/sandboxRoute.js' },
@@ -166,6 +166,7 @@ function loadAllRoutes() {
     { path: '/api/settings',           file: 'routes/settingsRoutes.js' },
     { path: '/api/templates',          file: 'routes/templateRoutes.js' },
     { path: '/api/pilot',              file: 'routes/pilotOutreachRoutes.js' },
+    { path: '/api/vapi-call',          file: 'routes/vapiCallRoutes.js' },
   ];
 
   const minheletRoutes = [
