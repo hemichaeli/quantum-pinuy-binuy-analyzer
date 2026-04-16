@@ -1,27 +1,23 @@
 /**
- * VAPI Call Routes v7
+ * VAPI Call Routes v8
  *
- * Single unified tool endpoint: POST /api/vapi-call/tool
- * All 3 tools point to the same URL — routes by function name.
- * This eliminates the "No result returned" mystery for /book and /schedule-callback.
+ * Simplified flow:
+ * 1. Ask if property is brokered
+ * 2. YES → thank + hang up
+ * 3. NO → scheduleCallback → email to hemi + add lead to DB + alert
  */
 
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { logger } = require('../services/logger');
+const axios = require('axios');
 
 const HEMI_CALENDAR_ID = process.env.HEMI_CALENDAR_ID || 'primary';
 const TZ = 'Asia/Jerusalem';
-
-const DAYS   = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
-const MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני',
-                'יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
-
-const HOUR_HE = {
-  6:'שש',7:'שבע',8:'שמונה',9:'תשע',10:'עשר',11:'אחת עשרה',
-  12:'שתים עשרה',13:'אחת',14:'שתיים',15:'שלוש',16:'ארבע',17:'חמש'
-};
+const HEMI_EMAIL = process.env.PERSONAL_EMAIL || 'hemi.michaeli@gmail.com';
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const EMAIL_FROM = process.env.EMAIL_FROM || 'QUANTUM Real Estate <alerts@u-r-quantum.com>';
 
 // ── Extract args from VAPI body (any format) ──────────────────────────────────
 function extractArgs(body) {
@@ -55,268 +51,113 @@ function extractCallPhone(body) {
   return null;
 }
 
-// ── Time helpers ──────────────────────────────────────────────────────────────
-function heTime(il) {
-  const h = il.getHours(), m = il.getMinutes();
-  const base   = HOUR_HE[h] || `${h}`;
-  const period = h < 12 ? 'בבוקר' : h < 17 ? 'אחר הצהריים' : 'בערב';
-  if (m === 0)  return `${base} ${period}`;
-  if (m === 30) return `${base} וחצי ${period}`;
-  return `${base} ו-${m} ${period}`;
-}
-
-function getCalendar() {
-  const { google } = require('googleapis');
-  const auth = new google.auth.GoogleAuth({
-    credentials: {
-      client_email: process.env.GOOGLE_SA_EMAIL,
-      private_key: (process.env.GOOGLE_SA_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-    },
-    scopes: ['https://www.googleapis.com/auth/calendar'],
-  });
-  return google.calendar({ version: 'v3', auth });
-}
-
-function toIsrael(dt) {
-  const d = new Date(dt);
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit',
-    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: false
-  }).formatToParts(d);
-  const get = (t) => parts.find(p => p.type === t)?.value || '0';
-  return new Date(
-    parseInt(get('year')), parseInt(get('month'))-1, parseInt(get('day')),
-    parseInt(get('hour')), parseInt(get('minute')), parseInt(get('second'))
-  );
-}
-
-function heDate(dt) {
-  const il = toIsrael(dt);
-  return `יום ${DAYS[il.getDay()]}, ${il.getDate()} ב${MONTHS[il.getMonth()]}, ב${heTime(il)}`;
-}
-
-function heToday() {
-  const il = toIsrael(new Date());
-  return `יום ${DAYS[il.getDay()]}, ${il.getDate()} ב${MONTHS[il.getMonth()]} ${il.getFullYear()}`;
-}
-
-// ── DB busy periods ───────────────────────────────────────────────────────────
-async function getQuantumBusy(from, to) {
-  const busy = [];
+// ── Send email via Resend ─────────────────────────────────────────────────────
+async function sendEmail(subject, html) {
+  if (!RESEND_API_KEY) return { sent: false, error: 'no key' };
   try {
-    const { rows } = await pool.query(
-      `SELECT event_date as start, event_date + INTERVAL '30 minutes' as end
-       FROM quantum_events WHERE event_date >= $1 AND event_date < $2
-         AND (status IS NULL OR status NOT IN ('cancelled','ביטול'))`,
-      [from.toISOString(), to.toISOString()]
-    );
-    busy.push(...rows.map(r => ({ start: new Date(r.start), end: new Date(r.end) })));
-  } catch (e) {}
-  try {
-    const { rows } = await pool.query(
-      `SELECT slot_datetime as start,
-              slot_datetime + (COALESCE(duration_minutes,30) * INTERVAL '1 minute') as end
-       FROM meeting_slots WHERE slot_datetime >= $1 AND slot_datetime < $2
-         AND status IN ('confirmed','reserved')`,
-      [from.toISOString(), to.toISOString()]
-    );
-    busy.push(...rows.map(r => ({ start: new Date(r.start), end: new Date(r.end) })));
-  } catch (e) {}
-  return busy;
-}
-
-async function computeSlots() {
-  const now = new Date();
-  const end = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000);
-
-  let gcalBusy = [];
-  try {
-    const cal = getCalendar();
-    const res = await cal.freebusy.query({
-      requestBody: { timeMin: now.toISOString(), timeMax: end.toISOString(), timeZone: TZ, items: [{ id: HEMI_CALENDAR_ID }] }
+    const res = await axios.post('https://api.resend.com/emails', {
+      from: EMAIL_FROM,
+      to: [HEMI_EMAIL],
+      subject,
+      html
+    }, {
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      timeout: 10000
     });
-    gcalBusy = (res.data.calendars?.[HEMI_CALENDAR_ID]?.busy || [])
-      .map(b => ({ start: new Date(b.start), end: new Date(b.end) }));
-  } catch (e) { logger.warn('[VapiCall] GCal freebusy:', e.message); }
-
-  const dbBusy = await getQuantumBusy(now, end);
-  const allBusy = [...gcalBusy, ...dbBusy];
-
-  const slots = [];
-  const cursor = new Date(now);
-  const mins = cursor.getMinutes();
-  if (mins < 30) { cursor.setMinutes(30, 0, 0); }
-  else { cursor.setHours(cursor.getHours() + 1, 0, 0, 0); }
-
-  while (slots.length < 6 && cursor < end) {
-    const il = toIsrael(cursor);
-    const hour = il.getHours(), day = il.getDay();
-    if (day !== 5 && day !== 6 && hour >= 9 && hour < 18) {
-      const slotEnd = new Date(cursor.getTime() + 30 * 60 * 1000);
-      if (!allBusy.some(b => cursor < b.end && slotEnd > b.start)) {
-        slots.push({ label: heDate(cursor), start: cursor.toISOString(), end: slotEnd.toISOString() });
-      }
-    }
-    cursor.setTime(cursor.getTime() + 30 * 60 * 1000);
+    return { sent: !!res.data?.id, id: res.data?.id };
+  } catch (e) {
+    logger.warn('[VapiCall] Email error:', e.message);
+    return { sent: false, error: e.message };
   }
-  return { today: heToday(), slots };
 }
 
-async function sendWA(phone, message) {
-  const normalized = String(phone || '').replace(/^\+972/, '0').replace(/\D/g, '');
-  if (!normalized || normalized.length < 9) return;
-  const { sendWhatsAppChat } = require('../services/inforuService');
-  await sendWhatsAppChat(normalized, message, {
-    customerMessageId: `vapi_${Date.now()}`,
-    customerParameter: 'QUANTUM_PILOT'
-  });
-  logger.info(`[VapiCall] WA → ${normalized}`);
-}
-
-// ── Tool handlers ─────────────────────────────────────────────────────────────
-async function handleGetAvailableSlots(args, callPhone) {
-  const { slots, today } = await computeSlots();
-  const top4 = slots.slice(0, 4);
-  if (top4.length === 0) {
-    return { today, slots: [], message: `אין מועד פנוי בקרוב. עברי לתיאום חזרה.` };
-  }
-  return {
-    today,
-    slots: top4.map((s, i) => ({ index: i + 1, label: s.label, start: s.start, end: s.end })),
-    message: `היום ${today}. מועדים פנויים:\n${top4.map((s, i) => `${i+1}. ${s.label}`).join('\n')}`
-  };
-}
-
-async function handleBookSlot(args, callPhone) {
-  const slot_index = parseInt(args.slot_index || args.slotIndex || 1);
-  const phone      = args.phone || callPhone || '';
-  const rooms      = args.rooms || '';
-  const price      = args.price || '';
-
-  const { slots } = await computeSlots();
-  const slot = slots[slot_index - 1];
-
-  if (!slot) {
-    return { success: false, message: `לא מצאתי את המועד. הצגי שוב את הרשימה ובקשי בחירה.` };
-  }
-
-  const startDt = new Date(slot.start);
-  const endDt   = new Date(slot.end);
-  const label   = slot.label;
-
-  // Calendar
+// ── Add lead to DB + send alert ───────────────────────────────────────────────
+async function addLead(phone, source = 'vapi_hila_call') {
   try {
-    const cal = getCalendar();
-    await cal.events.insert({
-      calendarId: HEMI_CALENDAR_ID,
-      requestBody: {
-        summary: `שיחת מנהל — ${phone || 'לא ידוע'}`,
-        description: ['מקור: VAPI הילה', rooms ? `${rooms} חדרים` : '', price ? `₪${price}` : ''].filter(Boolean).join('\n'),
-        start: { dateTime: startDt.toISOString(), timeZone: TZ },
-        end:   { dateTime: endDt.toISOString(),   timeZone: TZ }
-      }
-    });
-  } catch (e) { logger.warn('[VapiCall] GCal insert:', e.message); }
-
-  // DB
-  try {
-    await pool.query(
-      `INSERT INTO quantum_events (title, event_type, event_date, notes, status, created_at)
-       VALUES ($1, 'שיחת_מנהל', $2, $3, 'confirmed', NOW())`,
-      [`שיחת מנהל — ${phone}`, startDt.toISOString(),
-       [rooms ? `${rooms} חדרים` : '', price ? `₪${price}` : '', 'מקור: VAPI הילה'].filter(Boolean).join(' | ')]
-    );
-  } catch (e) {}
-
-  // WA
-  if (phone) {
-    try {
-      await sendWA(phone,
-        `שלום רב,\n` +
-        `בהמשך לשיחתנו קבענו שיחת מנהל ב${label}.\n\n` +
-        `המשך יום נעים,\n` +
-        `הילה | קוונטום נדל"ן`
-      );
-    } catch (e) {}
+    await pool.query(`
+      INSERT INTO listings (phone, source, source_listing_id, is_active, message_status, created_at, updated_at)
+      VALUES ($1, $2, $3, true, 'new_lead', NOW(), NOW())
+      ON CONFLICT DO NOTHING
+    `, [phone, source, `${source}_${phone}_${Date.now()}`]);
+    logger.info(`[VapiCall] Lead added: ${phone}`);
+  } catch (e) {
+    logger.warn('[VapiCall] addLead error:', e.message);
   }
-
-  logger.info(`[VapiCall] Booked: ${label} | ${phone}`);
-  return { success: true, label, message: `הפגישה נקבעה ל${label}. נשלחה הודעת אישור בוואטסאפ.` };
 }
 
+// ── Handle scheduleCallback (now: non-brokered seller) ───────────────────────
 async function handleScheduleCallback(args, callPhone) {
-  const phone         = args.phone || callPhone || '';
-  const callback_time = args.callback_time || args.callbackTime || '';
-  const callback_day  = args.callback_day  || args.callbackDay  || '';
-  const timeDesc      = [callback_day, callback_time].filter(Boolean).join(' ') || 'בהקדם';
+  const phone = args.phone || callPhone || '';
+  const normalizedPhone = phone.replace(/^\+972/, '0').replace(/\D/g, '');
+  const callbackDay = args.callback_day || args.callbackDay || 'בקרוב';
+  const callbackTime = args.callback_time || args.callbackTime || '';
+  const timeDesc = [callbackDay, callbackTime].filter(Boolean).join(' ');
 
+  logger.info(`[VapiCall] Non-brokered lead: ${normalizedPhone} | callback: ${timeDesc}`);
+
+  // 1. Add to DB as lead
+  await addLead(normalizedPhone);
+
+  // 2. Record in quantum_events
   try {
     await pool.query(
       `INSERT INTO quantum_events (title, event_type, event_date, notes, status, created_at)
-       VALUES ($1, 'חזרה_ללקוח', NOW(), $2, 'confirmed', NOW())`,
-      [`חזרה ללקוח ${phone}`, `מועד: ${timeDesc} | מקור: VAPI הילה`]
+       VALUES ($1, 'ליד_חדש', NOW(), $2, 'confirmed', NOW())`,
+      [`ליד חדש — ${normalizedPhone}`, `מקור: שיחת הילה | לא מתווך | חזרה: ${timeDesc}`]
     );
   } catch (e) {}
 
-  if (phone) {
-    try {
-      await sendWA(phone,
-        `שלום רב,\n` +
-        `בהמשך לשיחתנו נרשמנו לחזור אליך ${timeDesc}.\n` +
-        `אם תרצה לדבר לפני כן — אנחנו זמינים.\n\n` +
-        `המשך יום נעים,\n` +
-        `הילה | קוונטום נדל"ן`
-      );
-    } catch (e) {}
-  }
+  // 3. Send email alert to hemi
+  const now = new Date().toLocaleString('he-IL', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  const emailHtml = `
+    <div dir="rtl" style="font-family:Arial,sans-serif; max-width:600px; margin:0 auto; background:#1e2128; color:#e8eaf0; padding:24px; border-radius:10px;">
+      <div style="font-size:11px; color:#4ecdc4; letter-spacing:3px; text-transform:uppercase; margin-bottom:8px;">QUANTUM ANALYZER</div>
+      <h2 style="color:#4ecdc4; margin:0 0 16px;">🔔 ליד חדש — לא מתווך</h2>
+      <table style="width:100%; border-collapse:collapse;">
+        <tr><td style="padding:8px; color:#9aa0b0;">טלפון:</td><td style="padding:8px; color:#e8eaf0; font-weight:700;">${normalizedPhone}</td></tr>
+        <tr><td style="padding:8px; color:#9aa0b0;">זמן השיחה:</td><td style="padding:8px; color:#e8eaf0;">${now}</td></tr>
+        <tr><td style="padding:8px; color:#9aa0b0;">מקור:</td><td style="padding:8px; color:#e8eaf0;">שיחת הילה VAPI</td></tr>
+        <tr><td style="padding:8px; color:#9aa0b0;">סטטוס:</td><td style="padding:8px; color:#4ade80; font-weight:700;">לא מתווך — מוכן לשיחה</td></tr>
+      </table>
+      <div style="margin-top:20px; padding:12px; background:#2a2d35; border-radius:8px; color:#9aa0b0; font-size:13px;">
+        הלקוח ענה שהנכס אינו מטופל על ידי מתווך.<br>
+        המנהל הובטח ליצור קשר בקרוב.
+      </div>
+    </div>
+  `;
+  const emailResult = await sendEmail(`🔔 [QUANTUM] ליד חדש — ${normalizedPhone}`, emailHtml);
+  logger.info(`[VapiCall] Email sent: ${JSON.stringify(emailResult)}`);
 
-  logger.info(`[VapiCall] Callback: ${timeDesc} | ${phone}`);
-  return { success: true, message: `נרשמנו לחזור אליך ${timeDesc}. נשלחה הודעה בוואטסאפ.` };
+  return {
+    success: true,
+    message: 'הליד נרשם. המנהל ייצור קשר בקרוב.'
+  };
 }
 
 // ── Unified tool endpoint ─────────────────────────────────────────────────────
 router.post('/tool', async (req, res) => {
-  const body      = req.body;
-  const fnName    = extractFunctionName(body);
-  const args      = extractArgs(body);
+  const body = req.body;
+  const fnName = extractFunctionName(body);
+  const args = extractArgs(body);
   const callPhone = extractCallPhone(body);
 
-  logger.info(`[VapiCall] tool called: ${fnName} | args: ${JSON.stringify(args)}`);
+  logger.info(`[VapiCall] tool: ${fnName} | phone: ${callPhone} | args: ${JSON.stringify(args)}`);
 
   try {
     let result;
-    if (!fnName || fnName === 'getAvailableSlots') {
-      result = await handleGetAvailableSlots(args, callPhone);
-    } else if (fnName === 'bookSlot') {
-      result = await handleBookSlot(args, callPhone);
-    } else if (fnName === 'scheduleCallback') {
+    if (fnName === 'scheduleCallback' || !fnName) {
       result = await handleScheduleCallback(args, callPhone);
     } else {
-      result = { error: `Unknown function: ${fnName}` };
+      result = { error: `Unknown: ${fnName}` };
     }
     res.json(result);
   } catch (err) {
-    logger.error(`[VapiCall] tool error (${fnName}):`, err.message);
-    res.json({ error: err.message, message: 'שגיאה פנימית. נסי שוב.' });
+    logger.error(`[VapiCall] tool error:`, err.message);
+    res.json({ error: err.message });
   }
 });
 
-// ── Keep individual routes for backwards compat + manual testing ──────────────
-router.get('/slots', async (req, res) => {
-  try { res.json({ success: true, ...(await computeSlots()) }); }
-  catch (err) { res.status(500).json({ success: false, error: err.message }); }
-});
-
-router.post('/slots', async (req, res) => {
-  try { res.json(await handleGetAvailableSlots({}, null)); }
-  catch (err) { res.json({ error: err.message }); }
-});
-
-router.post('/book', async (req, res) => {
-  try { res.json(await handleBookSlot(req.body, null)); }
-  catch (err) { res.json({ error: err.message }); }
-});
-
+// ── Individual routes (kept for backwards compat) ─────────────────────────────
 router.post('/schedule-callback', async (req, res) => {
   try { res.json(await handleScheduleCallback(req.body, null)); }
   catch (err) { res.json({ error: err.message }); }
@@ -326,5 +167,10 @@ router.post('/webhook', (req, res) => {
   res.json({ received: true });
   try { logger.info(`[VapiCall] Webhook: ${req.body?.message?.type}`); } catch (e) {}
 });
+
+// ── Keep slots/book for future use ────────────────────────────────────────────
+router.get('/slots', (req, res) => res.json({ slots: [], message: 'Scheduling temporarily disabled' }));
+router.post('/slots', (req, res) => res.json({ slots: [], message: 'Scheduling temporarily disabled' }));
+router.post('/book', (req, res) => res.json({ success: false, message: 'Scheduling temporarily disabled' }));
 
 module.exports = router;
