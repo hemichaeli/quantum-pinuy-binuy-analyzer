@@ -421,7 +421,9 @@ async function sendByFilter(filters = {}, templateId = 'yad2_seller', extraVars 
   if (filters.min_rooms) { conditions.push(`l.rooms >= $${paramIdx++}`); params.push(filters.min_rooms); }
   if (filters.max_rooms) { conditions.push(`l.rooms <= $${paramIdx++}`); params.push(filters.max_rooms); }
   if (filters.min_area) { conditions.push(`l.area_sqm >= $${paramIdx++}`); params.push(filters.min_area); }
+  if (filters.max_area) { conditions.push(`l.area_sqm <= $${paramIdx++}`); params.push(filters.max_area); }
   if (filters.complex_id) { conditions.push(`l.complex_id = $${paramIdx++}`); params.push(filters.complex_id); }
+  if (filters.complex_ids && filters.complex_ids.length) { conditions.push(`l.complex_id = ANY($${paramIdx++})`); params.push(filters.complex_ids); }
   if (filters.min_ssi) { conditions.push(`l.ssi_score >= $${paramIdx++}`); params.push(filters.min_ssi); }
   if (filters.min_iai) { conditions.push(`c.iai_score >= $${paramIdx++}`); params.push(filters.min_iai); }
   
