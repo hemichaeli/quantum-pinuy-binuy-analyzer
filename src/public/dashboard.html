@@ -3052,7 +3052,7 @@
             const name = document.getElementById('qr-campaign-name').value.trim();
             if (!name) { alert('נא להזין שם קמפיין'); return; }
             try {
-                const data = await fetchJSON('/api/campaign/generate-link', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ campaign_name: name }) });
+                const data = await fetchJSON('/api/campaigns/generate-link', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ campaign_name: name }) });
                 if (!data.success) throw new Error(data.error);
                 _qrLink = data.link;
                 document.getElementById('qr-link-text').textContent = data.link;

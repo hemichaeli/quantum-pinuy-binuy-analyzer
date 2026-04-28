@@ -159,6 +159,16 @@ router.get('/', async (req, res) => {
   }
 });
 
+// POST /api/campaigns/generate-link — build UTM URL for a campaign name
+router.post('/generate-link', (req, res) => {
+  const name = (req.body?.campaign_name || '').toString().trim();
+  if (!name) return res.status(400).json({ success: false, error: 'campaign_name required' });
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'campaign';
+  const base = process.env.PUBLIC_SITE_URL || 'https://u-r-quantum.com';
+  const url  = `${base}/?utm_source=quantum&utm_medium=campaign&utm_campaign=${encodeURIComponent(slug)}`;
+  res.json({ success: true, link: url, url, slug, utm: { source: 'quantum', medium: 'campaign', campaign: slug } });
+});
+
 // GET /api/campaigns/scripts/preview
 router.get('/scripts/preview', (req, res) => {
   const { name, city, propertyType } = req.query;

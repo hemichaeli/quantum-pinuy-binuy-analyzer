@@ -808,7 +808,6 @@ function generateDashboardHTML(stats) {
                 </select>
                 <input id="sched-search" type="text" placeholder="🔍 חיפוש שם / טלפון..." oninput="filterSchedulingTable()" class="filter-input" style="min-width:190px;width:auto;">
                 <button class="btn" data-onclick="loadScheduling()" style="margin-right:auto;">🔄 רענן</button>
-                <a href="/api/scheduling/campaign" target="_blank" class="btn btn-secondary">📊 דוח קמפיין</a>
             </div>
             <div id="sched-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:16px;"></div>
             <div id="sched-list" class="data-list"><div class="loading">טוען נתוני תיאומים...</div></div>
