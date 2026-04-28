@@ -111,13 +111,16 @@ async function saveOutgoingMessage(phone, message, listingId) {
 async function processYad2() {
     let contacted = 0, failed = 0, skipped = 0;
     try {
+        // Day 8.5 fix: removed the 2-hour window. Scrapers run once daily so the
+        // window meant only the morning's listings were ever contacted, leaving
+        // 1,000+ older listings stuck forever. Now we work the full backlog.
         const result = await pool.query(`
             SELECT id, phone, address, city, contact_name
             FROM listings
             WHERE contact_status IS NULL
               AND phone IS NOT NULL AND phone != ''
               AND is_active = TRUE
-              AND created_at > NOW() - INTERVAL '2 hours'
+            ORDER BY created_at DESC
             LIMIT 20
         `);
 
@@ -180,12 +183,13 @@ async function processFacebook() {
         );
         if (!tableCheck.rows.length) return { contacted: 0, failed: 0, skipped: 0 };
 
+        // Day 8.5 fix: removed the 2-hour window (same as Yad2 path).
         const result = await pool.query(`
             SELECT id, phone, address, city, contact_name
             FROM facebook_ads
             WHERE contact_status IS NULL
               AND phone IS NOT NULL AND phone != ''
-              AND created_at > NOW() - INTERVAL '2 hours'
+            ORDER BY created_at DESC
             LIMIT 20
         `).catch(() => ({ rows: [] }));
 
