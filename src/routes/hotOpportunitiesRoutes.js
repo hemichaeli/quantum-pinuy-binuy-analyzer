@@ -64,7 +64,7 @@ router.get('/lead-matches', async (req, res) => {
     const minScore = parseFloat(req.query.min_score) || 0;
     const { rows } = await pool.query(`
       SELECT
-        m.id, m.lead_id, m.listing_id, m.score, m.created_at,
+        m.id, m.lead_id, m.listing_id, m.match_score, m.created_at,
         m.outcome, m.outcome_at, m.outcome_notes,
         wl.name AS lead_name, wl.email AS lead_email, wl.phone AS lead_phone,
         l.address, l.city, l.asking_price, l.url AS listing_url,
@@ -73,7 +73,7 @@ router.get('/lead-matches', async (req, res) => {
       LEFT JOIN website_leads wl ON wl.id = m.lead_id
       LEFT JOIN listings l ON l.id = m.listing_id
       LEFT JOIN complexes c ON c.id = l.complex_id
-      WHERE m.score >= $2
+      WHERE m.match_score >= $2
       ORDER BY m.created_at DESC
       LIMIT $1
     `, [limit, minScore]);
