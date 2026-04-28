@@ -29,7 +29,7 @@ async function runMatchAlerts() {
   try {
     const { rows: matches } = await pool.query(`
       SELECT
-        m.id, m.lead_id, m.listing_id, m.score, m.created_at,
+        m.id, m.lead_id, m.listing_id, m.match_score, m.created_at,
         wl.name AS lead_name, wl.email AS lead_email, wl.phone AS lead_phone,
         l.address, l.city, l.asking_price, l.url AS listing_url,
         c.name AS complex_name, c.iai_score, c.enhanced_ssi_score
@@ -37,10 +37,10 @@ async function runMatchAlerts() {
       LEFT JOIN website_leads wl ON wl.id = m.lead_id
       LEFT JOIN listings l ON l.id = m.listing_id
       LEFT JOIN complexes c ON c.id = l.complex_id
-      WHERE m.score >= $1
+      WHERE m.match_score >= $1
         AND m.created_at > NOW() - INTERVAL '24 hours'
         AND (m.outcome_notes IS NULL OR m.outcome_notes NOT LIKE '%alerted=1%')
-      ORDER BY m.score DESC
+      ORDER BY m.match_score DESC
       LIMIT $2
     `, [MIN_SCORE, MAX_PER_RUN]);
 
@@ -68,7 +68,7 @@ async function runMatchAlerts() {
 
     for (const m of matches) {
       const msg = [
-        `התאמה חמה (${Math.round(parseFloat(m.score))})`,
+        `התאמה חמה (${Math.round(parseFloat(m.match_score))})`,
         '',
         `ליד: ${m.lead_name || '-'} | ${m.lead_phone || m.lead_email || '-'}`,
         `דירה: ${m.address || '-'}, ${m.city || '-'} | ${fmtIls(m.asking_price)}`,
