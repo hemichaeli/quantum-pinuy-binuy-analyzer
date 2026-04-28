@@ -145,9 +145,9 @@ function loadAllRoutes() {
     // 2026-04-28 (Day 2): chartRoutes for /api/chart/* (4 endpoints) used by dashboard graphs.
     { path: '/api/chart',              file: 'routes/chartRoutes.js' },
     // 2026-04-28 (Day 4-5): Match Engine ingest + match endpoints.
-    // Mounted at /api so paths land at /api/leads-ingest, /api/leads/:id/match,
-    // /api/leads/:id/matches, /api/lead-matches/:id.
     { path: '/api',                    file: 'routes/leadIngestRoutes.js' },
+    // 2026-04-28 (Day 6): Map endpoints for the standalone /map page.
+    { path: '/api/map',                file: 'routes/mapRoutes.js' },
     { path: '/api/chat',               file: 'routes/chatRoutes.js' },
     { path: '/api/intelligence',       file: 'routes/intelligenceRoutes.js' },
     { path: '/api/facebook',           file: 'routes/facebookRoute.js' },
@@ -349,6 +349,11 @@ app.get('/api/_routes', (req, res) => {
       total: routeLoadResults.length
     }
   });
+});
+
+// 2026-04-28 (Day 6): standalone Leaflet map page. Reads /api/map/data.
+app.get('/map', (req, res) => {
+  res.sendFile(path.join(__dirname, 'views', 'quantum-map.html'));
 });
 
 app.get('/', (req, res) => res.redirect('/dashboard'));
