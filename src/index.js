@@ -380,6 +380,8 @@ async function start() {
   await runMigrationFile('Hot opp alerts (021)', path.join(__dirname, 'db', 'migrations', '021_hot_opportunity_alerts.sql'));
   // 2026-04-29 (Day 8.5): Opt-out tracking + match outcomes
   await runMigrationFile('Optouts + outcomes (022)', path.join(__dirname, 'db', 'migrations', '022_optouts_and_match_outcomes.sql'));
+  // 2026-04-29 (Day 8.5): Unique index on listings(source, address, city) for yad2Scraper ON CONFLICT
+  await runMigrationFile('Listings unique idx (023)', path.join(__dirname, 'db', 'migrations', '023_listings_unique_index.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();

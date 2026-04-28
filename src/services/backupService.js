@@ -81,16 +81,28 @@ async function createDatabaseBackup(filename) {
     try {
         logger.info(`💾 Starting database backup: ${filename}`);
         
-        // Use pg_dump to create compressed backup
-        const dumpCommand = `pg_dump "${DATABASE_URL}" | gzip > "${tempPath}"`;
-        
+        // Day 8.5 fix: use pipefail so pg_dump failures aren't swallowed by gzip.
+        // Previously, when pg_dump failed (e.g., binary missing or version mismatch)
+        // gzip happily produced an empty .gz file that "succeeded" — we'd write
+        // an empty backup and only catch it later in verifyBackup. With pipefail,
+        // any pg_dump failure exits the pipe with non-zero and execSync throws.
+        const dumpCommand = `bash -c 'set -o pipefail; pg_dump "${DATABASE_URL}" --no-owner --no-acl | gzip > "${tempPath}"'`;
+
         const startTime = Date.now();
-        execSync(dumpCommand, { 
+        execSync(dumpCommand, {
             stdio: ['ignore', 'pipe', 'pipe'],
             timeout: 300000, // 5 minutes timeout
             maxBuffer: 100 * 1024 * 1024 // 100MB buffer
         });
         const duration = Date.now() - startTime;
+
+        // Belt & suspenders: reject obviously-empty backups before they're moved
+        // into the backups dir. A real Quantum backup is at least ~50KB even
+        // when there's no data (system catalogs + schema).
+        const tempStats = await fs.stat(tempPath).catch(() => null);
+        if (!tempStats || tempStats.size < 1024) {
+            throw new Error(`pg_dump produced suspiciously small output (${tempStats?.size || 0} bytes) — check pg_dump binary + DATABASE_URL`);
+        }
         
         // Move temp file to final location
         await fs.rename(tempPath, backupPath);

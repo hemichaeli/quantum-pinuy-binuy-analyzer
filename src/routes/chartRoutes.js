@@ -50,7 +50,7 @@ router.get('/leads-by-source', async (req, res) => {
     SELECT
       COALESCE(NULLIF(utm_source, ''), NULLIF(source, ''), 'direct') AS source,
       COUNT(*)::int AS count
-    FROM leads
+    FROM website_leads
     GROUP BY 1
     ORDER BY count DESC
     LIMIT 20
@@ -96,7 +96,7 @@ router.get('/conversion-rate', async (req, res) => {
         COUNT(*) FILTER (WHERE status = 'closed')::numeric * 100.0 /
         NULLIF(COUNT(*), 0)
       , 2), 0)::float AS conversion_rate_percent
-    FROM leads
+    FROM website_leads
   `);
   const summary = rows[0] || {
     total_leads: 0, engaged: 0, qualified: 0, converted: 0, conversion_rate_percent: 0
