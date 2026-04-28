@@ -6,6 +6,7 @@
  *   - Listings: ranked by SSI + investor context, known agents flagged
  *   - Construction-stage complexes deprioritized for investors
  * 2026-04-28: Added /system-status for dashboard health panel.
+ * 2026-04-28: Replaced hardcoded /leads/stats with real query against website_leads.
  */
 
 const express = require('express');
@@ -34,7 +35,7 @@ router.get('/system-status', async (req, res) => {
     const [c, l, le, lc, ll] = await Promise.all([
       safe(`SELECT COUNT(*)::int AS n FROM complexes`),
       safe(`SELECT COUNT(*)::int AS n FROM listings WHERE is_active = TRUE`),
-      safe(`SELECT COUNT(*)::int AS n FROM leads`),
+      safe(`SELECT COUNT(*)::int AS n FROM website_leads`),
       safe(`SELECT MAX(updated_at) AS ts FROM complexes`),
       safe(`SELECT MAX(last_seen) AS ts FROM listings`)
     ]);
@@ -220,7 +221,42 @@ router.get('/complexes/all', async (req, res) => {
 router.get('/buyers/all', (req, res) => res.json({ buyers: [] }));
 router.get('/news', (req, res) => res.json({ news: [] }));
 router.get('/calls/stats', (req, res) => res.json({ today: { total: 0 }, week: { total: 0 }, month: { total: 0 } }));
-router.get('/leads/stats', (req, res) => res.json({ total: 0, new_this_month: 0, converted: 0, active: 0, conversion_rate: 0 }));
+
+// 2026-04-28: was hardcoded zeros, now queries website_leads.
+// Fields: total, new (status=new), contacted, qualified, negotiation, closed,
+// lost, urgent, this_month, last_24h, with_trello, conversion_rate (closed/total*100).
+router.get('/leads/stats', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'new')::int AS new,
+        COUNT(*) FILTER (WHERE status = 'contacted')::int AS contacted,
+        COUNT(*) FILTER (WHERE status = 'qualified')::int AS qualified,
+        COUNT(*) FILTER (WHERE status = 'negotiation')::int AS negotiation,
+        COUNT(*) FILTER (WHERE status = 'closed')::int AS closed,
+        COUNT(*) FILTER (WHERE status = 'lost')::int AS lost,
+        COUNT(*) FILTER (WHERE is_urgent = TRUE)::int AS urgent,
+        COUNT(*) FILTER (WHERE created_at > date_trunc('month', NOW()))::int AS this_month,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours')::int AS last_24h,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days')::int AS last_7d,
+        COUNT(*) FILTER (WHERE trello_card_id IS NOT NULL)::int AS with_trello,
+        COALESCE(ROUND(
+          COUNT(*) FILTER (WHERE status = 'closed')::numeric * 100.0 /
+          NULLIF(COUNT(*), 0)
+        , 2), 0)::float AS conversion_rate
+      FROM website_leads
+    `);
+    res.json(rows[0]);
+  } catch (err) {
+    // Table may not exist on a fresh DB. Return zeros with a hint instead of 500.
+    res.json({
+      total: 0, new: 0, contacted: 0, qualified: 0, negotiation: 0, closed: 0, lost: 0,
+      urgent: 0, this_month: 0, last_24h: 0, last_7d: 0, with_trello: 0, conversion_rate: 0,
+      note: 'website_leads table not ready'
+    });
+  }
+});
 
 // API: Get single complex
 router.get('/complex/:id', async (req, res) => {
