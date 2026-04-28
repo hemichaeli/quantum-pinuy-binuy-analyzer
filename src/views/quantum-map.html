@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QUANTUM Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: 'Heebo', Arial, sans-serif; background: #0f2b46; color: #e5e7eb; }
+  #map { position: absolute; top: 0; bottom: 0; right: 0; left: 0; }
+  .qm-panel {
+    position: absolute; top: 12px; left: 12px; z-index: 500;
+    background: rgba(15, 43, 70, 0.95); color: #f9fafb;
+    padding: 14px 16px; border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    width: 280px; font-size: 13px;
+  }
+  .qm-panel h2 { margin: 0 0 10px; font-size: 15px; color: #93c5fd; }
+  .qm-row { margin: 8px 0; display: flex; align-items: center; gap: 8px; }
+  .qm-row label { flex: 1; }
+  .qm-row input[type=range] { flex: 2; }
+  .qm-row select { flex: 2; padding: 4px; background: #0f2b46; color: #f9fafb; border: 1px solid #334155; border-radius: 4px; }
+  .qm-stats { font-size: 11px; color: #94a3b8; margin-top: 12px; padding-top: 10px; border-top: 1px solid #334155; }
+  .qm-legend { position: absolute; bottom: 18px; left: 12px; z-index: 500;
+    background: rgba(15, 43, 70, 0.95); color: #f9fafb;
+    padding: 10px 12px; border-radius: 8px; font-size: 12px; }
+  .qm-legend .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+  .leaflet-popup-content-wrapper { background: #1e293b; color: #f9fafb; }
+  .leaflet-popup-tip { background: #1e293b; }
+  .qm-popup b { color: #93c5fd; }
+  .qm-popup a { color: #60a5fa; }
+  .qm-error { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: #7f1d1d; color: white; padding: 16px 20px; border-radius: 8px; z-index: 600; display: none; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="qm-panel">
+  <h2>QUANTUM Map</h2>
+  <div class="qm-row">
+    <label>Min IAI</label>
+    <input type="range" id="minIAI" min="0" max="100" step="5" value="0" />
+    <span id="minIAIVal" style="width: 28px; text-align: left;">0</span>
+  </div>
+  <div class="qm-row">
+    <label><input type="checkbox" id="showComplexes" checked /> Complexes</label>
+    <label><input type="checkbox" id="showListings" checked /> Listings</label>
+  </div>
+  <div class="qm-row">
+    <label>Zoom to</label>
+    <select id="cityZoom">
+      <option value="">-- Select city --</option>
+    </select>
+  </div>
+  <div class="qm-stats" id="stats">Loading...</div>
+</div>
+
+<div class="qm-legend">
+  <div><span class="dot" style="background: #dc2626;"></span> IAI 80+</div>
+  <div><span class="dot" style="background: #f59e0b;"></span> IAI 60-79</div>
+  <div><span class="dot" style="background: #fbbf24;"></span> IAI 40-59</div>
+  <div><span class="dot" style="background: #6b7280;"></span> IAI &lt;40</div>
+  <div><span class="dot" style="background: #3b82f6;"></span> Listing</div>
+</div>
+
+<div class="qm-error" id="error"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+<script>
+  const map = L.map('map', { zoomControl: true }).setView([31.5, 35.0], 8);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  const complexLayer = L.layerGroup().addTo(map);
+  const listingLayer = L.layerGroup().addTo(map);
+
+  function iaiColor(iai) {
+    if (iai >= 80) return '#dc2626';
+    if (iai >= 60) return '#f59e0b';
+    if (iai >= 40) return '#fbbf24';
+    return '#6b7280';
+  }
+
+  function fmtIls(n) {
+    if (!n && n !== 0) return '-';
+    return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n);
+  }
+
+  function complexPopup(c) {
+    return `<div class="qm-popup">
+      <b>${c.name || c.addresses || 'מתחם'}</b><br>
+      ${c.city || ''} ${c.neighborhood ? '· ' + c.neighborhood : ''}<br>
+      IAI: <b>${c.iai_score ?? '-'}</b> · SSI: <b>${c.ssi_score ?? '-'}</b><br>
+      Stage: ${c.plan_stage || '-'}<br>
+      Status: ${c.status || '-'}<br>
+      Developer: ${c.developer || '-'}<br>
+      Units: ${c.units_count || '-'}
+    </div>`;
+  }
+
+  function listingPopup(l) {
+    return `<div class="qm-popup">
+      <b>${l.title || l.address || 'דירה'}</b><br>
+      ${l.city || ''} · ${l.rooms || '?'} rooms · ${l.area_sqm || '?'} m²<br>
+      Price: <b>${fmtIls(l.asking_price)}</b><br>
+      ₪/m²: ${fmtIls(l.price_per_sqm)}<br>
+      Source: ${l.source || '-'}<br>
+      ${l.complex_name ? 'Complex: <b>' + l.complex_name + '</b> (IAI ' + (l.iai_score ?? '-') + ')<br>' : ''}
+      ${l.url ? '<a href="' + l.url + '" target="_blank" rel="noopener">Open listing</a>' : ''}
+    </div>`;
+  }
+
+  let allComplexes = [];
+  let allListings = [];
+
+  function render() {
+    complexLayer.clearLayers();
+    listingLayer.clearLayers();
+
+    const minIAI = parseInt(document.getElementById('minIAI').value);
+    const showComplexes = document.getElementById('showComplexes').checked;
+    const showListings = document.getElementById('showListings').checked;
+
+    let cShown = 0, lShown = 0;
+
+    if (showComplexes) {
+      for (const c of allComplexes) {
+        if ((c.iai_score || 0) < minIAI) continue;
+        const color = iaiColor(c.iai_score || 0);
+        const radius = 6 + Math.min((c.iai_score || 0) / 10, 8);
+        L.circleMarker([c.lat, c.lng], { radius, color, fillColor: color, fillOpacity: 0.7, weight: 2 })
+          .bindPopup(complexPopup(c)).addTo(complexLayer);
+        cShown++;
+      }
+    }
+
+    if (showListings) {
+      for (const l of allListings) {
+        if (minIAI > 0 && (l.iai_score || 0) < minIAI) continue;
+        L.circleMarker([l.lat, l.lng], { radius: 4, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.6, weight: 1 })
+          .bindPopup(listingPopup(l)).addTo(listingLayer);
+        lShown++;
+      }
+    }
+
+    document.getElementById('stats').innerHTML =
+      `Complexes shown: <b>${cShown}</b> / ${allComplexes.length}<br>` +
+      `Listings shown: <b>${lShown}</b> / ${allListings.length}`;
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  async function loadData() {
+    try {
+      const r = await fetch('/api/map/data');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      allComplexes = data.complexes || [];
+      allListings = data.listings || [];
+      render();
+    } catch (e) {
+      showError('Failed to load /api/map/data: ' + e.message);
+    }
+  }
+
+  async function loadCities() {
+    try {
+      const r = await fetch('/api/map/cities');
+      const data = await r.json();
+      const sel = document.getElementById('cityZoom');
+      for (const c of data.cities || []) {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify({ lat: c.lat, lng: c.lng });
+        opt.textContent = c.name;
+        sel.appendChild(opt);
+      }
+    } catch (e) { /* non-fatal */ }
+  }
+
+  document.getElementById('minIAI').addEventListener('input', (e) => {
+    document.getElementById('minIAIVal').textContent = e.target.value;
+    render();
+  });
+  document.getElementById('showComplexes').addEventListener('change', render);
+  document.getElementById('showListings').addEventListener('change', render);
+  document.getElementById('cityZoom').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    const { lat, lng } = JSON.parse(e.target.value);
+    map.setView([lat, lng], 13);
+  });
+
+  loadData();
+  loadCities();
+</script>
+
+</body>
+</html>
