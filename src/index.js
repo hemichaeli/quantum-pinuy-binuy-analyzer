@@ -62,7 +62,7 @@ app.use(helmet({
     }
   }
 }));
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token'] }));
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token', 'X-Webhook-Secret'] }));
 app.use(express.json({ limit: '10mb' }));
 
 const limiter = rateLimit({
@@ -86,7 +86,8 @@ const limiter = rateLimit({
     req.path.startsWith('/api/morning/') ||
     req.path.startsWith('/api/newsletter/') ||
     req.path.startsWith('/api/callcenter/') ||
-    req.path.startsWith('/callcenter/'),
+    req.path.startsWith('/callcenter/') ||
+    req.path === '/api/leads-ingest',
   message: { error: 'Too many requests, please try again later' }
 });
 app.use('/api/', limiter);
@@ -143,6 +144,10 @@ function loadAllRoutes() {
     { path: '/api/dashboard',          file: 'routes/dashboardRoutes.js' },
     // 2026-04-28 (Day 2): chartRoutes for /api/chart/* (4 endpoints) used by dashboard graphs.
     { path: '/api/chart',              file: 'routes/chartRoutes.js' },
+    // 2026-04-28 (Day 4-5): Match Engine ingest + match endpoints.
+    // Mounted at /api so paths land at /api/leads-ingest, /api/leads/:id/match,
+    // /api/leads/:id/matches, /api/lead-matches/:id.
+    { path: '/api',                    file: 'routes/leadIngestRoutes.js' },
     { path: '/api/chat',               file: 'routes/chatRoutes.js' },
     { path: '/api/intelligence',       file: 'routes/intelligenceRoutes.js' },
     { path: '/api/facebook',           file: 'routes/facebookRoute.js' },
@@ -363,6 +368,8 @@ async function start() {
   await runMigrationFile('Newsletter (015)', path.join(__dirname, 'db', 'migrations', '015_newsletter_subscribers.sql'));
   await runMigrationFile('Newsletter lang (016)', path.join(__dirname, 'db', 'migrations', '016_newsletter_lang.sql'));
   await runMigrationFile('Multi-channel (019)', path.join(__dirname, 'db', 'migrations', '019_available_channels.sql'));
+  // 2026-04-28 (Day 4-5): Match Engine v1
+  await runMigrationFile('Lead matches (020)', path.join(__dirname, 'db', 'migrations', '020_lead_matches.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
