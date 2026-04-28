@@ -375,6 +375,8 @@ async function start() {
   await runMigrationFile('Multi-channel (019)', path.join(__dirname, 'db', 'migrations', '019_available_channels.sql'));
   // 2026-04-28 (Day 4-5): Match Engine v1
   await runMigrationFile('Lead matches (020)', path.join(__dirname, 'db', 'migrations', '020_lead_matches.sql'));
+  // 2026-04-28 (Day 7): Hot opportunity alerts log
+  await runMigrationFile('Hot opp alerts (021)', path.join(__dirname, 'db', 'migrations', '021_hot_opportunity_alerts.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
@@ -411,6 +413,21 @@ async function start() {
       });
       logger.info('[SsiBatchAggregate] ACTIVE - daily 06:30 IL');
     } catch (e) { logger.warn('[SsiBatchAggregate] Failed:', e.message); }
+
+    // 2026-04-28 (Day 7): Hot Opportunity push to operator.
+    // Every 30 min between 09:00-21:00 IL. Finds new high-IAI/SSI listings,
+    // sends WhatsApp via inforuService, dedupes via hot_opportunity_alerts.
+    try {
+      const cron = require('node-cron');
+      const hotOpp = require('./cron/hotOpportunityCron');
+      cron.schedule('*/30 9-21 * * *', async () => {
+        try { await hotOpp.run(); }
+        catch (e) { logger.warn('[HotOppCron]', e.message); }
+      });
+      logger.info('[HotOppCron] ACTIVE - every 30min 09-21 IL', {
+        operator_phone_set: !!(process.env.OPERATOR_WHATSAPP_PHONE || process.env.OPERATOR_PHONE)
+      });
+    } catch (e) { logger.warn('[HotOppCron] Failed:', e.message); }
 
     try {
       const cron = require('node-cron');
