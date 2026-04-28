@@ -4,6 +4,7 @@
  * NEW: batch-aggregate (listing->complex), gov-enrich, dashboard data
  * v4.25.0: Expanded dashboard-data with enriched fields
  * v4.28.1: Fixed price_per_sqm -> accurate_price_sqm column name
+ * 2026-04-28: Added GET /stats alias for dashboard SSI panel
  */
 
 const express = require('express');
@@ -458,6 +459,35 @@ router.get('/status', (req, res) => {
     perplexityConfigured: !!process.env.PERPLEXITY_API_KEY,
     governmentApiAvailable: !!getGovernmentService()
   });
+});
+
+// =====================================================
+// 2026-04-28: GET /api/ssi/stats
+// Lightweight distribution stats for dashboard SSI panel.
+// Same buckets as /dashboard-data ssiDistribution, plus avg + missing count,
+// plus enriched_count to show how many complexes have SSI computed at all.
+// =====================================================
+router.get('/stats', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*) AS total_complexes,
+        COUNT(*) FILTER (WHERE enhanced_ssi_score >= 80) AS critical,
+        COUNT(*) FILTER (WHERE enhanced_ssi_score >= 60 AND enhanced_ssi_score < 80) AS high,
+        COUNT(*) FILTER (WHERE enhanced_ssi_score >= 40 AND enhanced_ssi_score < 60) AS medium,
+        COUNT(*) FILTER (WHERE enhanced_ssi_score >= 20 AND enhanced_ssi_score < 40) AS low,
+        COUNT(*) FILTER (WHERE enhanced_ssi_score > 0 AND enhanced_ssi_score < 20) AS minimal,
+        COUNT(*) FILTER (WHERE COALESCE(enhanced_ssi_score, 0) = 0) AS missing,
+        COUNT(*) FILTER (WHERE enhanced_ssi_score > 0) AS enriched_count,
+        ROUND(AVG(enhanced_ssi_score) FILTER (WHERE enhanced_ssi_score > 0), 1) AS avg_ssi,
+        MAX(ssi_last_enhanced) AS last_enhanced
+      FROM complexes
+    `);
+    res.json({ success: true, ...rows[0] });
+  } catch (err) {
+    logger.error('SSI stats failed', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // POST /api/ssi/enhance/:complexId
