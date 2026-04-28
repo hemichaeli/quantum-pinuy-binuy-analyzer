@@ -5,6 +5,7 @@
  *   - Complexes: ranked by TRUE investor premium (entry discount × theoretical premium)
  *   - Listings: ranked by SSI + investor context, known agents flagged
  *   - Construction-stage complexes deprioritized for investors
+ * 2026-04-28: Added /system-status for dashboard health panel.
  */
 
 const express = require('express');
@@ -19,6 +20,40 @@ const KNOWN_AGENT_PHONES = ['0508005958', '0508005971', '0508005995'];
 const CONSTRUCTION_STAGES = ['under_construction', 'ביצוע', 'בביצוע'];
 
 router.get('/', (req, res) => { res.redirect('/dashboard'); });
+
+// ============================================================
+// 2026-04-28: GET /api/dashboard/system-status
+// Lightweight system health for the dashboard top panel.
+// Each lookup wrapped so a missing table returns null, never 500.
+// ============================================================
+router.get('/system-status', async (req, res) => {
+  const safe = async (sql) => {
+    try { const r = await pool.query(sql); return r.rows[0]; } catch (e) { return null; }
+  };
+  try {
+    const [c, l, le, lc, ll] = await Promise.all([
+      safe(`SELECT COUNT(*)::int AS n FROM complexes`),
+      safe(`SELECT COUNT(*)::int AS n FROM listings WHERE is_active = TRUE`),
+      safe(`SELECT COUNT(*)::int AS n FROM leads`),
+      safe(`SELECT MAX(updated_at) AS ts FROM complexes`),
+      safe(`SELECT MAX(last_seen) AS ts FROM listings`)
+    ]);
+    res.json({
+      ok: true,
+      db: 'up',
+      mode: (process.env.START_MODE || 'both').toLowerCase(),
+      uptime_sec: Math.round(process.uptime()),
+      complexes: c?.n ?? null,
+      active_listings: l?.n ?? null,
+      leads: le?.n ?? null,
+      last_complex_update: lc?.ts ?? null,
+      last_listing_seen: ll?.ts ?? null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(503).json({ ok: false, db: 'error', error: err.message });
+  }
+});
 
 // ============================================================
 // API: All Ads — with true investor premium per listing
