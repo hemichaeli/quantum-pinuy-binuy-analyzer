@@ -9,6 +9,7 @@
  * POST /api/facebook/scan/all          - Batch scan all cities
  * GET  /api/facebook/stats             - Get scan statistics
  * GET  /api/facebook/listings          - Get Facebook listings
+ * GET  /api/facebook/ads                - Dashboard alias for active facebook listings (2026-04-28)
  * GET  /api/facebook/unmatched         - Get unmatched listings
  * GET  /api/facebook/cities            - Available cities with FB URLs
  * POST /api/facebook/match             - Manual listing→complex match
@@ -359,6 +360,52 @@ router.get('/listings', async (req, res) => {
   } catch (err) {
     logger.error('Facebook listings error', { error: err.message });
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 2026-04-28: GET /ads - Dashboard alias.
+ *
+ * The dashboard frontend calls /api/facebook/ads which previously returned 500
+ * because no such handler existed and a stale code path referenced a
+ * non-existent `facebook_ads` table. The actual data is in `listings` with
+ * source='facebook'. This endpoint mirrors the dashboard's expected shape:
+ * { ads: [...] } where each row is a listing joined to its complex.
+ *
+ * Query params: city, urgent (true), limit (default 200, max 500).
+ */
+router.get('/ads', async (req, res) => {
+  try {
+    const { city, urgent } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+
+    const params = [];
+    const where = [`l.source = 'facebook'`, `l.is_active = TRUE`];
+    if (city)            { params.push(city);            where.push(`l.city = $${params.length}`); }
+    if (urgent === 'true') {
+      where.push(`(l.has_urgent_keywords = TRUE OR l.is_foreclosure = TRUE OR l.is_inheritance = TRUE)`);
+    }
+    params.push(limit);
+
+    const sql = `
+      SELECT l.id, l.title, l.address, l.city, l.rooms, l.area_sqm, l.asking_price,
+             l.price_per_sqm, l.url, l.phone, l.contact_name, l.thumbnail_url,
+             l.first_seen, l.last_seen, l.days_on_market,
+             l.has_urgent_keywords, l.is_foreclosure, l.is_inheritance,
+             l.ssi_score, l.complex_id,
+             c.name AS complex_name, c.iai_score, c.enhanced_ssi_score AS complex_ssi
+        FROM listings l
+        LEFT JOIN complexes c ON c.id = l.complex_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY l.first_seen DESC NULLS LAST
+       LIMIT $${params.length}
+    `;
+
+    const { rows } = await pool.query(sql, params);
+    res.json({ success: true, ads: rows, total: rows.length });
+  } catch (err) {
+    logger.error('Facebook /ads error', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

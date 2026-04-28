@@ -167,6 +167,15 @@ function loadAllRoutes() {
     { path: '/api/templates',          file: 'routes/templateRoutes.js' },
     { path: '/api/pilot',              file: 'routes/pilotOutreachRoutes.js' },
     { path: '/api/vapi-call',          file: 'routes/vapiCallRoutes.js' },
+    // FIX 2026-04-28: Root-level fallback mount for dashboard handlers.
+    // Frontend dashboard.html calls absolute paths like /api/stats, /api/kones, /api/tasks,
+    // /api/ads, /api/trello/* which are defined inside dashboardRoute.js but were only
+    // reachable at /dashboard/api/* (mount prefix bug). These two entries register the
+    // SAME router files at root so the absolute paths resolve. Mounted LAST so all explicit
+    // prefix routes above (leadRoutes at /api/leads, dashboardRoutes-plural at /api/dashboard,
+    // etc.) still win first by Express registration order.
+    { path: '/',                       file: 'routes/pilotStatsPatch.js' },
+    { path: '/',                       file: 'routes/dashboardRoute.js' },
   ];
 
   const minheletRoutes = [
@@ -275,13 +284,23 @@ app.get('/health', async (req, res) => {
 
 app.get('/api/version', (req, res) => res.json({ version: VERSION, build: BUILD, mode: START_MODE }));
 
+// FIX 2026-04-28: Hot Opportunities filter (minIAI/maxIAI) was cosmetic.
+// The handler ignored query params, returning all rows regardless. Now wired to WHERE clause.
 app.get('/api/complexes', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 100;
-    const { rows } = await pool.query(
-      `SELECT id, name, addresses as address, city, neighborhood, iai_score, enhanced_ssi_score as ssi_score, status, existing_units as units_count, developer
-       FROM complexes ORDER BY iai_score DESC NULLS LAST LIMIT $1`, [limit]
-    );
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const minIAI = parseFloat(req.query.minIAI);
+    const maxIAI = parseFloat(req.query.maxIAI);
+    const where = [];
+    const params = [];
+    if (!isNaN(minIAI)) { params.push(minIAI); where.push(`iai_score >= $${params.length}`); }
+    if (!isNaN(maxIAI)) { params.push(maxIAI); where.push(`iai_score <= $${params.length}`); }
+    params.push(limit);
+    const sql = `SELECT id, name, addresses as address, city, neighborhood, iai_score,
+        enhanced_ssi_score as ssi_score, status, existing_units as units_count, developer
+       FROM complexes ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+       ORDER BY iai_score DESC NULLS LAST LIMIT $${params.length}`;
+    const { rows } = await pool.query(sql, params);
     res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -308,6 +327,20 @@ app.get('/api/debug', async (req, res) => {
     outreach: JSON.stringify(outreachStats),
     newsletter: JSON.stringify(newsletterStats),
     routes: { loaded: loaded.map(r => `${r.path} (${r.file})`), failed: failed.map(r => ({ path: r.path, error: r.error })) }
+  });
+});
+
+// FIX 2026-04-28: Lightweight diagnostic endpoint exposing route load results.
+// Useful for quickly seeing which routes loaded vs failed without the full /api/debug payload.
+app.get('/api/_routes', (req, res) => {
+  res.json({
+    loaded: routeLoadResults.filter(r => r.status === 'ok').map(r => ({ path: r.path, file: r.file })),
+    failed: routeLoadResults.filter(r => r.status === 'failed').map(r => ({ path: r.path, file: r.file, error: r.error })),
+    counts: {
+      ok: routeLoadResults.filter(r => r.status === 'ok').length,
+      failed: routeLoadResults.filter(r => r.status === 'failed').length,
+      total: routeLoadResults.length
+    }
   });
 });
 
@@ -350,6 +383,20 @@ async function start() {
       cron.schedule('45 7 * * *',   async () => { try { await runKonesAutoContact(); } catch (e) {} });
       logger.info('[AutoContact] ACTIVE');
     } catch (e) { logger.warn('[AutoContact] Failed:', e.message); }
+
+    // FIX 2026-04-28: 86 of 100 complexes had null enhanced_ssi_score because
+    // /api/ssi/batch-aggregate was never scheduled. Daily run at 06:30 IL.
+    try {
+      const cron = require('node-cron');
+      const axios = require('axios');
+      cron.schedule('30 6 * * *', async () => {
+        try {
+          const r = await axios.post(`http://localhost:${PORT}/api/ssi/batch-aggregate`, {}, { timeout: 120000 });
+          logger.info('[SsiBatchAggregate] Daily run complete', { updated: r.data?.summary?.complexesUpdated, alerts: r.data?.summary?.alertsCreated });
+        } catch (e) { if (e.code !== 'ECONNREFUSED') logger.warn('[SsiBatchAggregate]', e.message); }
+      });
+      logger.info('[SsiBatchAggregate] ACTIVE - daily 06:30 IL');
+    } catch (e) { logger.warn('[SsiBatchAggregate] Failed:', e.message); }
 
     try {
       const cron = require('node-cron');
