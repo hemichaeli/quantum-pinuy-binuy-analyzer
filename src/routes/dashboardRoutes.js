@@ -7,6 +7,7 @@
  *   - Construction-stage complexes deprioritized for investors
  * 2026-04-28: Added /system-status for dashboard health panel.
  * 2026-04-28: Replaced hardcoded /leads/stats with real query against website_leads.
+ * 2026-04-28: Added backward-compat aliases on /leads/stats response.
  */
 
 const express = require('express');
@@ -223,8 +224,10 @@ router.get('/news', (req, res) => res.json({ news: [] }));
 router.get('/calls/stats', (req, res) => res.json({ today: { total: 0 }, week: { total: 0 }, month: { total: 0 } }));
 
 // 2026-04-28: was hardcoded zeros, now queries website_leads.
-// Fields: total, new (status=new), contacted, qualified, negotiation, closed,
-// lost, urgent, this_month, last_24h, with_trello, conversion_rate (closed/total*100).
+// Returns: total, new (status=new), contacted, qualified, negotiation, closed,
+// lost, urgent, this_month, last_24h, last_7d, with_trello, conversion_rate,
+// PLUS backward-compat aliases new_this_month, converted, active for any
+// frontend code reading the prior shape.
 router.get('/leads/stats', async (req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -247,12 +250,20 @@ router.get('/leads/stats', async (req, res) => {
         , 2), 0)::float AS conversion_rate
       FROM website_leads
     `);
-    res.json(rows[0]);
+    const r = rows[0];
+    res.json({
+      ...r,
+      // Backward-compat aliases for the prior hardcoded response shape.
+      new_this_month: r.this_month,
+      converted: r.closed,
+      active: r.new + r.contacted + r.qualified + r.negotiation
+    });
   } catch (err) {
-    // Table may not exist on a fresh DB. Return zeros with a hint instead of 500.
+    // Table may not exist on a fresh DB. Return zeros (with aliases) instead of 500.
     res.json({
       total: 0, new: 0, contacted: 0, qualified: 0, negotiation: 0, closed: 0, lost: 0,
       urgent: 0, this_month: 0, last_24h: 0, last_7d: 0, with_trello: 0, conversion_rate: 0,
+      new_this_month: 0, converted: 0, active: 0,
       note: 'website_leads table not ready'
     });
   }
