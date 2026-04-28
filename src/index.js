@@ -141,6 +141,8 @@ function loadAllRoutes() {
     { path: '/api/alerts',             file: 'routes/alerts.js' },
     { path: '/api/leads',              file: 'routes/leadRoutes.js' },
     { path: '/api/dashboard',          file: 'routes/dashboardRoutes.js' },
+    // 2026-04-28 (Day 2): chartRoutes for /api/chart/* (4 endpoints) used by dashboard graphs.
+    { path: '/api/chart',              file: 'routes/chartRoutes.js' },
     { path: '/api/chat',               file: 'routes/chatRoutes.js' },
     { path: '/api/intelligence',       file: 'routes/intelligenceRoutes.js' },
     { path: '/api/facebook',           file: 'routes/facebookRoute.js' },
