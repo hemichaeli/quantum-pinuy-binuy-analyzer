@@ -378,6 +378,8 @@ async function start() {
   await runMigrationFile('Lead matches (020)', path.join(__dirname, 'db', 'migrations', '020_lead_matches.sql'));
   // 2026-04-28 (Day 7): Hot opportunity alerts log
   await runMigrationFile('Hot opp alerts (021)', path.join(__dirname, 'db', 'migrations', '021_hot_opportunity_alerts.sql'));
+  // 2026-04-29 (Day 8.5): Opt-out tracking + match outcomes
+  await runMigrationFile('Optouts + outcomes (022)', path.join(__dirname, 'db', 'migrations', '022_optouts_and_match_outcomes.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
@@ -465,6 +467,20 @@ async function start() {
       cron.schedule('*/30 * * * *', async () => { try { await runOutreachEscalation(); } catch (e) {} });
       logger.info('[OutreachEscalation] ACTIVE - checking every 30 min');
     } catch (e) { logger.warn('[OutreachEscalation] Failed:', e.message); }
+
+    try {
+      const cron = require('node-cron');
+      const { runDailyDigest } = require('./cron/dailyDigestCron');
+      cron.schedule('0 8 * * *', async () => { try { await runDailyDigest(); } catch (e) {} }, { timezone: 'Asia/Jerusalem' });
+      logger.info('[DailyDigest] ACTIVE - 08:00 IL');
+    } catch (e) { logger.warn('[DailyDigest] Failed:', e.message); }
+
+    try {
+      const cron = require('node-cron');
+      const { runMatchAlerts } = require('./cron/matchAlertCron');
+      cron.schedule('*/10 * * * *', async () => { try { await runMatchAlerts(); } catch (e) {} });
+      logger.info('[MatchAlert] ACTIVE - every 10 min');
+    } catch (e) { logger.warn('[MatchAlert] Failed:', e.message); }
 
     try {
       const cron = require('node-cron');

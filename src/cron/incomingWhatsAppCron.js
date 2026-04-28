@@ -12,6 +12,7 @@
 
 const inforuService = require('../services/inforuService');
 const botEngine     = require('../services/botEngine');
+const optoutService = require('../services/optoutService');
 const pool          = require('../db/pool');
 const { logger }    = require('../services/logger');
 
@@ -47,6 +48,19 @@ async function pollIncomingWhatsApp() {
       }
 
       try {
+        // Opt-out detection (must run before bot/campaign routing).
+        const optoutKw = optoutService.matchOptoutKeyword(body);
+        if (optoutKw) {
+          await optoutService.recordOptout({
+            phone, source: 'reply_kw', replyText: body, notes: `matched=${optoutKw}`
+          });
+          try {
+            await inforuService.sendWhatsAppChat(phone,
+              'הוסרת מרשימת התפוצה של QUANTUM. לא תקבלו הודעות נוספות. תודה.');
+          } catch (e) { /* best-effort confirmation */ }
+          continue;
+        }
+
         // Find the campaign from existing bot session
         const sess = await pool.query(
           `SELECT zoho_campaign_id FROM bot_sessions

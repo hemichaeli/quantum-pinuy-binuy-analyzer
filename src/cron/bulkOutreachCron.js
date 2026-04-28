@@ -120,7 +120,7 @@ async function runBulkOutreach() {
 
     const batchSize = Math.min(config.batchSize, remaining);
 
-    // Get unsent listings with phone numbers
+    // Get unsent listings with phone numbers (excluding opted-out phones)
     const { rows: listings } = await pool.query(`
       SELECT l.id, l.address, l.street, l.city, l.phone, l.contact_name,
              l.contact_phone, l.asking_price, l.rooms, l.area_sqm,
@@ -128,10 +128,12 @@ async function runBulkOutreach() {
              c.name as complex_name
       FROM listings l
       LEFT JOIN complexes c ON l.complex_id = c.id
+      LEFT JOIN wa_optouts o ON o.phone = l.phone
       WHERE l.is_active = TRUE
         AND (l.message_status IS NULL OR l.message_status = 'לא נשלחה')
         AND (l.phone IS NOT NULL AND l.phone != '')
         AND l.phone NOT IN ('0000000000', '000-0000000')
+        AND o.id IS NULL
       ORDER BY l.created_at DESC
       LIMIT $1
     `, [batchSize]);
