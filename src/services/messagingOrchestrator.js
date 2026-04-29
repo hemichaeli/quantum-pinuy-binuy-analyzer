@@ -55,14 +55,17 @@ function getPhoneOrch() {
 //                                                built-in chat (no automated send for
 //                                                platforms that don't expose a chat API).
 //   'manual'                                   — last resort if nothing else applies
+// Day 10: 'platform_chat' added — Apify Actor submits the platform's
+// "leave details" / contact form. WhatsApp still preferred when phone
+// exists, platform_chat for listings without phone.
 const SOURCE_CASCADE = {
   yad2:       ['whatsapp', 'yad2_chat', 'platform_link'],
-  yad1:       ['whatsapp', 'platform_link'],
-  dira:       ['whatsapp', 'platform_link'],
-  homeless:   ['whatsapp', 'platform_link'],
-  madlan:     ['whatsapp', 'platform_link'],
-  web_madlan: ['whatsapp', 'platform_link'],
-  winwin:     ['whatsapp', 'platform_link'],
+  yad1:       ['whatsapp', 'platform_chat', 'platform_link'],
+  dira:       ['whatsapp', 'platform_chat', 'platform_link'],
+  homeless:   ['whatsapp', 'platform_chat', 'platform_link'],
+  madlan:     ['whatsapp', 'platform_chat', 'platform_link'],
+  web_madlan: ['whatsapp', 'platform_chat', 'platform_link'],
+  winwin:     ['whatsapp', 'platform_chat', 'platform_link'],
   komo:       ['komo_chat', 'whatsapp', 'platform_link'],
   facebook:   ['fb_messenger', 'platform_link'],
   banknadlan: ['platform_link'],          // auctions: attorney email contact, no phone
@@ -88,6 +91,7 @@ function detectAvailableChannels(listing) {
     if (channel === 'yad2_chat') return hasUrl || hasItemId;
     if (channel === 'fb_messenger') return hasUrl;
     if (channel === 'komo_chat')    return hasUrl || hasItemId;
+    if (channel === 'platform_chat') return hasUrl;       // Day 10: Apify form-fill
     if (channel === 'platform_link') return hasUrl;
     return false;
   });
@@ -364,6 +368,29 @@ async function sendToListing(listing, messageText, options = {}) {
           });
           result.success = smsResult.success;
           if (!smsResult.success) result.error = smsResult.error;
+        }
+      }
+
+      else if (channel === 'platform_chat') {
+        // Day 10: Apify Actor fills + submits the platform's contact form.
+        // For sources where no public chat API exists (madlan, yad1, dira,
+        // homeless, winwin). Slower than WhatsApp (~30-45s per submission)
+        // but reaches listings without phones.
+        result.channel = 'platform_chat';
+        try {
+          const platformContact = require('./platformContactService');
+          const submitResult = await platformContact.submitContactForm(listing, messageText);
+          result.success = !!submitResult.success;
+          if (submitResult.success) {
+            if (submitResult.runId) result.actor_run_id = submitResult.runId;
+            if (submitResult.screenshotUrl) result.screenshot_url = submitResult.screenshotUrl;
+          } else {
+            result.error = submitResult.error;
+            result.manual_url = listing.url; // graceful degradation to manual link
+          }
+        } catch (e) {
+          result.error = e.message;
+          result.manual_url = listing.url;
         }
       }
 

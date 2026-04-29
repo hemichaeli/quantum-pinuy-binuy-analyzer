@@ -1,0 +1,15 @@
+{
+  "name": "quantum-platform-contact",
+  "version": "0.1.0",
+  "description": "Apify Actor that submits contact-form requests on Israeli real-estate platforms (madlan/yad1/dira/homeless/winwin) for QUANTUM bulk outreach.",
+  "main": "main.js",
+  "dependencies": {
+    "apify": "^3.2.0",
+    "puppeteer": "^21.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "scripts": {
+    "start": "node main.js"
+  }
+}
