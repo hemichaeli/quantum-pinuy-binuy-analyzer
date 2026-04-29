@@ -144,8 +144,12 @@ router.get('/api/ads', async (req, res) => {
         if (minPrice && !isNaN(minPrice)) { query += ` AND l.asking_price >= $${n}`; params.push(parseInt(minPrice)); n++; }
         if (maxPrice && !isNaN(maxPrice)) { query += ` AND l.asking_price <= $${n}`; params.push(parseInt(maxPrice)); n++; }
         if (search?.trim()) { query += ` AND (l.address ILIKE $${n} OR l.city ILIKE $${n})`; params.push('%' + search.trim() + '%'); n++; }
+        // Day 10: phone filter expanded — distinguish mobile (WA-able) vs landline.
+        // Israeli mobile prefixes: 050-059. Strip non-digits before matching.
         if (phoneFilter === 'yes') query += ` AND l.phone IS NOT NULL AND l.phone != ''`;
         else if (phoneFilter === 'no') query += ` AND (l.phone IS NULL OR l.phone = '')`;
+        else if (phoneFilter === 'mobile') query += ` AND l.phone IS NOT NULL AND l.phone != '' AND regexp_replace(l.phone, '\\D', '', 'g') ~ '^(972)?0?5[0-9]'`;
+        else if (phoneFilter === 'landline') query += ` AND l.phone IS NOT NULL AND l.phone != '' AND regexp_replace(l.phone, '\\D', '', 'g') !~ '^(972)?0?5[0-9]'`;
         if (contactStatus) { query += ` AND l.message_status = $${n}`; params.push(contactStatus); n++; }
         const validSort = ['address', 'city', 'asking_price', 'created_at', 'ssi_score', 'area_sqm', 'rooms', 'floor', 'estimated_sale_price', 'profit_delta_ils'];
         const computedSorts = { estimated_sale_price: 'estimated_sale_price', profit_delta_ils: 'profit_delta_ils' };
@@ -161,6 +165,8 @@ router.get('/api/ads', async (req, res) => {
         if (city?.trim()) { countQuery += ` AND l.city ILIKE $${cn}`; countParams.push('%' + city.trim() + '%'); cn++; }
         if (phoneFilter === 'yes') countQuery += ` AND l.phone IS NOT NULL AND l.phone != ''`;
         else if (phoneFilter === 'no') countQuery += ` AND (l.phone IS NULL OR l.phone = '')`;
+        else if (phoneFilter === 'mobile') countQuery += ` AND l.phone IS NOT NULL AND l.phone != '' AND regexp_replace(l.phone, '\\D', '', 'g') ~ '^(972)?0?5[0-9]'`;
+        else if (phoneFilter === 'landline') countQuery += ` AND l.phone IS NOT NULL AND l.phone != '' AND regexp_replace(l.phone, '\\D', '', 'g') !~ '^(972)?0?5[0-9]'`;
         const countResult = await pool.query(countQuery, countParams);
         res.json({ success: true, data: result.rows, pagination: { page: parseInt(page), limit: parseInt(limit), total: parseInt(countResult.rows[0]?.total) || 0 } });
     } catch (error) {
