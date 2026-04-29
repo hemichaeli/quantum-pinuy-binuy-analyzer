@@ -354,6 +354,26 @@ router.post('/send-filtered', async (req, res) => {
 // PHONE ENRICHMENT
 // ============================================================
 
+// Day 9: unified phone enrichment across ALL platforms (Apify residential proxy + komo
+// open API + regex from description). Wraps phoneRevealOrchestrator.enrichAllPhones —
+// the same function the cron at 0 */6 * * * IL calls. Use this to backfill on-demand.
+router.post('/enrich-all-phones', async (req, res) => {
+  try {
+    const { enrichAllPhones } = require('../services/phoneRevealOrchestrator');
+    const limit = Math.min(parseInt(req.body?.limit) || 200, 1000);
+    const useApify = !!process.env.APIFY_API_TOKEN;
+    res.json({ ok: true, message: `Enrichment started in background (limit=${limit}, useApify=${useApify}). Re-query /api/dashboard/ads/stats in ~30-60s.` });
+    // Run in background — don't block the response
+    enrichAllPhones({ limit, useApify }).then(result => {
+      logger.info('[ManualEnrichAllPhones] done', result);
+    }).catch(err => {
+      logger.error('[ManualEnrichAllPhones] failed', { error: err.message });
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/enrich-phones', async (req, res) => {
   try {
     // Find yad2 listings with URLs but no phone
