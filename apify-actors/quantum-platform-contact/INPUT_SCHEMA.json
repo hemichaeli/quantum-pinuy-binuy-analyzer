@@ -1,0 +1,35 @@
+{
+  "title": "QUANTUM Platform Contact Input",
+  "description": "Submit a contact form on a real-estate listing across supported Israeli platforms.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "source": {
+      "title": "Source platform",
+      "type": "string",
+      "enum": ["madlan", "web_madlan", "yad1", "dira", "homeless", "winwin"],
+      "editor": "select"
+    },
+    "listingUrl": { "title": "Listing URL", "type": "string", "editor": "textfield" },
+    "listingId":  { "title": "Source listing ID", "type": "string", "editor": "textfield", "nullable": true },
+    "address":    { "title": "Address", "type": "string", "editor": "textfield", "nullable": true },
+    "city":       { "title": "City",    "type": "string", "editor": "textfield", "nullable": true },
+    "contactName":{ "title": "Contact name", "type": "string", "editor": "textfield", "default": "חמי" },
+    "phone":      { "title": "Phone",   "type": "string", "editor": "textfield" },
+    "email":      { "title": "Email",   "type": "string", "editor": "textfield" },
+    "message":    { "title": "Message body", "type": "string", "editor": "textarea" },
+    "credentials": {
+      "title": "Per-platform credentials",
+      "type": "object",
+      "editor": "json",
+      "nullable": true
+    },
+    "twoCaptchaApiKey": {
+      "title": "2Captcha API key (optional, for captcha solving)",
+      "type": "string",
+      "editor": "textfield",
+      "nullable": true
+    }
+  },
+  "required": ["source", "listingUrl", "phone", "message"]
+}
