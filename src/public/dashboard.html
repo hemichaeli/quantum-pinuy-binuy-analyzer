@@ -420,12 +420,22 @@
                     <option value="desc">יורד</option>
                     <option value="asc">עולה</option>
                 </select>
+                <select class="filter-select" id="adsPageSize" onchange="adsResetAndLoad()">
+                    <option value="50">50 לעמוד</option>
+                    <option value="100">100 לעמוד</option>
+                    <option value="200">200 לעמוד</option>
+                    <option value="500">500 לעמוד</option>
+                    <option value="2000">הכל</option>
+                </select>
             </div>
             <div class="actions-bar">
-                <button class="btn" onclick="loadAds()">🔍 טען מודעות</button>
+                <button class="btn" onclick="adsResetAndLoad()">🔍 טען מודעות</button>
                 <button class="btn btn-secondary" onclick="exportData('ads')">📊 ייצוא לאקסל</button>
-                <div style="margin-right:auto;display:flex;gap:4px;">
-                    <button id="ads-view-table" class="btn" style="padding:6px 10px;font-size:12px;" onclick="setAdsView('table')" title="תצוגת שורות">☰ שורות</button>
+                <div style="margin-right:auto;display:flex;gap:4px;align-items:center;">
+                    <button class="btn btn-secondary" id="ads-prev-page" onclick="adsChangePage(-1)" style="padding:5px 10px;font-size:12px;">‹ הקודם</button>
+                    <span id="ads-page-info" style="font-size:11px;color:var(--text-muted);min-width:60px;text-align:center;">עמוד 1</span>
+                    <button class="btn btn-secondary" id="ads-next-page" onclick="adsChangePage(1)" style="padding:5px 10px;font-size:12px;">הבא ›</button>
+                    <button id="ads-view-table" class="btn" style="padding:6px 10px;font-size:12px;margin-right:8px;" onclick="setAdsView('table')" title="תצוגת שורות">☰ שורות</button>
                     <button id="ads-view-grid" class="btn btn-secondary" style="padding:6px 10px;font-size:12px;" onclick="setAdsView('grid')" title="תצוגת ריבועים">⊞ ריבועים</button>
                 </div>
             </div>
@@ -445,6 +455,7 @@
                         <th onclick="sortAdsBy('area_sqm')" data-sort-field="area_sqm">שטח</th>
                         <th onclick="sortAdsBy('rooms')" data-sort-field="rooms">חדרים</th>
                         <th onclick="sortAdsBy('ssi_score')" data-sort-field="ssi_score" title="Seller Stress Index — ציון לחץ מוכר (0-100)">SSI ⓘ</th>
+                        <th onclick="sortAdsBy('source')" data-sort-field="source">מקור</th>
                         <th>טלפון</th>
                         <th>Actions</th>
                     </tr>
@@ -1281,6 +1292,10 @@
                 alert(d.success ? '✅ הדוח נשלח בהצלחה!' : '❌ שגיאה: ' + (d.error || 'נכשל'));
             } catch (e) { alert('❌ שגיאה: ' + e.message); }
         }
+        // Day 10 round 2: pagination state.
+        let _adsPage = 1;
+        function adsResetAndLoad() { _adsPage = 1; loadAds(); }
+        function adsChangePage(delta) { _adsPage = Math.max(1, _adsPage + delta); loadAds(); }
         async function loadAds() {
             const container = document.getElementById('ads-list');
             container.innerHTML = '<div class="loading">טוען מודעות...</div>';
@@ -1290,15 +1305,30 @@
                 const minPrice = document.getElementById('minPriceFilter')?.value;
                 const maxPrice = document.getElementById('maxPriceFilter')?.value;
                 const phoneFilter = document.getElementById('phoneFilter')?.value;
+                const pageSize = parseInt(document.getElementById('adsPageSize')?.value || '50', 10);
                 if (city) params.append('city', city);
                 if (minPrice) params.append('minPrice', minPrice);
                 if (maxPrice) params.append('maxPrice', maxPrice);
                 if (phoneFilter) params.append('phoneFilter', phoneFilter);
+                params.append('limit', String(pageSize));
+                params.append('page', String(_adsPage));
                 const data = await fetchJSON('/dashboard/api/ads?' + params);
                 if (!data.success) throw new Error(data.error);
-                if (!data.data.length) { container.innerHTML = '<div class="loading">📋 אין מודעות</div>'; return; }
+                if (!data.data.length) {
+                    container.innerHTML = '<div class="loading">📋 אין מודעות בעמוד הזה</div>';
+                    document.getElementById('ads-page-info').textContent = 'עמוד ' + _adsPage;
+                    return;
+                }
                 _adsData = data.data;
-                document.getElementById('ads-pagination').textContent = 'סה"כ: ' + (data.pagination?.total || data.data.length) + ' מודעות | מוצגות: ' + data.data.length;
+                const total = data.pagination?.total || data.data.length;
+                const totalPages = Math.max(1, Math.ceil(total / pageSize));
+                document.getElementById('ads-pagination').textContent =
+                    'סה"כ: ' + total + ' מודעות | מוצגות: ' + data.data.length + ' (עמוד ' + _adsPage + ' מ-' + totalPages + ')';
+                document.getElementById('ads-page-info').textContent = 'עמוד ' + _adsPage + ' / ' + totalPages;
+                const prev = document.getElementById('ads-prev-page');
+                const next = document.getElementById('ads-next-page');
+                if (prev) prev.disabled = _adsPage <= 1;
+                if (next) next.disabled = _adsPage >= totalPages;
                 renderAdsTable(_adsData);
             } catch (e) { container.innerHTML = errorHTML(e.message, 'loadAds()'); }
         }
@@ -1479,6 +1509,12 @@
                     + '<td>' + (ad.area_sqm ? parseFloat(ad.area_sqm).toFixed(0) + ' מ"ר' : '\u2014') + '</td>'
                     + '<td>' + (ad.rooms || '\u2014') + '</td>'
                     + '<td style="color:' + ssiColor + ';font-weight:600;" title="SSI: ' + ssi + ' | זמן: ' + (ad.ssi_time_score||0) + ' | מחיר: ' + (ad.ssi_price_score||0) + ' | אינדיקטורים: ' + (ad.ssi_indicator_score||0) + '">' + (ad.ssi_score === null || ad.ssi_score === undefined ? '\u2014' : String(ad.ssi_score)) + '</td>'
+                    + (function(){
+                        // Day 10 round 2: source column with color-coded badge.
+                        var src = ad.source || '';
+                        var color = {yad2:'#ff8c00', yad1:'#ec4899', dira:'#a855f7', homeless:'#10b981', madlan:'#3b82f6', web_madlan:'#3b82f6', winwin:'#f59e0b', komo:'#06b6d4', facebook:'#1877f2', banknadlan:'#9ca3af', kones:'#ef4444', konesonline:'#ef4444', receivership:'#ef4444', govmap:'#6b7280'}[src] || 'var(--text-muted)';
+                        return '<td>' + (src ? '<span style="background:rgba(255,255,255,0.06);color:' + color + ';padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">' + src + '</span>' : '—') + '</td>';
+                      })()
                     + '<td>' + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:var(--blue);font-size:12px;">' + ad.phone + '</a>' : '<span style="color:var(--text-muted);font-size:11px;">אין</span>') + '</td>'
                     + '<td><div style="display:flex;gap:6px;">'
                     + '<button class="btn" style="padding:5px 12px;font-size:12px;background:var(--green);color:#000;" onclick="openSendModal(' + ad.id + ',\'' + (ad.source||'').replace(/\'/g,'') + '\',\'' + encodeURIComponent(title||'') + '\',\'' + (ad.url||'').replace(/\'/g,'') + '\',\'' + (ad.phone||'').replace(/\'/g,'') + '\')">💬 שלח</button>'
@@ -1503,17 +1539,36 @@
                 modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
                 document.body.appendChild(modal);
             }
-            // Detect channels
+            // Day 10 round 2: stricter channel + template filtering by source.
+            // Only show channels that the orchestrator's SOURCE_CASCADE actually
+            // routes to for this source. Same for templates — no point showing
+            // 'פייסבוק' template for a yad1 listing, etc.
+            const isMobile = phone && /^(972)?0?5[0-9]/.test(String(phone).replace(/\D/g,''));
             const channels = [];
             if (source === 'yad2' && url) channels.push({id:'yad2_chat',label:'💬 Yad2 Chat'});
             if (source === 'facebook' && url) channels.push({id:'fb_messenger',label:'💬 FB Messenger'});
             if (source === 'komo') channels.push({id:'komo_chat',label:'💬 Komo Chat'});
-            if (phone) channels.push({id:'whatsapp',label:'📱 WhatsApp'});
-            if (phone) channels.push({id:'sms',label:'📲 SMS'});
+            const platformChatSources = ['madlan','web_madlan','yad1','dira','homeless','winwin'];
+            if (platformChatSources.includes(source) && url) channels.push({id:'platform_chat',label:'🤖 ' + source + ' Form (Apify)'});
+            if (isMobile) channels.push({id:'whatsapp',label:'📱 WhatsApp'});
+            if (phone && !isMobile) channels.push({id:'sms',label:'📲 SMS'});
+            const konesSources = ['kones','konesonline','receivership'];
+            if (konesSources.includes(source) && phone) channels.push({id:'sms',label:'📲 SMS (Kones)'});
             if (channels.length === 0) channels.push({id:'manual',label:'📋 ידני'});
 
             const channelOpts = channels.map(ch => '<option value="' + ch.id + '">' + ch.label + '</option>').join('');
-            const templateOpts = '<option value="facebook_seller">📘 פייסבוק</option><option value="yad2_seller">🟧 יד2</option><option value="whatsapp_seller">📱 וואטסאפ</option><option value="sms_seller">📲 SMS</option><option value="kones_inquiry">⚖️ כינוס</option>';
+
+            // Templates filtered by source — only show templates that make sense here.
+            const allTemplates = {
+              facebook_seller:    {label:'📘 פייסבוק', sources:['facebook']},
+              yad2_seller:        {label:'🟧 יד2',     sources:['yad2']},
+              whatsapp_seller:    {label:'📱 וואטסאפ', sources:['yad2','yad1','dira','homeless','madlan','web_madlan','winwin','komo','facebook']},
+              sms_seller:         {label:'📲 SMS',      sources:['yad2','yad1','dira','homeless','madlan','web_madlan','winwin','komo','kones','konesonline','receivership']},
+              kones_inquiry:      {label:'⚖️ כינוס',    sources:['kones','konesonline','receivership','banknadlan','bidspirit']},
+            };
+            const validTemplates = Object.entries(allTemplates).filter(([k,t]) => !t.sources.length || t.sources.includes(source));
+            const templateOpts = (validTemplates.length ? validTemplates : Object.entries(allTemplates))
+              .map(([k,t]) => '<option value="' + k + '">' + t.label + '</option>').join('');
 
             modal.innerHTML = '<div style="background:var(--bg-card);border-radius:12px;padding:24px;width:480px;max-width:90vw;max-height:80vh;overflow-y:auto;border:1px solid var(--border-subtle);">'
                 + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
