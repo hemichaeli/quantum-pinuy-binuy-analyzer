@@ -402,9 +402,11 @@
                 <input type="text" class="filter-input" id="cityFilter" placeholder="עיר">
                 <input type="number" class="filter-input" id="minPriceFilter" placeholder="מחיר מינימום">
                 <input type="number" class="filter-input" id="maxPriceFilter" placeholder="מחיר מקסימום">
-                <select class="filter-select" id="phoneFilter">
+                <select class="filter-select" id="phoneFilter" onchange="loadAds()">
                     <option value="">כל הטלפון</option>
-                    <option value="yes">יש טלפון</option>
+                    <option value="mobile">📱 נייד בלבד (WhatsApp)</option>
+                    <option value="yes">יש טלפון (כולל נייח)</option>
+                    <option value="landline">📞 נייח בלבד</option>
                     <option value="no">אין טלפון</option>
                 </select>
                 <select class="filter-select" id="adsSortBy" onchange="loadAds()">
@@ -435,7 +437,7 @@
                     <tr id="ads-thead">
                         <th onclick="sortAdsBy('title')" data-sort-field="title">Property</th>
                         <th onclick="sortAdsBy('complex_status')" data-sort-field="complex_status">Status</th>
-                        <th>Performance Trend</th>
+                        <th title="ירידת מחיר מצטברת מאז תחילת המכירה — מדד לחץ מוכר אמיתי">ירידת מחיר ▼</th>
                         <th onclick="sortAdsBy('asking_price')" data-sort-field="asking_price">מחיר קנייה</th>
                         <th onclick="sortAdsBy('premium_percent')" data-sort-field="premium_percent">פרמייה %</th>
                         <th title="מחיר מכירה מוערך אחרי הפרויקט">מחיר מכירה מוערך</th>
@@ -1462,14 +1464,21 @@
                     + '</div><div style="font-size:11px;color:var(--text-muted);">' + (ad.city || '') + (ad.address ? ' | ' + ad.address.substring(0,30) : '') + '</div></div>'
                     + '</div></td>'
                     + '<td>' + statusBadge(adStatus) + '</td>'
-                    + '<td>' + miniSparkline(sparkColor) + '</td>'
+                    + (function(){
+                        // Day 10: replaced fake random sparkline with real price-drop indicator.
+                        // total_price_drop_percent comes from listings table (computed by SSI batch).
+                        var drop = parseFloat(ad.total_price_drop_percent || 0);
+                        if (!drop || drop <= 0) return '<td style="color:var(--text-muted);text-align:center;">—</td>';
+                        var color = drop > 15 ? 'var(--green)' : drop > 5 ? 'var(--gold)' : 'var(--text-secondary)';
+                        return '<td style="color:' + color + ';font-weight:700;font-size:13px;text-align:center;">▼' + drop.toFixed(1) + '%</td>';
+                      })()
                     + '<td style="color:var(--text-primary);font-weight:600;font-size:14px;">' + price + '</td>'
                     + '<td style="color:' + premNowColor + ';font-weight:600;">' + premNow + '</td>'
                     + '<td style="color:var(--blue);font-weight:600;font-size:13px;">' + (ad.estimated_sale_price ? '\u20AA' + parseInt(ad.estimated_sale_price).toLocaleString() : '\u2014') + '</td>'
                     + '<td style="color:var(--green);font-weight:700;font-size:13px;">' + (ad.profit_delta_ils && parseFloat(ad.profit_delta_ils) > 0 ? '+\u20AA' + parseInt(ad.profit_delta_ils).toLocaleString() : '\u2014') + '</td>'
                     + '<td>' + (ad.area_sqm ? parseFloat(ad.area_sqm).toFixed(0) + ' מ"ר' : '\u2014') + '</td>'
                     + '<td>' + (ad.rooms || '\u2014') + '</td>'
-                    + '<td style="color:' + ssiColor + ';font-weight:600;" title="SSI: ' + ssi + ' | זמן: ' + (ad.ssi_time_score||0) + ' | מחיר: ' + (ad.ssi_price_score||0) + ' | אינדיקטורים: ' + (ad.ssi_indicator_score||0) + '">' + (ssi || '\u2014') + '</td>'
+                    + '<td style="color:' + ssiColor + ';font-weight:600;" title="SSI: ' + ssi + ' | זמן: ' + (ad.ssi_time_score||0) + ' | מחיר: ' + (ad.ssi_price_score||0) + ' | אינדיקטורים: ' + (ad.ssi_indicator_score||0) + '">' + (ad.ssi_score === null || ad.ssi_score === undefined ? '\u2014' : String(ad.ssi_score)) + '</td>'
                     + '<td>' + (ad.phone ? '<a href="tel:' + ad.phone + '" style="color:var(--blue);font-size:12px;">' + ad.phone + '</a>' : '<span style="color:var(--text-muted);font-size:11px;">אין</span>') + '</td>'
                     + '<td><div style="display:flex;gap:6px;">'
                     + '<button class="btn" style="padding:5px 12px;font-size:12px;background:var(--green);color:#000;" onclick="openSendModal(' + ad.id + ',\'' + (ad.source||'').replace(/\'/g,'') + '\',\'' + encodeURIComponent(title||'') + '\',\'' + (ad.url||'').replace(/\'/g,'') + '\',\'' + (ad.phone||'').replace(/\'/g,'') + '\')">💬 שלח</button>'
