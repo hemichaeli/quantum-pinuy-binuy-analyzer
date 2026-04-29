@@ -1539,35 +1539,64 @@
                 modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
                 document.body.appendChild(modal);
             }
-            // Day 10 round 2: stricter channel + template filtering by source.
-            // Only show channels that the orchestrator's SOURCE_CASCADE actually
-            // routes to for this source. Same for templates — no point showing
-            // 'פייסבוק' template for a yad1 listing, etc.
+            // Day 10 round 3: tighter still — templates depend on whether their
+            // delivery channel is actually available, not just on source. Plus URL
+            // host validation: a 'yad1' listing whose url is yad2.co.il (data
+            // quality bug) can't use yad1's contact form, so don't offer it.
             const isMobile = phone && /^(972)?0?5[0-9]/.test(String(phone).replace(/\D/g,''));
+            const urlHost = (url || '').match(/^https?:\/\/(?:www\.)?([^\/]+)/i)?.[1] || '';
+            const sourceMatchesUrl = (s, host) => {
+              if (!host) return false;
+              if (s === 'yad2' || s === 'web_yad2') return host.includes('yad2.co.il');
+              if (s === 'yad1') return host.includes('yad1.co.il');
+              if (s === 'madlan' || s === 'web_madlan') return host.includes('madlan.co.il');
+              if (s === 'dira') return host.includes('dira.co.il');
+              if (s === 'homeless') return host.includes('homeless.co.il');
+              if (s === 'winwin') return host.includes('winwin');
+              if (s === 'komo') return host.includes('komo.co.il');
+              if (s === 'facebook') return host.includes('facebook.com');
+              return false;
+            };
+            const platformUrlValid = sourceMatchesUrl(source, urlHost);
+
             const channels = [];
-            if (source === 'yad2' && url) channels.push({id:'yad2_chat',label:'💬 Yad2 Chat'});
-            if (source === 'facebook' && url) channels.push({id:'fb_messenger',label:'💬 FB Messenger'});
-            if (source === 'komo') channels.push({id:'komo_chat',label:'💬 Komo Chat'});
+            // Channel availability ↔ has the right URL host AND/OR a usable phone
+            if (source === 'yad2' && platformUrlValid) channels.push({id:'yad2_chat',label:'💬 Yad2 Chat'});
+            if (source === 'facebook' && platformUrlValid) channels.push({id:'fb_messenger',label:'💬 FB Messenger'});
+            if (source === 'komo' && platformUrlValid) channels.push({id:'komo_chat',label:'💬 Komo Chat'});
             const platformChatSources = ['madlan','web_madlan','yad1','dira','homeless','winwin'];
-            if (platformChatSources.includes(source) && url) channels.push({id:'platform_chat',label:'🤖 ' + source + ' Form (Apify)'});
+            if (platformChatSources.includes(source) && platformUrlValid) {
+              channels.push({id:'platform_chat',label:'🤖 ' + source + ' Form (Apify)'});
+            }
             if (isMobile) channels.push({id:'whatsapp',label:'📱 WhatsApp'});
             if (phone && !isMobile) channels.push({id:'sms',label:'📲 SMS'});
             const konesSources = ['kones','konesonline','receivership'];
             if (konesSources.includes(source) && phone) channels.push({id:'sms',label:'📲 SMS (Kones)'});
-            if (channels.length === 0) channels.push({id:'manual',label:'📋 ידני'});
 
-            const channelOpts = channels.map(ch => '<option value="' + ch.id + '">' + ch.label + '</option>').join('');
+            // If nothing is available, offer manual + the listing URL as a clickable note.
+            if (channels.length === 0) {
+              const manualLabel = url ? '📋 ידני (פתח את המודעה)' : '📋 ידני';
+              channels.push({id:'manual', label: manualLabel});
+            }
 
-            // Templates filtered by source — only show templates that make sense here.
+            // Templates filtered by AVAILABLE CHANNELS, not just source.
+            // 'whatsapp_seller' only when whatsapp channel exists, etc.
+            const channelIds = new Set(channels.map(c => c.id));
             const allTemplates = {
-              facebook_seller:    {label:'📘 פייסבוק', sources:['facebook']},
-              yad2_seller:        {label:'🟧 יד2',     sources:['yad2']},
-              whatsapp_seller:    {label:'📱 וואטסאפ', sources:['yad2','yad1','dira','homeless','madlan','web_madlan','winwin','komo','facebook']},
-              sms_seller:         {label:'📲 SMS',      sources:['yad2','yad1','dira','homeless','madlan','web_madlan','winwin','komo','kones','konesonline','receivership']},
-              kones_inquiry:      {label:'⚖️ כינוס',    sources:['kones','konesonline','receivership','banknadlan','bidspirit']},
+              facebook_seller:    {label:'📘 פייסבוק',  needsChannel: 'fb_messenger'},
+              yad2_seller:        {label:'🟧 יד2',       needsChannel: 'yad2_chat'},
+              whatsapp_seller:    {label:'📱 וואטסאפ',  needsChannel: 'whatsapp'},
+              sms_seller:         {label:'📲 SMS',       needsChannel: 'sms'},
+              kones_inquiry:      {label:'⚖️ כינוס',     needsChannel: 'sms', onlySources:['kones','konesonline','receivership','banknadlan','bidspirit']},
+              platform_chat_msg:  {label:'🤖 טופס פלטפורמה', needsChannel: 'platform_chat'},
+              manual_note:        {label:'📋 הערה ידנית', needsChannel: 'manual'},
             };
-            const validTemplates = Object.entries(allTemplates).filter(([k,t]) => !t.sources.length || t.sources.includes(source));
-            const templateOpts = (validTemplates.length ? validTemplates : Object.entries(allTemplates))
+            const validTemplates = Object.entries(allTemplates).filter(([k,t]) => {
+              if (!channelIds.has(t.needsChannel)) return false;
+              if (t.onlySources && !t.onlySources.includes(source)) return false;
+              return true;
+            });
+            const templateOpts = (validTemplates.length ? validTemplates : [['manual_note',{label:'📋 ידני'}]])
               .map(([k,t]) => '<option value="' + k + '">' + t.label + '</option>').join('');
 
             modal.innerHTML = '<div style="background:var(--bg-card);border-radius:12px;padding:24px;width:480px;max-width:90vw;max-height:80vh;overflow-y:auto;border:1px solid var(--border-subtle);">'
@@ -1575,6 +1604,13 @@
                 + '<h3 style="margin:0;color:var(--text-primary);">💬 שליחת הודעה</h3>'
                 + '<button onclick="closeSendModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;">✕</button></div>'
                 + '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">' + title + ' | ' + source + '</div>'
+                + (channels.length === 1 && channels[0].id === 'manual'
+                    ? '<div style="background:rgba(245,158,11,0.10);color:var(--gold);padding:8px 12px;border-radius:6px;border-left:3px solid var(--gold);font-size:12px;margin-bottom:10px;">⚠️ אין ערוץ שליחה אוטומטי לליסטינג זה'
+                      + (phone ? '' : ' (אין טלפון)')
+                      + (url && !platformUrlValid ? ' — ה-URL לא של פלטפורמה הנתמכת' : '')
+                      + (url ? '. <a href="' + url + '" target="_blank" style="color:var(--blue);">פתח את המודעה</a> ושלח ידנית.' : '.')
+                      + '</div>'
+                    : '')
                 + '<div style="display:flex;gap:10px;margin-bottom:12px;">'
                 + '<div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">ערוץ</label><select id="send-channel" class="filter-select" style="width:100%;">' + channelOpts + '</select></div>'
                 + '<div style="flex:1;"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">תבנית</label><select id="send-template" class="filter-select" style="width:100%;" onchange="loadTemplate()">' + templateOpts + '</select></div></div>'
