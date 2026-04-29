@@ -351,6 +351,8 @@ async function sendToListing(listing, messageText, options = {}) {
               });
               result.success = waResult.success !== false;
               result.inforu_channel = waResult.channel; // 'whatsapp_chat' or 'sms'
+              // Day 10: persist customerMessageId so DLR cron can mark delivered/read.
+              if (waResult.customerMessageId) result.external_id = waResult.customerMessageId;
               if (!result.success) result.error = waResult.description || waResult.error;
             } catch (e) {
               // InForu failed entirely, generate link as fallback
@@ -425,8 +427,8 @@ async function sendToListing(listing, messageText, options = {}) {
       : (result.pending_manual ? 'pending_manual'
       : (result.manual_url ? 'manual' : 'failed')));
     await pool.query(
-      `UPDATE unified_messages SET status = $1, error_message = $2, channel = $3, updated_at = NOW() WHERE id = $4`,
-      [finalStatus, result.error, result.channel, result.message_id]
+      `UPDATE unified_messages SET status = $1, error_message = $2, channel = $3, external_id = COALESCE($5, external_id), updated_at = NOW() WHERE id = $4`,
+      [finalStatus, result.error, result.channel, result.message_id, result.external_id || null]
     ).catch(() => {
       pool.query(
         `UPDATE listing_messages SET status = $1, error_message = $2, channel = $3 WHERE id = $4`,
