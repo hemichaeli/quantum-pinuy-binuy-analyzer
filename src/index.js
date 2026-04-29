@@ -390,6 +390,8 @@ async function start() {
   await runMigrationFile('AI scan cleanup (026)', path.join(__dirname, 'db', 'migrations', '026_cleanup_ai_scan_listings.sql'));
   // 2026-04-30 (Day 10): WhatsApp delivery tracking (DLR cron)
   await runMigrationFile('WhatsApp DLR (027)', path.join(__dirname, 'db', 'migrations', '027_whatsapp_dlr.sql'));
+  // 2026-04-30 (Day 10): lead archive support
+  await runMigrationFile('Lead archive (028)', path.join(__dirname, 'db', 'migrations', '028_lead_archive.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();

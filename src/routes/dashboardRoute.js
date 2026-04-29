@@ -73,16 +73,61 @@ router.get('/api/whatsapp/messages', async (req, res) => {
 
 router.get('/api/leads', async (req, res) => {
     try {
-        const { status } = req.query;
-        let query = `SELECT id, name, phone, email, user_type, status, source, notes, is_urgent, created_at FROM website_leads WHERE 1=1`;
+        const { status, archived } = req.query;
+        // Day 10: default view excludes archived leads. Pass archived=true to view archive,
+        // archived=all to view both.
+        let query = `SELECT id, name, phone, email, user_type, status, source, notes, is_urgent, is_archived, archived_at, created_at FROM website_leads WHERE 1=1`;
         const params = [];
-        if (status) { query += ` AND status = $1`; params.push(status); }
-        query += ` ORDER BY created_at DESC LIMIT 100`;
+        let n = 1;
+        if (archived === 'true')      { query += ` AND is_archived = TRUE`; }
+        else if (archived === 'all')  { /* no filter */ }
+        else                          { query += ` AND is_archived = FALSE`; }
+        if (status) { query += ` AND status = $${n}`; params.push(status); n++; }
+        query += ` ORDER BY created_at DESC LIMIT 200`;
         const result = await pool.query(query, params);
         res.json({ success: true, data: result.rows });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
+});
+
+// Day 10: bulk archive — body { ids: [...] }
+router.post('/api/leads/bulk-archive', async (req, res) => {
+    try {
+        const ids = (req.body?.ids || []).map(Number).filter(n => Number.isFinite(n));
+        if (!ids.length) return res.status(400).json({ success: false, error: 'ids array required' });
+        const r = await pool.query(
+            `UPDATE website_leads SET is_archived = TRUE, archived_at = NOW(), updated_at = NOW() WHERE id = ANY($1) RETURNING id`,
+            [ids]
+        );
+        res.json({ success: true, archived: r.rowCount, ids: r.rows.map(x => x.id) });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Day 10: bulk un-archive — restore from archive
+router.post('/api/leads/bulk-unarchive', async (req, res) => {
+    try {
+        const ids = (req.body?.ids || []).map(Number).filter(n => Number.isFinite(n));
+        if (!ids.length) return res.status(400).json({ success: false, error: 'ids array required' });
+        const r = await pool.query(
+            `UPDATE website_leads SET is_archived = FALSE, archived_at = NULL, updated_at = NOW() WHERE id = ANY($1) RETURNING id`,
+            [ids]
+        );
+        res.json({ success: true, restored: r.rowCount, ids: r.rows.map(x => x.id) });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Day 10: bulk hard delete — permanent. Cascades to lead_matches via FK ON DELETE CASCADE.
+router.post('/api/leads/bulk-delete', async (req, res) => {
+    try {
+        const ids = (req.body?.ids || []).map(Number).filter(n => Number.isFinite(n));
+        if (!ids.length) return res.status(400).json({ success: false, error: 'ids array required' });
+        const r = await pool.query(
+            `DELETE FROM website_leads WHERE id = ANY($1) RETURNING id`,
+            [ids]
+        );
+        res.json({ success: true, deleted: r.rowCount, ids: r.rows.map(x => x.id) });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 router.get('/api/complexes', async (req, res) => {

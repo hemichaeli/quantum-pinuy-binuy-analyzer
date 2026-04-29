@@ -669,11 +669,20 @@
                 </select>
             </div>
             <div class="actions-bar">
-                <button class="btn" onclick="loadLeads()">👤 כל הלידים</button>
+                <button class="btn" onclick="setLeadsView('active')">👤 כל הלידים</button>
                 <button class="btn btn-secondary" onclick="loadLeads('qualified')">✰ מוכשרים</button>
                 <button class="btn btn-secondary" onclick="loadLeads('contacted')">📞 בתהליך</button>
                 <button class="btn btn-secondary" onclick="loadLeads('new')">🆕 חדשים</button>
+                <button class="btn btn-secondary" id="leads-view-archive" onclick="setLeadsView('archived')">🗄 ארכיון</button>
                 <button class="btn btn-green" onclick="exportData('leads')">📊 ייצוא לאקסל</button>
+            </div>
+            <!-- Day 10: bulk-action toolbar — appears when N>0 selected -->
+            <div id="leads-bulk-bar" style="display:none;margin-bottom:8px;padding:8px 12px;background:rgba(78,205,196,0.10);border:1px solid var(--teal);border-radius:6px;display:none;align-items:center;gap:10px;flex-wrap:wrap;">
+                <span id="leads-bulk-count" style="font-size:13px;color:var(--teal);font-weight:600;">0 נבחרו</span>
+                <button class="btn btn-secondary" id="leads-bulk-archive" onclick="bulkLeadAction('archive')" style="padding:5px 12px;font-size:12px;">📁 העבר לארכיון</button>
+                <button class="btn btn-secondary" id="leads-bulk-unarchive" onclick="bulkLeadAction('unarchive')" style="padding:5px 12px;font-size:12px;display:none;">↩ שחזר מארכיון</button>
+                <button class="btn" onclick="bulkLeadAction('delete')" style="padding:5px 12px;font-size:12px;background:#dc2626;color:#fff;">🗑 מחק לצמיתות</button>
+                <button class="btn btn-secondary" onclick="clearLeadsSelection()" style="padding:5px 12px;font-size:12px;">בטל בחירה</button>
             </div>
             <div id="leads-filter-badge" style="margin-bottom:8px;"></div>
             <div id="leads-list" class="data-list"><div class="loading">טוען לידים...</div></div>
@@ -2030,10 +2039,18 @@
         }
 
         let _leadsData = [], _leadsSortField = 'created_at', _leadsSortDir = 'desc';
+        let _leadsView = 'active';        // 'active' | 'archived'
+        let _leadsSelected = new Set();   // selected lead IDs
         function sortLeadsBy(field) {
             if (_leadsSortField === field) _leadsSortDir = _leadsSortDir === 'asc' ? 'desc' : 'asc';
             else { _leadsSortField = field; _leadsSortDir = 'desc'; }
             renderLeadsTable(_leadsData);
+        }
+        function setLeadsView(view) {
+            _leadsView = view;
+            _leadsSelected.clear();
+            updateBulkBar();
+            loadLeads();
         }
         async function loadLeads(filter) {
             const container = document.getElementById('leads-list');
@@ -2048,12 +2065,61 @@
                 if (status) params.append('status', status);
                 if (type) params.append('user_type', type);
                 if (source) params.append('source', source);
+                if (_leadsView === 'archived') params.append('archived', 'true');
                 const data = await fetchJSON('/dashboard/api/leads?' + params);
                 if (!data.success) throw new Error(data.error);
                 _leadsData = data.data || [];
-                if (!_leadsData.length) { container.innerHTML = '<div class="loading">👤 אין לידים בסינון הנ״ל</div>'; return; }
+                if (!_leadsData.length) {
+                    container.innerHTML = '<div class="loading">' + (_leadsView === 'archived' ? '🗄 הארכיון ריק' : '👤 אין לידים בסינון הנ״ל') + '</div>';
+                    return;
+                }
                 renderLeadsTable(_leadsData);
             } catch (e) { container.innerHTML = errorHTML(e.message, 'loadLeads()'); }
+        }
+        function updateBulkBar() {
+            const bar = document.getElementById('leads-bulk-bar');
+            const count = document.getElementById('leads-bulk-count');
+            if (!bar) return;
+            if (_leadsSelected.size === 0) { bar.style.display = 'none'; return; }
+            bar.style.display = 'flex';
+            count.textContent = _leadsSelected.size + ' נבחרו';
+            // Show 'unarchive' button instead of 'archive' when in archive view
+            const archBtn = document.getElementById('leads-bulk-archive');
+            const unarchBtn = document.getElementById('leads-bulk-unarchive');
+            if (archBtn) archBtn.style.display = _leadsView === 'archived' ? 'none' : '';
+            if (unarchBtn) unarchBtn.style.display = _leadsView === 'archived' ? '' : 'none';
+        }
+        function toggleLeadSelection(id, checked) {
+            if (checked) _leadsSelected.add(id);
+            else _leadsSelected.delete(id);
+            updateBulkBar();
+        }
+        function toggleAllLeadSelections(checked) {
+            _leadsSelected.clear();
+            if (checked) _leadsData.forEach(l => _leadsSelected.add(l.id));
+            document.querySelectorAll('input.lead-row-check').forEach(cb => { cb.checked = checked; });
+            updateBulkBar();
+        }
+        function clearLeadsSelection() {
+            _leadsSelected.clear();
+            document.querySelectorAll('input.lead-row-check').forEach(cb => { cb.checked = false; });
+            const all = document.getElementById('lead-check-all'); if (all) all.checked = false;
+            updateBulkBar();
+        }
+        async function bulkLeadAction(action) {
+            const ids = Array.from(_leadsSelected);
+            if (!ids.length) return;
+            const verb = { archive: 'להעביר לארכיון', unarchive: 'לשחזר', delete: 'למחוק לצמיתות' }[action];
+            if (action === 'delete' && !confirm('בטוח/ה שברצונך למחוק לצמיתות ' + ids.length + ' לידים? אין דרך חזרה.')) return;
+            if (action !== 'delete' && !confirm('האם ' + verb + ' ' + ids.length + ' לידים?')) return;
+            try {
+                await fetchJSON('/dashboard/api/leads/bulk-' + action, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids })
+                });
+                clearLeadsSelection();
+                loadLeads();
+            } catch (e) { alert('שגיאה: ' + e.message); }
         }
 
         function renderLeadsTable(leads) {
@@ -2073,6 +2139,7 @@
             const th = (label, field) => '<th onclick="sortLeadsBy(\'' + field + '\')">' + label + ' <span style="color:' + (sf===field?'var(--gold)':'var(--text-muted)') + ';">' + (sf===field?(sd==='asc'?'▲':'▼'):'▲▼') + '</span></th>';
             container.innerHTML = '<div style="overflow-x:auto;"><table class="tbl">'
                 + '<thead><tr>'
+                + '<th style="width:30px;"><input type="checkbox" id="lead-check-all" onchange="toggleAllLeadSelections(this.checked)" title="בחר/בטל הכל"></th>'
                 + th('שם','name') + th('טלפון','phone') + th('אימייל','email') + th('סטטוס','status') + th('מקור','source') + th('סוג','user_type')
                 + '<th>הערות</th>'
                 + th('תאריך','created_at')
@@ -2083,8 +2150,10 @@
                     const stHe = statusHe[st] || st;
                     const type = typeLabel[lead.user_type] || lead.user_type || '\u2014';
                     const date = lead.created_at ? new Date(lead.created_at).toLocaleDateString('he-IL') : '\u2014';
-                    return '<tr class="trow">'
-                        + '<td style="font-weight:600;">' + (lead.name || 'ליד #' + (i+1)) + (lead.is_urgent ? ' 🚨' : '') + '</td>'
+                    const checked = _leadsSelected.has(lead.id) ? 'checked' : '';
+                    return '<tr class="trow"' + (lead.is_archived ? ' style="opacity:0.55;"' : '') + '>'
+                        + '<td><input type="checkbox" class="lead-row-check" data-id="' + lead.id + '" ' + checked + ' onchange="toggleLeadSelection(' + lead.id + ', this.checked)"></td>'
+                        + '<td style="font-weight:600;">' + (lead.name || 'ליד #' + (i+1)) + (lead.is_urgent ? ' 🚨' : '') + (lead.is_archived ? ' <span style="font-size:10px;color:var(--text-muted);">🗄</span>' : '') + '</td>'
                         + '<td>' + (lead.phone ? '<a href="tel:' + lead.phone + '" style="color:var(--blue);">' + lead.phone + '</a>' : '\u2014') + '</td>'
                         + '<td style="font-size:12px;">' + (lead.email || '\u2014') + '</td>'
                         + '<td><span style="background:' + stColor + '22;color:' + stColor + ';padding:2px 8px;border-radius:4px;font-size:11px;">' + stHe + '</span></td>'
@@ -2095,6 +2164,7 @@
                         + '</tr>';
                 }).join('')
                 + '</tbody></table></div>';
+            updateBulkBar();
         }
 
         async function loadComplexes(filter) {
