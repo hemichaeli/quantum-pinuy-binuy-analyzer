@@ -57,11 +57,24 @@ async function queryYad1Direct(city, limit = 50) {
   }
 }
 
+// Day 10: yad1.co.il returns 404 — the platform appears defunct. Until that
+// changes, validate any URL claiming to be yad1 actually points at yad1.co.il.
+// Otherwise the listing isn't real and shouldn't be saved (or should be
+// flagged so it doesn't leak into the operator's send queue).
+function isValidYad1Url(u) {
+  if (!u || typeof u !== 'string') return false;
+  return /^https?:\/\/(www\.)?yad1\.co\.il\//i.test(u);
+}
+
 function parseYad1Item(item, defaultCity) {
   const phone = item.phone || item.contactPhone || item.contact?.phone || null;
   const price = parseInt(String(item.price || item.askingPrice || '').replace(/\D/g, '')) || null;
   const thumbnail = item.images?.[0]?.src || item.images?.[0]?.url ||
     item.thumbnail || item.cover_image || item.image || item.img_url || null;
+  // Only keep URL if it's actually a yad1 URL; otherwise null so the modal
+  // routes correctly (manual fallback rather than offering broken platform_chat).
+  const rawUrl = item.url || (item.id ? `https://www.yad1.co.il/item/${item.id}` : null);
+  const url = isValidYad1Url(rawUrl) ? rawUrl : null;
   return {
     source: 'yad1',
     listing_id: String(item.id || item.adId || ''),
@@ -73,7 +86,7 @@ function parseYad1Item(item, defaultCity) {
     floor: parseInt(item.floor || 0) || null,
     phone: cleanPhone(phone),
     contact_name: item.contactName || item.sellerName || null,
-    url: item.url || (item.id ? `https://www.yad1.co.il/item/${item.id}` : null),
+    url,
     description: (item.description || item.title || '').substring(0, 500),
     thumbnail_url: thumbnail
   };
@@ -135,7 +148,10 @@ async function queryYad1Perplexity(city) {
       floor: parseInt(item.floor) || null,
       phone: cleanPhone(item.phone),
       contact_name: item.contact_name || null,
-      url: item.url || null,
+      // Perplexity often returns yad2 search-page URLs when answering yad1
+      // queries (yad1.co.il is 404). Drop non-yad1 URLs so the modal won't
+      // offer a broken 'platform_chat' route.
+      url: isValidYad1Url(item.url) ? item.url : null,
       description: (item.description || '').substring(0, 500)
     }));
   } catch (err) {
