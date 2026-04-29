@@ -219,7 +219,7 @@ ${complex.addresses ? `כתובות: ${complex.addresses}` : ''}
   "planned_units": מספר,
   "local_committee_date": "YYYY-MM-DD או null",
   "district_committee_date": "YYYY-MM-DD או null",
-  "listings": [{"address": "...", "price": מספר, "rooms": מספר, "sqm": מספר}],
+  "listings": [{"address": "...", "price": מספר, "rooms": מספר, "sqm": מספר, "phone": "מספר טלפון או null", "url": "URL מלא של המודעה או null", "contact_name": "שם איש קשר או null"}],
   "recent_news": "סיכום חדשות",
   "sources": ["רשימת מקורות"]
 }`;
@@ -437,8 +437,20 @@ async function processListingFromAI(listing, complexId, city) {
   const rooms = parseFloat(listing.rooms) || null;
   const sqm = parseFloat(listing.sqm || listing.area_sqm) || null;
   const address = listing.address || '';
+  const phone = listing.phone && String(listing.phone).trim() && listing.phone !== 'null' ? String(listing.phone).trim() : null;
+  const url = listing.url && String(listing.url).trim() && listing.url !== 'null' ? String(listing.url).trim() : null;
+  const contactName = listing.contact_name && listing.contact_name !== 'null' ? listing.contact_name : null;
 
   if (!price || !address) return;
+
+  // Day 10: skip listings without ANY contact mechanism. AI-generated rows
+  // with no phone and no URL are noise — operator can't reach them.
+  // The prompt now asks for phone + url; if AI couldn't find either,
+  // the listing is unusable for outreach.
+  if (!phone && !url) {
+    logger.debug(`[AIScan] skip ${address}: no phone, no URL`);
+    return;
+  }
 
   const pricePsm = (price && sqm) ? Math.round(price / sqm) : null;
   const sourceId = `ai-${complexId}-${address}-${price}`;
@@ -447,10 +459,11 @@ async function processListingFromAI(listing, complexId, city) {
     `INSERT INTO listings (
       complex_id, source, source_listing_id,
       asking_price, rooms, area_sqm, price_per_sqm,
-      address, city, first_seen, last_seen, is_active
-    ) VALUES ($1, 'ai_scan', $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE, CURRENT_DATE, TRUE)
+      address, city, phone, contact_name, url,
+      first_seen, last_seen, is_active
+    ) VALUES ($1, 'ai_scan', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, CURRENT_DATE, TRUE)
     ON CONFLICT DO NOTHING`,
-    [complexId, sourceId, price, rooms, sqm, pricePsm, address, city]
+    [complexId, sourceId, price, rooms, sqm, pricePsm, address, city, phone, contactName, url]
   );
 }
 

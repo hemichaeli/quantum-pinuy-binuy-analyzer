@@ -74,6 +74,10 @@ const SOURCE_CASCADE = {
   banknadlan: ['platform_link'],          // auctions: attorney email contact, no phone
   bidspirit:  ['platform_link'],          // auction site: bid form, no chat API
   govmap:     ['platform_link'],          // government records, no contact
+  // ai_scan: AI-discovered listings via claudeOrchestrator. Whatever URL the
+  // AI returns may be on any platform, so we can't claim platform_chat.
+  // Just WhatsApp (if phone) and platform_link (manual fallback).
+  ai_scan:    ['whatsapp', 'platform_link'],
   kones:           ['sms', 'whatsapp', 'platform_link'],
   receivership:    ['sms', 'whatsapp', 'platform_link'],
   konesonline:     ['sms', 'whatsapp', 'platform_link'],

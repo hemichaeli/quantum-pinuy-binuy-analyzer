@@ -386,6 +386,8 @@ async function start() {
   await runMigrationFile('Bad yad1 URL cleanup (024)', path.join(__dirname, 'db', 'migrations', '024_cleanup_bad_yad1_urls.sql'));
   // 2026-04-30 (Day 10): retire all yad1 listings (platform defunct)
   await runMigrationFile('Yad1 retirement (025)', path.join(__dirname, 'db', 'migrations', '025_retire_yad1_listings.sql'));
+  // 2026-04-30 (Day 10): deactivate ai_scan listings without contact info
+  await runMigrationFile('AI scan cleanup (026)', path.join(__dirname, 'db', 'migrations', '026_cleanup_ai_scan_listings.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
