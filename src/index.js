@@ -382,6 +382,8 @@ async function start() {
   await runMigrationFile('Optouts + outcomes (022)', path.join(__dirname, 'db', 'migrations', '022_optouts_and_match_outcomes.sql'));
   // 2026-04-29 (Day 8.5): Unique index on listings(source, address, city) for yad2Scraper ON CONFLICT
   await runMigrationFile('Listings unique idx (023)', path.join(__dirname, 'db', 'migrations', '023_listings_unique_index.sql'));
+  // 2026-04-30 (Day 10): clean up yad1 listings with non-yad1 URLs (yad1.co.il is 404)
+  await runMigrationFile('Bad yad1 URL cleanup (024)', path.join(__dirname, 'db', 'migrations', '024_cleanup_bad_yad1_urls.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
