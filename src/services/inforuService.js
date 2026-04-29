@@ -512,8 +512,9 @@ async function logMessage(result, message, phones, options = {}) {
   try {
     await pool.query(`CREATE TABLE IF NOT EXISTS sent_messages (id SERIAL PRIMARY KEY, phone VARCHAR(20), message TEXT, template_key VARCHAR(50), status VARCHAR(20), status_code INTEGER, status_description TEXT, listing_id INTEGER, complex_id INTEGER, channel VARCHAR(20) DEFAULT 'sms', template_id VARCHAR(50), sender VARCHAR(50) DEFAULT 'QUANTUM', created_at TIMESTAMP DEFAULT NOW())`);
     for (const phone of phones) {
-      await pool.query(`INSERT INTO sent_messages (phone, message, template_key, status, status_code, status_description, listing_id, complex_id, channel, template_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [phone, message.substring(0, 500), options.templateKey || null, result.success ? 'sent' : 'failed', result.status, result.description, options.listingId || null, options.complexId || null, options.channel || 'sms', result.templateId || null]);
+      // Day 10: persist customerMessageId as external_id so DLR cron can match
+      await pool.query(`INSERT INTO sent_messages (phone, message, template_key, status, status_code, status_description, listing_id, complex_id, channel, template_id, external_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [phone, message.substring(0, 500), options.templateKey || null, result.success ? 'sent' : 'failed', result.status, result.description, options.listingId || null, options.complexId || null, options.channel || 'sms', result.templateId || null, result.customerMessageId || null]);
     }
   } catch (err) { logger.warn('Failed to log message', { error: err.message }); }
 }

@@ -388,6 +388,8 @@ async function start() {
   await runMigrationFile('Yad1 retirement (025)', path.join(__dirname, 'db', 'migrations', '025_retire_yad1_listings.sql'));
   // 2026-04-30 (Day 10): deactivate ai_scan listings without contact info
   await runMigrationFile('AI scan cleanup (026)', path.join(__dirname, 'db', 'migrations', '026_cleanup_ai_scan_listings.sql'));
+  // 2026-04-30 (Day 10): WhatsApp delivery tracking (DLR cron)
+  await runMigrationFile('WhatsApp DLR (027)', path.join(__dirname, 'db', 'migrations', '027_whatsapp_dlr.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
@@ -456,6 +458,13 @@ async function start() {
       cron.schedule('* * * * *', async () => { try { await pollIncomingWhatsApp(); } catch (e) {} });
       logger.info('[IncomingWA] ACTIVE - polling INFORU every 60s');
     } catch (e) { logger.warn('[IncomingWA] Failed:', e.message); }
+
+    try {
+      const { pollDlr } = require('./cron/whatsappDLRCron');
+      const cron = require('node-cron');
+      cron.schedule('* * * * *', async () => { try { await pollDlr(); } catch (e) {} });
+      logger.info('[WhatsAppDLR] ACTIVE - polling INFORU delivery receipts every 60s');
+    } catch (e) { logger.warn('[WhatsAppDLR] Failed:', e.message); }
 
     try {
       const cron = require('node-cron');
