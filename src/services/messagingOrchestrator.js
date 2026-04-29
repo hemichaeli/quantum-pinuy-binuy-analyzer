@@ -44,46 +44,56 @@ function getPhoneOrch() {
  * Compute available channels for a listing based on source and data
  * Priority order: platform first, then WhatsApp, then manual
  */
+// Day 8.7: cascade map for ALL scraped platforms.
+// Source → channel priority list (filtered later by what's actually present).
+// Channel types:
+//   'yad2_chat' / 'fb_messenger' / 'komo_chat' — true platform-chat APIs (real send)
+//   'whatsapp'                                 — INFORU send to phone
+//   'sms'                                      — INFORU SMS (kones/receivership)
+//   'platform_link'                            — clickable URL the operator opens in the
+//                                                platform UI to message via the platform's
+//                                                built-in chat (no automated send for
+//                                                platforms that don't expose a chat API).
+//   'manual'                                   — last resort if nothing else applies
+const SOURCE_CASCADE = {
+  yad2:       ['whatsapp', 'yad2_chat', 'platform_link'],
+  yad1:       ['whatsapp', 'platform_link'],
+  dira:       ['whatsapp', 'platform_link'],
+  homeless:   ['whatsapp', 'platform_link'],
+  madlan:     ['whatsapp', 'platform_link'],
+  web_madlan: ['whatsapp', 'platform_link'],
+  winwin:     ['whatsapp', 'platform_link'],
+  komo:       ['komo_chat', 'whatsapp', 'platform_link'],
+  facebook:   ['fb_messenger', 'platform_link'],
+  banknadlan: ['platform_link'],          // auctions: attorney email contact, no phone
+  bidspirit:  ['platform_link'],          // auction site: bid form, no chat API
+  govmap:     ['platform_link'],          // government records, no contact
+  kones:           ['sms', 'whatsapp', 'platform_link'],
+  receivership:    ['sms', 'whatsapp', 'platform_link'],
+  konesonline:     ['sms', 'whatsapp', 'platform_link'],
+};
+
 function detectAvailableChannels(listing) {
-  const channels = [];
   const source = (listing.source || '').toLowerCase();
   const hasPhone = listing.phone && listing.phone.length > 5;
   const hasUrl = !!listing.url;
+  const hasItemId = !!listing.source_listing_id;
 
-  // For yad2: WhatsApp is primary (most private listings use WhatsApp, not internal chat)
-  // yad2_chat (leave details + Sendbird) is secondary
-  if (source === 'yad2') {
-    if (hasPhone) {
-      channels.push('whatsapp'); // WhatsApp first - most yad2 private listings use this
-    }
-    if (hasUrl || listing.source_listing_id) {
-      channels.push('yad2_chat'); // Leave details form + Sendbird as backup
-    }
-  }
+  // Look up cascade by source; default to whatsapp+platform_link for unknown sources.
+  const cascade = SOURCE_CASCADE[source] || ['whatsapp', 'platform_link'];
 
-  // Other platforms: native chat first
-  if (source === 'facebook' && hasUrl) {
-    channels.push('fb_messenger');
-  }
-  if (source === 'komo' && (hasUrl || listing.source_listing_id)) {
-    channels.push('komo_chat');
-  }
+  const channels = cascade.filter(channel => {
+    if (channel === 'whatsapp') return hasPhone;
+    if (channel === 'sms')      return hasPhone;
+    if (channel === 'yad2_chat') return hasUrl || hasItemId;
+    if (channel === 'fb_messenger') return hasUrl;
+    if (channel === 'komo_chat')    return hasUrl || hasItemId;
+    if (channel === 'platform_link') return hasUrl;
+    return false;
+  });
 
-  // WhatsApp for non-yad2 (priority 2 — only if phone exists)
-  if (source !== 'yad2' && hasPhone) {
-    channels.push('whatsapp');
-  }
-
-  // SMS for kones/receivership
-  if ((source === 'kones' || source === 'receivership') && hasPhone) {
-    channels.push('sms');
-  }
-
-  // Manual fallback
-  if (channels.length === 0) {
-    channels.push('manual');
-  }
-
+  // Manual fallback if cascade produced nothing (no phone, no URL).
+  if (channels.length === 0) channels.push('manual');
   return channels;
 }
 
@@ -357,6 +367,17 @@ async function sendToListing(listing, messageText, options = {}) {
         }
       }
 
+      else if (channel === 'platform_link') {
+        // Day 8.7: surfaces the listing URL so an operator can open it and
+        // message via the platform's built-in chat. Records the message as
+        // pending_manual so it shows in the dashboard "to-message" backlog.
+        result.channel = 'platform_link';
+        result.manual_url = listing.url || null;
+        // We don't mark success — operator must follow up. But this is the
+        // right outcome for sources where automated chat isn't possible.
+        result.pending_manual = true;
+      }
+
       else if (channel === 'manual') {
         result.channel = 'manual';
         result.manual_url = listing.url;
@@ -364,7 +385,11 @@ async function sendToListing(listing, messageText, options = {}) {
     }
 
     // Update message status
-    const finalStatus = result.success ? 'sent' : (result.whatsapp_link ? 'whatsapp_link' : (result.manual_url ? 'manual' : 'failed'));
+    const finalStatus = result.success
+      ? 'sent'
+      : (result.whatsapp_link ? 'whatsapp_link'
+      : (result.pending_manual ? 'pending_manual'
+      : (result.manual_url ? 'manual' : 'failed')));
     await pool.query(
       `UPDATE unified_messages SET status = $1, error_message = $2, channel = $3, updated_at = NOW() WHERE id = $4`,
       [finalStatus, result.error, result.channel, result.message_id]
