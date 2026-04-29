@@ -60,7 +60,10 @@ function getPhoneOrch() {
 // exists, platform_chat for listings without phone.
 const SOURCE_CASCADE = {
   yad2:       ['whatsapp', 'yad2_chat', 'platform_link'],
-  yad1:       ['whatsapp', 'platform_chat', 'platform_link'],
+  // yad1 retired 2026-04-30 (yad1.co.il is 404). Listings deactivated by
+  // migration 025. Cascade kept here so any leftover yad1 row with a phone
+  // can still be contacted via WhatsApp if it's manually reactivated.
+  yad1:       ['whatsapp', 'platform_link'],
   dira:       ['whatsapp', 'platform_chat', 'platform_link'],
   homeless:   ['whatsapp', 'platform_chat', 'platform_link'],
   madlan:     ['whatsapp', 'platform_chat', 'platform_link'],

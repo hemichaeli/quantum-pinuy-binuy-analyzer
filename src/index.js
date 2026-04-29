@@ -384,6 +384,8 @@ async function start() {
   await runMigrationFile('Listings unique idx (023)', path.join(__dirname, 'db', 'migrations', '023_listings_unique_index.sql'));
   // 2026-04-30 (Day 10): clean up yad1 listings with non-yad1 URLs (yad1.co.il is 404)
   await runMigrationFile('Bad yad1 URL cleanup (024)', path.join(__dirname, 'db', 'migrations', '024_cleanup_bad_yad1_urls.sql'));
+  // 2026-04-30 (Day 10): retire all yad1 listings (platform defunct)
+  await runMigrationFile('Yad1 retirement (025)', path.join(__dirname, 'db', 'migrations', '025_retire_yad1_listings.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
@@ -514,7 +516,10 @@ async function start() {
     const scraperDefs = [
       { name: 'Komo',           module: './services/komoScraper',           cron: '0 8 * * *',   fn: 'scanAll' },
       { name: 'BankNadlan',     module: './services/bankNadlanScraper',     cron: '15 8 * * *',  fn: 'scanAll' },
-      { name: 'Yad1',           module: './services/yad1Scraper',           cron: '30 8 * * *',  fn: 'scanAll' },
+      // Yad1 retired 2026-04-30: yad1.co.il returns HTTP 404, the platform is defunct.
+      // Scraper was falling back to Perplexity, generating fake listings with yad2 URLs.
+      // Source file kept for reference at src/services/yad1Scraper.js but cron is off.
+      // { name: 'Yad1',           module: './services/yad1Scraper',           cron: '30 8 * * *',  fn: 'scanAll' },
       { name: 'Dira',           module: './services/diraScraper',           cron: '45 8 * * *',  fn: 'scanAll' },
       { name: 'Kones2',         module: './services/kones2Scraper',         cron: '0 9 * * *',   fn: 'scanAll' },
       { name: 'BidSpirit',      module: './services/bidspiritScraper',      cron: '15 9 * * *',  fn: 'scanAll' },
