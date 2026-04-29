@@ -95,7 +95,20 @@ async function getFileSha(filePath) {
 }
 
 /**
- * Create or update a file in the backup repo
+ * Create a NEW file in the backup repo. Skips the SHA-fetch GET because
+ * backup paths are timestamped — they're guaranteed new. Saves 1 API call
+ * per file vs. pushFile().
+ */
+async function pushNewFile(filePath, content, message) {
+  return githubRequest('PUT', `/repos/${BACKUP_REPO}/contents/${filePath}`, {
+    message,
+    content: Buffer.from(content).toString('base64'),
+    branch: BACKUP_BRANCH,
+  });
+}
+
+/**
+ * Create or update a file in the backup repo (used when path may already exist).
  */
 async function pushFile(filePath, content, message) {
   const sha = await getFileSha(filePath);
@@ -205,25 +218,42 @@ async function createBackup() {
 
   const results = {};
   let totalRows = 0;
+  const tablesPayload = {};
 
-  // Export each table
+  // Day 9: combine ALL tables into a single backup.json file (gzipped on the
+  // wire as base64). This drops API calls per backup from ~14 to 2:
+  //   before: 6 × (GET sha + PUT contents) + meta = ~14 calls
+  //   after:  1 × PUT contents (combined) + meta = 2 calls
+  // GitHub's per-user rate limit (5000/h) was being hammered.
+
+  // Export each table into the combined payload
   for (const { name, query } of BACKUP_TABLES) {
     const tableData = await exportTable(name, query);
     results[name] = { rows: tableData.rows, error: tableData.error || null };
     totalRows += tableData.rows;
+    tablesPayload[name] = {
+      rows: tableData.rows,
+      error: tableData.error || null,
+      data: tableData.data,
+    };
+  }
 
-    const content = JSON.stringify(tableData, null, 2);
-    try {
-      await pushFile(
-        `${backupPath}/${name}.json`,
-        content,
-        `backup: ${dateStr} ${timeStr} — ${name} (${tableData.rows} rows)`
-      );
-      logger.info(`[Backup] ✅ ${name}: ${tableData.rows} rows`);
-    } catch (err) {
-      logger.error(`[Backup] ❌ Failed to push ${name}: ${err.message}`);
-      results[name].pushError = err.message;
-    }
+  // Single push for all tables — 1 commit, 1 API call (no SHA pre-check needed)
+  const combinedContent = JSON.stringify({
+    backup_time: now.toISOString(),
+    total_rows: totalRows,
+    tables: tablesPayload,
+  });
+  try {
+    await pushNewFile(
+      `${backupPath}/backup.json`,
+      combinedContent,
+      `backup: ${dateStr} ${timeStr} — ${totalRows} rows across ${BACKUP_TABLES.length} tables`
+    );
+    logger.info(`[Backup] ✅ combined: ${totalRows} rows in single push`);
+  } catch (err) {
+    logger.error(`[Backup] ❌ Failed to push combined backup: ${err.message}`);
+    for (const name of Object.keys(results)) results[name].pushError = err.message;
   }
 
   // Write meta file
@@ -238,7 +268,7 @@ async function createBackup() {
   };
 
   try {
-    await pushFile(
+    await pushNewFile(
       `${backupPath}/meta.json`,
       JSON.stringify(meta, null, 2),
       `backup: ${dateStr} ${timeStr} — meta (${totalRows} total rows, ${duration}ms)`
@@ -263,13 +293,18 @@ async function createBackup() {
     ]);
   } catch { /* DB logging is optional */ }
 
-  // Cleanup old backups
-  try {
-    const allBackups = await listBackups();
-    const cleaned = await cleanupOldBackups(allBackups);
-    if (cleaned > 0) logger.info(`[Backup] Cleaned up ${cleaned} old backups`);
-  } catch (err) {
-    logger.warn(`[Backup] Cleanup failed: ${err.message}`);
+  // Day 9: throttled cleanup. listBackups walks every date dir (1+N calls)
+  // and per-deletion is 1 list + 6 deletes. Running this every hour was a
+  // huge chunk of the 5000/h rate-limit. Run cleanup at most once per day.
+  const HOUR_OF_DAY_FOR_CLEANUP = 3; // 03:00 UTC
+  if (now.getUTCHours() === HOUR_OF_DAY_FOR_CLEANUP) {
+    try {
+      const allBackups = await listBackups();
+      const cleaned = await cleanupOldBackups(allBackups);
+      if (cleaned > 0) logger.info(`[Backup] Cleaned up ${cleaned} old backups`);
+    } catch (err) {
+      logger.warn(`[Backup] Cleanup failed: ${err.message}`);
+    }
   }
 
   logger.info(`[Backup] ✅ Backup complete: ${totalRows} rows in ${duration}ms → ${backupPath}`);
