@@ -502,45 +502,70 @@ async function tryYad2ApiPhone(itemId) {
 // ── Method 4b: Komo phone API for yad2 listings (cross-platform enrichment) ──
 // Many yad2 listings also appear on Komo. Use address matching to find them.
 
-async function tryKomoForYad2Listing(listing) {
+// Day 9: Komo cross-platform lookup, optimized for speed.
+// - Cache search results by city (most useful) + city+street to avoid repeating the same HTML pull.
+// - Reduced timeout (4s) and modaaNum cap (3) — 8 was overkill, the right match is usually in the first few.
+// - Skip URL #2 if URL #1 returned candidates (saves ~5s per listing).
+// - Module-level cache survives across listings within same enrichAllPhones run.
+const _komoSearchCache = new Map(); // "city" or "city|street" → array<modaaNum>
+
+async function tryKomoForYad2Listing(listing, options = {}) {
   if (!listing.address || !listing.city) return null;
   const street = listing.address.replace(/\d+/g, '').trim();
   if (!street || street.length < 2) return null;
 
-  // Try multiple Komo URL patterns
-  const searchUrls = [
-    `${KOMO_BASE}/code/nadlan/apartments-for-sale.asp?cityTxt=${encodeURIComponent(listing.city)}&streetTxt=${encodeURIComponent(street)}&luachNum=2`,
-    `${KOMO_BASE}/code/nadlan/apartments-for-sale.asp?cityTxt=${encodeURIComponent(listing.city)}&luachNum=2`,
-  ];
+  const cache = options.cache || _komoSearchCache;
 
-  for (const url of searchUrls) {
+  // Try city+street cache first; fall back to city-wide cache
+  const tightKey = `${listing.city}|${street}`;
+  const cityKey  = listing.city;
+
+  let modaas = cache.get(tightKey) || cache.get(cityKey);
+
+  if (!modaas) {
+    // Only one network call: prefer narrow URL, fall back to broad once if no hits.
+    const narrowUrl = `${KOMO_BASE}/code/nadlan/apartments-for-sale.asp?cityTxt=${encodeURIComponent(listing.city)}&streetTxt=${encodeURIComponent(street)}&luachNum=2`;
     try {
-      const r = await axios.get(url, {
-        headers: { ...KOMO_HEADERS, 'Accept': 'text/html' },
-        timeout: 10000
+      const r = await axios.get(narrowUrl, {
+        headers: { ...KOMO_HEADERS, 'Accept': 'text/html' }, timeout: 4000
       });
-
       if (typeof r.data === 'string') {
-        // Extract modaaNum links from the search results page
-        const modaaMatches = r.data.match(/modaaNum=(\d+)/g) || [];
-        const uniqueModaas = [...new Set(modaaMatches.map(m => m.replace('modaaNum=', '')))];
-
-        // Match by address to find the right listing
-        const houseNum = listing.address.match(/\d+/)?.[0];
-        const streetWords = street.split(/[\s,]+/).filter(w => w.length > 1);
-
-        for (const modaaNum of uniqueModaas.slice(0, 8)) {
-          const phoneResult = await fetchKomoPhone(modaaNum);
-          if (phoneResult.phone) {
-            logger.debug(`[PhoneOrch] Komo cross-match: ${listing.address} → ${phoneResult.phone} (via komo #${modaaNum})`);
-            return phoneResult;
-          }
-          await sleep(400);
-        }
+        const matches = r.data.match(/modaaNum=(\d+)/g) || [];
+        modaas = [...new Set(matches.map(m => m.replace('modaaNum=', '')))];
+        cache.set(tightKey, modaas);
       }
     } catch (err) {
-      logger.debug(`[PhoneOrch] Komo cross-search failed for ${listing.address}: ${err.message}`);
+      logger.debug(`[PhoneOrch] Komo narrow search failed for ${listing.address}: ${err.message}`);
     }
+
+    if (!modaas || modaas.length === 0) {
+      // Broad fallback (city only) — cached city-wide so 50 listings in same city = 1 call.
+      const broadUrl = `${KOMO_BASE}/code/nadlan/apartments-for-sale.asp?cityTxt=${encodeURIComponent(listing.city)}&luachNum=2`;
+      try {
+        const r = await axios.get(broadUrl, {
+          headers: { ...KOMO_HEADERS, 'Accept': 'text/html' }, timeout: 4000
+        });
+        if (typeof r.data === 'string') {
+          const matches = r.data.match(/modaaNum=(\d+)/g) || [];
+          modaas = [...new Set(matches.map(m => m.replace('modaaNum=', '')))];
+          cache.set(cityKey, modaas);
+        }
+      } catch (err) {
+        logger.debug(`[PhoneOrch] Komo broad search failed for ${listing.address}: ${err.message}`);
+      }
+    }
+  }
+
+  if (!modaas || modaas.length === 0) return null;
+
+  // Try first 3 modaaNums (most likely matches at top of results page)
+  for (const modaaNum of modaas.slice(0, 3)) {
+    const phoneResult = await fetchKomoPhone(modaaNum);
+    if (phoneResult && phoneResult.phone) {
+      logger.debug(`[PhoneOrch] Komo cross-match: ${listing.address} → ${phoneResult.phone} (via komo #${modaaNum})`);
+      return phoneResult;
+    }
+    await sleep(200);
   }
   return null;
 }
@@ -855,35 +880,43 @@ async function enrichAllPhones(options = {}) {
     logger.info(`[PhoneOrch] Pass 3.5: Komo cross-platform lookup for ${allStillNeedPhone.length} listings (all platforms)...`);
     results.passes.komo_cross.attempted = allStillNeedPhone.length;
 
-    // Cache city+street searches to avoid repeated lookups
-    const searchCache = new Map(); // "city|street" → modaaNums[]
+    // Day 9: shared cache so multiple listings in the same city/street reuse one search.
+    const searchCache = new Map();
     let crossFound = 0;
     let errors = 0;
+    const startTime = Date.now();
+    const MAX_DURATION_MS = 5 * 60 * 1000; // hard cap: 5 minutes for the entire pass
 
     for (const listing of allStillNeedPhone) {
       if (errors > 10) {
         logger.warn(`[PhoneOrch] Too many Komo errors (${errors}), stopping cross-lookup`);
         break;
       }
-
-      const result = await tryKomoForYad2Listing(listing);
-      if (result && result.phone) {
-        if (!dryRun) {
-          await pool.query(
-            `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), updated_at = NOW() WHERE id = $3`,
-            [result.phone, result.contact_name, listing.id]
-          );
-        }
-        markEnriched(listing.id, result.phone, result.contact_name, 'komo_cross');
-        crossFound++;
-        errors = 0; // Reset error counter on success
-      } else {
-        // Only count as error if we got a network failure
-        // (no result found is normal)
+      if (Date.now() - startTime > MAX_DURATION_MS) {
+        logger.warn(`[PhoneOrch] Komo cross-lookup time cap reached (${Math.round((Date.now()-startTime)/1000)}s), stopping early`);
+        break;
       }
-      await sleep(1000);
+
+      try {
+        const result = await tryKomoForYad2Listing(listing, { cache: searchCache });
+        if (result && result.phone) {
+          if (!dryRun) {
+            await pool.query(
+              `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name), updated_at = NOW() WHERE id = $3`,
+              [result.phone, result.contact_name, listing.id]
+            );
+          }
+          markEnriched(listing.id, result.phone, result.contact_name, 'komo_cross');
+          crossFound++;
+          errors = Math.max(0, errors - 1); // gradually decay errors on success
+        }
+      } catch (err) {
+        errors++;
+        logger.debug(`[PhoneOrch] Komo cross-lookup error for listing ${listing.id}: ${err.message}`);
+      }
+      await sleep(200);
     }
-    logger.info(`[PhoneOrch] Pass 3.5 complete: ${results.passes.komo_cross.enriched} phones from Komo cross-lookup (checked ${allStillNeedPhone.length})`);
+    logger.info(`[PhoneOrch] Pass 3.5 complete: ${results.passes.komo_cross.enriched} phones from Komo cross-lookup (checked ${allStillNeedPhone.length}, cache size=${searchCache.size}, duration=${Math.round((Date.now()-startTime)/1000)}s)`);
   }
 
   // ── PASS 4: Direct page scraping (for non-Cloudflare sites) ───────────────
