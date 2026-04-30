@@ -79,18 +79,11 @@ function normalizeCity(city) {
 const MIN_HOUSING_UNITS = 24;
 
 function getTodaysCities() {
-  const today = new Date();
-  const dayOfYear = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-  // Bumped from 4 → 12 so daily discovery covers all ~38 target cities every 3-4 days
-  // instead of every 9-10 days. Cost: ~12 Perplexity sonar calls/day ≈ $0.10/day.
-  const citiesPerDay = 12;
-  const startIndex = (dayOfYear * citiesPerDay) % ALL_TARGET_CITIES.length;
-  const cities = [];
-  for (let i = 0; i < citiesPerDay; i++) {
-    const index = (startIndex + i) % ALL_TARGET_CITIES.length;
-    cities.push(ALL_TARGET_CITIES[index]);
-  }
-  return cities;
+  // 2026-05-01: removed rotation — daily discovery now scans ALL TARGET_REGIONS cities
+  // every morning. Rotation (4→12 cities/day) meant new declarations took 3-9 days to
+  // surface; with full coverage they surface within 24h. Cost: ~38 Perplexity sonar
+  // calls/day ≈ $0.20/day (~$6/month). Duration: ~2.5 min extra at 4s delay/city.
+  return [...ALL_TARGET_CITIES];
 }
 
 function buildDiscoveryPrompt(city, existingNames = []) {
