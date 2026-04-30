@@ -616,9 +616,21 @@ function startScheduler() {
     }
     
     logger.info(`Daily scan triggered: ${DAILY_CRON}`);
+    // Phase 1: complexes pipeline + discovery
     await runWeeklyScan(); // Discovery enabled by default (includeDiscovery: true since 2026-05-01)
+    // Phase 2: listings/leads pipeline (yad2 city-scan + komo + dira + homeless + banknadlan + madlan + winwin + bidspirit + phone/AI enrichment)
+    // Added 2026-05-01 so the daily cron is equivalent to the manual "סריקה מלאה" button:
+    // discovers new listings across ALL platforms, not just yad2-per-complex (which Step 1 directApi already covers).
+    try {
+      const { runFullScan } = require('../services/fullScanOrchestrator');
+      logger.info('Daily scan phase 2: runFullScan (listings/leads pipeline)');
+      const fsResult = await runFullScan({ enrichPhones: true, enrichAi: true });
+      logger.info(`Daily scan phase 2 complete: ${fsResult.total_new} new, ${fsResult.total_updated} updated listings`);
+    } catch (err) {
+      logger.error('Daily scan phase 2 (runFullScan) failed', { error: err.message });
+    }
   }, { timezone: 'Asia/Jerusalem' });
-  logger.info(`Daily scanner scheduled: ${DAILY_CRON} (08:00 Israel time, Sun-Thu, no holidays) [DIRECT API MODE - Discovery enabled, citiesPerDay=12]`);
+  logger.info(`Daily scanner scheduled: ${DAILY_CRON} (08:00 Israel time, Sun-Thu, no holidays) [DIRECT API MODE — runWeeklyScan + runFullScan, Discovery enabled, all 38 cities]`);
 }
 
 function stopScheduler() {
