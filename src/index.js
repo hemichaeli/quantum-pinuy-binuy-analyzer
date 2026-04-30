@@ -529,14 +529,14 @@ async function start() {
     const scraperDefs = [
       { name: 'Komo',           module: './services/komoScraper',           cron: '0 8 * * *',   fn: 'scanAll' },
       { name: 'BankNadlan',     module: './services/bankNadlanScraper',     cron: '15 8 * * *',  fn: 'scanAll' },
-      // Yad1 retired 2026-04-30: yad1.co.il returns HTTP 404, the platform is defunct.
-      // Scraper was falling back to Perplexity, generating fake listings with yad2 URLs.
-      // Source file kept for reference at src/services/yad1Scraper.js but cron is off.
+      // Yad1 retired 2026-04-30 — yad1.co.il returns HTTP 404 (platform defunct).
       // { name: 'Yad1',           module: './services/yad1Scraper',           cron: '30 8 * * *',  fn: 'scanAll' },
       { name: 'Dira',           module: './services/diraScraper',           cron: '45 8 * * *',  fn: 'scanAll' },
       { name: 'Kones2',         module: './services/kones2Scraper',         cron: '0 9 * * *',   fn: 'scanAll' },
-      { name: 'BidSpirit',      module: './services/bidspiritScraper',      cron: '15 9 * * *',  fn: 'scanAll' },
-      { name: 'Govmap',         module: './services/govmapScraper',         cron: '0 7 * * 1',   fn: 'scanAll' },
+      // BidSpirit disabled 2026-04-30 — produces 0 listings in production. Re-enable when investigated.
+      // { name: 'BidSpirit',      module: './services/bidspiritScraper',      cron: '15 9 * * *',  fn: 'scanAll' },
+      // Govmap disabled 2026-04-30 — government maps service, not real-estate listings.
+      // { name: 'Govmap',         module: './services/govmapScraper',         cron: '0 7 * * 1',   fn: 'scanAll' },
       { name: 'ComplexAddress', module: './services/complexAddressScraper', cron: '30 9 * * *',  fn: 'scanAll' },
       { name: 'KonesIsrael',    module: './services/konesIsraelService',    cron: '15 7 * * *',  fn: 'runKonesonlineScrape' },
     ];

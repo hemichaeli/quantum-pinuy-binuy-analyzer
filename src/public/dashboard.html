@@ -2418,19 +2418,21 @@
             }
         }
 
+        // Day 10: trimmed to scrapers actually producing listings.
+        // Removed:
+        //   - yad1     (yad1.co.il is 404 — platform defunct, retired in PR #32)
+        //   - nadlan   (נדלן.נט — 0 listings ever produced)
+        //   - mavat    (מבא"ת — government planning data, not listings)
+        //   - govmap   (government maps, not listings)
+        //   - bidspirit (auction site — scraper produces 0 listings; can be re-added if it starts working)
         const SCRAPERS_CONFIG = [
             { id: 'yad2',       name: 'יד2',          icon: '🏠', desc: 'פורטל הנדלן הגדול בישראל',    endpoint: '/api/scan/yad2',      color: '#e74c3c' },
-            { id: 'yad1',       name: 'יד1',          icon: '🏡', desc: 'מודעות נדלן יד ראשונה',       endpoint: '/api/scan/yad1',      color: '#e67e22' },
-            { id: 'winwin',     name: 'WinWin',       icon: '🏢', desc: 'נדלן מסחרי ומגורים',          endpoint: '/api/scan/winwin',    color: '#3498db' },
-            { id: 'homeless',   name: 'Homeless',     icon: '🏘', desc: 'מודעות דירות ומשרדים',        endpoint: '/api/scan/homeless',  color: '#9b59b6' },
-            { id: 'nadlan',     name: 'נדלן.נט',      icon: '🌐', desc: 'פורטל נדלן מקיף',             endpoint: '/api/scan/nadlan',    color: '#1abc9c' },
-            { id: 'mavat',      name: 'מבא"ת',        icon: '📋', desc: 'מידע ממשלתי על נכסים',        endpoint: '/api/scan/mavat',     color: '#2ecc71' },
-            { id: 'madlan',     name: 'מדלן',         icon: '📊', desc: 'נתוני שוק ומחירים',           endpoint: '/api/scan/madlan',    color: '#f39c12' },
-            { id: 'dira',       name: 'דירה',         icon: '🔑', desc: 'מודעות דירות להשכרה ומכירה', endpoint: '/api/scan/dira',      color: '#e74c3c' },
             { id: 'komo',       name: 'Komo',         icon: '🏗', desc: 'פרויקטים חדשים',              endpoint: '/api/scan/komo',      color: '#3498db' },
-            { id: 'govmap',     name: 'GovMap',       icon: '🗺', desc: 'מפות ממשלתיות ותכנון',        endpoint: '/api/scan/govmap',    color: '#27ae60' },
-            { id: 'bidspirit',  name: 'BidSpirit',    icon: '🔨', desc: 'מכירות פומביות ומכרזים',      endpoint: '/api/scan/bidspirit', color: '#c0392b' },
+            { id: 'dira',       name: 'דירה',         icon: '🔑', desc: 'מודעות דירות למכירה',         endpoint: '/api/scan/dira',      color: '#e74c3c' },
+            { id: 'homeless',   name: 'Homeless',     icon: '🏘', desc: 'מודעות דירות ומשרדים',        endpoint: '/api/scan/homeless',  color: '#9b59b6' },
             { id: 'banknadlan', name: 'בנק נדלן',     icon: '🏦', desc: 'נכסי בנקים ומימוש משכנתאות', endpoint: '/api/scan/banknadlan',color: '#2980b9' },
+            { id: 'madlan',     name: 'מדלן',         icon: '📊', desc: 'נתוני שוק ומחירים',           endpoint: '/api/scan/madlan',    color: '#f39c12' },
+            { id: 'winwin',     name: 'WinWin',       icon: '🏢', desc: 'נדלן מסחרי ומגורים',          endpoint: '/api/scan/winwin',    color: '#3498db' },
             { id: 'facebook',   name: 'פייסבוק',      icon: '📱', desc: 'מודעות נדלן בפייסבוק',        endpoint: '/api/facebook/sync',  color: '#3b5998' },
         ];
 
