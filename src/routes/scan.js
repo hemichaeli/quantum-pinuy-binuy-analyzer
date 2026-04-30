@@ -855,6 +855,86 @@ router.post('/banknadlan', async (req, res) => {
   }
 });
 
+// POST /api/scan/everything - UNIFIED full scan: complexes pipeline + listings pipeline + discovery
+// This is the canonical "סריקה מלאה" button. Runs:
+//   1. runWeeklyScan({forceAll: true, includeDiscovery: true}) — nadlan + mavat-update + IAI/SSI + discovery
+//   2. runFullScan() — listings scrapers (yad2/komo/dira/...) + phone + AI enrichment
+// Returns 202 immediately with scan_id; both pipelines run async sequentially.
+router.post('/everything', async (req, res) => {
+  try {
+    const { skipListings = false, skipComplexes = false } = req.body || {};
+    const scanLog = await pool.query(
+      `INSERT INTO scan_logs (scan_type, status) VALUES ('unified_full', 'running') RETURNING *`
+    );
+    const scanId = scanLog.rows[0].id;
+    res.json({
+      message: 'Unified full scan triggered (complexes pipeline + listings pipeline + discovery)',
+      scan_id: scanId,
+      includes: {
+        complexes_pipeline: !skipComplexes,
+        listings_pipeline: !skipListings,
+        discovery: !skipComplexes
+      },
+      eta_minutes: '5-10'
+    });
+    (async () => {
+      const startedAt = Date.now();
+      const aggregate = { complexes: null, listings: null, errors: [] };
+      try {
+        if (!skipComplexes) {
+          logger.info('[Everything] Phase 1/2: complexes pipeline + discovery (runWeeklyScan forceAll, includeDiscovery)');
+          try {
+            const { runWeeklyScan } = require('../jobs/weeklyScanner');
+            aggregate.complexes = await runWeeklyScan({ forceAll: true, includeDiscovery: true });
+          } catch (err) {
+            aggregate.errors.push(`complexes: ${err.message}`);
+            logger.error('[Everything] complexes pipeline failed', { error: err.message });
+          }
+        }
+        if (!skipListings) {
+          logger.info('[Everything] Phase 2/2: listings pipeline (runFullScan)');
+          try {
+            const { runFullScan } = require('../services/fullScanOrchestrator');
+            aggregate.listings = await runFullScan({ enrichPhones: true, enrichAi: true });
+          } catch (err) {
+            aggregate.errors.push(`listings: ${err.message}`);
+            logger.error('[Everything] listings pipeline failed', { error: err.message });
+          }
+        }
+        const durationSec = Math.round((Date.now() - startedAt) / 1000);
+        const newComplexes = aggregate.complexes?.discovery?.newAdded || 0;
+        const newListings = aggregate.listings?.total_new || 0;
+        const updatedListings = aggregate.listings?.total_updated || 0;
+        const phones = aggregate.listings?.phone_enrichment?.enriched || 0;
+        const summary =
+          `Unified scan in ${durationSec}s: ` +
+          `${newComplexes} new complexes, ${newListings} new listings, ${updatedListings} updated, ` +
+          `${phones} phones enriched. Errors: ${aggregate.errors.length || 0}.`;
+        await pool.query(
+          `UPDATE scan_logs SET status = $1, completed_at = NOW(), complexes_scanned = $2, summary = $3, errors = $4 WHERE id = $5`,
+          [
+            aggregate.errors.length ? 'partial' : 'completed',
+            newComplexes + newListings + updatedListings,
+            summary,
+            aggregate.errors.length ? aggregate.errors.join(' | ') : null,
+            scanId
+          ]
+        );
+        logger.info(`[Everything] Done in ${durationSec}s — ${summary}`);
+      } catch (err) {
+        await pool.query(
+          `UPDATE scan_logs SET status = 'failed', completed_at = NOW(), errors = $1 WHERE id = $2`,
+          [err.message, scanId]
+        );
+        logger.error('[Everything] Unified scan crashed', { error: err.message, stack: err.stack });
+      }
+    })();
+  } catch (err) {
+    logger.error('Failed to trigger /api/scan/everything', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/scan/full - Full scan across all platforms + phone enrichment
 router.post('/full', async (req, res) => {
   try {

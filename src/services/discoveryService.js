@@ -24,7 +24,8 @@ const TARGET_REGIONS = {
   'שרון': ['רעננה', 'כפר סבא', 'הוד השרון', 'הרצליה', 'נתניה', 'רמת השרון', 'כוכב יאיר'],
   'מרכז': ['פתח תקווה', 'ראשון לציון', 'רחובות', 'נס ציונה', 'לוד', 'רמלה', 'מודיעין'],
   'ירושלים': ['ירושלים', 'בית שמש', 'מבשרת ציון', 'מעלה אדומים'],
-  'חיפה והקריות': ['חיפה', 'קריית ביאליק', 'קריית מוצקין', 'קריית ים', 'קריית אתא', 'נשר', 'טירת כרמל']
+  'חיפה והקריות': ['חיפה', 'קריית ביאליק', 'קריית מוצקין', 'קריית ים', 'קריית אתא', 'נשר', 'טירת כרמל'],
+  'דרום': ['אשקלון', 'אשדוד', 'באר שבע', 'יבנה', 'באר יעקב']
 };
 
 // All target cities flat list
@@ -80,7 +81,9 @@ const MIN_HOUSING_UNITS = 24;
 function getTodaysCities() {
   const today = new Date();
   const dayOfYear = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-  const citiesPerDay = 4;
+  // Bumped from 4 → 12 so daily discovery covers all ~38 target cities every 3-4 days
+  // instead of every 9-10 days. Cost: ~12 Perplexity sonar calls/day ≈ $0.10/day.
+  const citiesPerDay = 12;
   const startIndex = (dayOfYear * citiesPerDay) % ALL_TARGET_CITIES.length;
   const cities = [];
   for (let i = 0; i < citiesPerDay; i++) {

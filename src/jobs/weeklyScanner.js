@@ -290,11 +290,13 @@ async function sendScanStatusNotification(result) {
  * (since it runs every 24h, anything >20h old is eligible)
  * Manual scans keep the default 72h (3 day) threshold
  * 
- * Discovery is DISABLED by default in automated scans to prevent deployment interruptions.
- * Run manual scan with includeDiscovery: true to discover new complexes.
+ * Discovery is ENABLED by default (2026-05-01): the previous "stability" concern
+ * was Railway request timeouts on long scans, which is moot since runWeeklyScan is
+ * already fully async (this function returns nothing to the HTTP caller). The audit
+ * found 23/24 newly-declared complexes were missed because discovery never ran.
  */
 async function runWeeklyScan(options = {}) {
-  const { forceAll = false, includeDiscovery = false } = options; // Changed default to false
+  const { forceAll = false, includeDiscovery = true } = options;
   if (isRunning) {
     logger.warn('Scan already running, skipping');
     return null;
@@ -484,7 +486,7 @@ async function runWeeklyScan(options = {}) {
     }
 
     // Step 7: Generate alerts
-    logger.info('Step 7/7: Generating alerts...');
+    logger.info('Step 7/8: Generating alerts...');
     let alertCount = 0;
     try {
       alertCount = await generateAlerts(beforeSnapshot);
@@ -494,11 +496,45 @@ async function runWeeklyScan(options = {}) {
       tracker.add('alerts', 'יצירת התראות', false, 'נכשל', e.message);
     }
 
+    // Step 8: Discovery (find NEW pinuy-binuy complexes via Perplexity)
+    // Runs LAST so it doesn't slow down the rest of the pipeline.
+    // discoverDaily uses citiesPerDay rotation; discoverAll for full sweep on manual scans.
+    let discoveryResults = { newAdded: 0, skipped: !includeDiscovery, citiesScanned: 0, totalDiscovered: 0 };
+    if (includeDiscovery) {
+      const discoveryService = getDiscoveryService();
+      if (discoveryService) {
+        try {
+          logger.info(`Step 8/8: Running discovery (forceAll=${forceAll} → ${forceAll ? 'discoverAll' : 'discoverDaily'})...`);
+          const dResult = forceAll
+            ? await discoveryService.discoverAll()
+            : await discoveryService.discoverDaily();
+          discoveryResults = {
+            newAdded: dResult.new_added || 0,
+            citiesScanned: dResult.cities_scanned || 0,
+            totalDiscovered: dResult.total_discovered || 0,
+            alreadyExisted: dResult.already_existed || 0,
+            skipped: false
+          };
+          tracker.add('discovery', 'גילוי מתחמים חדשים', true,
+            `${discoveryResults.citiesScanned} ערים, ${discoveryResults.newAdded} חדשים, ${discoveryResults.alreadyExisted} כפולים`);
+        } catch (e) {
+          logger.warn('Discovery failed', { error: e.message });
+          tracker.add('discovery', 'גילוי מתחמים חדשים', false, 'נכשל', e.message);
+        }
+      } else {
+        tracker.add('discovery', 'גילוי מתחמים חדשים', false, 'discoveryService לא זמין');
+      }
+    } else {
+      logger.info('Step 8/8: Discovery skipped (includeDiscovery=false)');
+      tracker.add('discovery', 'גילוי מתחמים חדשים', true, 'דולג (includeDiscovery=false)');
+    }
+
     const duration = Math.round((Date.now() - startTime) / 1000);
     const summary = `Daily scan [DIRECT API]: ${directApiResults.succeeded}/${directApiResults.total} ok, ` +
       `${directApiResults.totalNewTransactions} tx, ${directApiResults.totalNewListings} listings. ` +
       `Nadlan: ${nadlanResults.totalNew} tx. ` +
       `KonesIsrael: ${konesResults.totalListings} listings, ${konesResults.matchedComplexes} matches. ` +
+      `Discovery: ${discoveryResults.newAdded} new complexes. ` +
       `${alertCount} alerts. ${duration}s. Steps: ${tracker.successCount()}✅ ${tracker.failedCount()}❌`;
 
     lastRunResult = {
@@ -509,7 +545,7 @@ async function runWeeklyScan(options = {}) {
       benchmarks: { calculated: benchmarkResults.calculated || 0 },
       ssi: ssiResults,
       konesIsrael: konesResults,
-      discovery: { newAdded: 0, skipped: !includeDiscovery },
+      discovery: discoveryResults,
       alertsGenerated: alertCount,
       steps: tracker.getSteps(),
       summary
@@ -580,9 +616,9 @@ function startScheduler() {
     }
     
     logger.info(`Daily scan triggered: ${DAILY_CRON}`);
-    await runWeeklyScan(); // Discovery disabled by default (includeDiscovery: false)
+    await runWeeklyScan(); // Discovery enabled by default (includeDiscovery: true since 2026-05-01)
   }, { timezone: 'Asia/Jerusalem' });
-  logger.info(`Daily scanner scheduled: ${DAILY_CRON} (08:00 Israel time, Sun-Thu, no holidays) [DIRECT API MODE - Discovery disabled for stability]`);
+  logger.info(`Daily scanner scheduled: ${DAILY_CRON} (08:00 Israel time, Sun-Thu, no holidays) [DIRECT API MODE - Discovery enabled, citiesPerDay=12]`);
 }
 
 function stopScheduler() {
@@ -617,7 +653,7 @@ function getSchedulerStatus() {
     claudeConfigured: orchestrator?.isClaudeConfigured() || false,
     notificationsConfigured: notificationService.isConfigured(),
     discoveryEnabled: !!discoveryService,
-    discoverySchedule: 'Manual only (disabled in automated scans for stability)',
+    discoverySchedule: 'Daily 08:00 (12 cities/day rotation), forceAll on manual scans',
     targetCities: discoveryService?.ALL_TARGET_CITIES?.length || 0,
     targetRegions: discoveryService?.TARGET_REGIONS ? Object.keys(discoveryService.TARGET_REGIONS) : [],
     minHousingUnits: discoveryService?.MIN_HOUSING_UNITS || 12,
