@@ -535,8 +535,10 @@ async function start() {
       { name: 'Kones2',         module: './services/kones2Scraper',         cron: '0 9 * * *',   fn: 'scanAll' },
       // BidSpirit disabled 2026-04-30 — produces 0 listings in production. Re-enable when investigated.
       // { name: 'BidSpirit',      module: './services/bidspiritScraper',      cron: '15 9 * * *',  fn: 'scanAll' },
-      // Govmap disabled 2026-04-30 — government maps service, not real-estate listings.
-      // { name: 'Govmap',         module: './services/govmapScraper',         cron: '0 7 * * 1',   fn: 'scanAll' },
+      // Govmap stays — it populates the COMPLEXES table with pinuy-binuy zone data
+      // and planning info, NOT listings. So the listings-tab cleanup didn't need to
+      // touch this cron. Keeping it active.
+      { name: 'Govmap',         module: './services/govmapScraper',         cron: '0 7 * * 1',   fn: 'scanAll' },
       { name: 'ComplexAddress', module: './services/complexAddressScraper', cron: '30 9 * * *',  fn: 'scanAll' },
       { name: 'KonesIsrael',    module: './services/konesIsraelService',    cron: '15 7 * * *',  fn: 'runKonesonlineScrape' },
     ];
