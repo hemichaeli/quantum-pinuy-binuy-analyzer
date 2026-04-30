@@ -247,7 +247,7 @@
             <h2>⚡ פעולות מהירות</h2>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;">
                 <button class="btn btn-intel" onclick="loadMorningIntelligence()">🧠 ינטליגנציה יומית</button>
-                <button class="btn btn-green" onclick="runFullScan()" style="font-weight:700;">🔍 סריקה מלאה + Enrichment</button>
+                <button class="btn btn-green" onclick="runFullScan()" style="font-weight:700;">🚀 סריקה מלאה (הכל: מתחמים + גילוי + מודעות)</button>
                 <button class="btn" onclick="refreshStats()">🔄 רענן נתונים</button>
                 <button class="btn btn-secondary" onclick="window.open('/api/docs','_blank')">📋 API Docs</button>
             </div>
@@ -804,7 +804,7 @@
             <h2>🔍 מקורות סריקה — Real Estate Data Sources</h2>
             <div class="actions-bar" style="margin-bottom:14px;">
                 <button class="btn btn-green" onclick="runAllScrapers()">▶️ הפעל את כולם</button>
-                <button class="btn btn-intel" onclick="runFullScan()">🚀 סריקה מלאה + Enrichment</button>
+                <button class="btn btn-intel" onclick="runFullScan()">🚀 סריקה מלאה (הכל: מתחמים + גילוי + מודעות)</button>
                 <button class="btn btn-secondary" onclick="loadScraperStatus()">🔄 רענן סטטוס</button>
             </div>
             <div id="scrapers-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;margin-top:14px;"></div>
@@ -2400,21 +2400,22 @@
         }
 
         async function runFullScan() {
-            if (!confirm('להפעיל סריקה מלאה כולל Enrichment (טלפון + AI)?')) return;
-            const btn = document.querySelector('[onclick="runFullScan()"]');
-            if (btn) { btn.textContent = '⏳ סורק...'; btn.disabled = true; }
+            if (!confirm('להפעיל סריקה מלאה?\n\nכולל:\n• מתחמים (nadlan + עדכוני סטטוסים + IAI/SSI)\n• גילוי מתחמים חדשים (Perplexity)\n• מודעות (yad2/komo/dira/...) + Enrichment\n\nמשך משוער: 5-10 דקות. ירוץ ברקע — תוכל לסגור את החלון.')) return;
+            const buttons = document.querySelectorAll('[onclick="runFullScan()"]');
+            buttons.forEach(b => { b.dataset.originalText = b.textContent; b.textContent = '⏳ סריקה רצה ברקע...'; b.disabled = true; });
             try {
-                const res = await fetch('/api/scan/full', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 50 }) });
+                const res = await fetch('/api/scan/everything', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
                 const d = await res.json();
                 if (res.ok) {
-                    alert('✅ סריקה הושלמה: ' + (d.newListings||0) + ' חדשות | ' + (d.enriched||0) + ' הועשרו | ' + (d.phones||0) + ' טלפונים');
-                    refreshStats();
-            loadStatsFromAPI();
+                    alert('✅ סריקה מלאה הופעלה!\n\nscan_id: ' + (d.scan_id || '?') + '\nETA: ' + (d.eta_minutes || '5-10') + ' דקות\n\nתרוץ ברקע. השתמש ב-/api/scan/scheduler/status או רענן עוד מספר דקות לראות תוצאות.');
+                    setTimeout(() => { try { refreshStats(); loadStatsFromAPI(); } catch(_){} }, 5000);
                 } else throw new Error(d.error || 'HTTP ' + res.status);
             } catch (e) { alert('❌ שגיאה: ' + e.message); }
             finally {
-                const btn2 = document.querySelector('[onclick="runFullScan()"]');
-                if (btn2) { btn2.textContent = '🚀 סריקה מלאה + Enrichment'; btn2.disabled = false; }
+                document.querySelectorAll('[onclick="runFullScan()"]').forEach(b => {
+                    b.textContent = b.dataset.originalText || '🚀 סריקה מלאה';
+                    b.disabled = false;
+                });
             }
         }
 
