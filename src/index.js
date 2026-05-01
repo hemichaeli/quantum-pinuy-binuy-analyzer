@@ -392,6 +392,8 @@ async function start() {
   await runMigrationFile('WhatsApp DLR (027)', path.join(__dirname, 'db', 'migrations', '027_whatsapp_dlr.sql'));
   // 2026-04-30 (Day 10): lead archive support
   await runMigrationFile('Lead archive (028)', path.join(__dirname, 'db', 'migrations', '028_lead_archive.sql'));
+  // 2026-05-01: deactivate komo listings that aren't pinuy-binuy (parity with yad2/dira/etc)
+  await runMigrationFile('Komo non-pinuy-binuy cleanup (030)', path.join(__dirname, 'db', 'migrations', '030_cleanup_komo_non_pinuy_binuy.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
