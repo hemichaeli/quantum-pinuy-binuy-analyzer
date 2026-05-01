@@ -462,7 +462,6 @@ function buildSynthesisPrompt(complex) {
 
 ## נתוני שוק:
 - מחיר ממוצע למ"ר: ${complex.city_avg_price_sqm ? '₪' + parseInt(complex.city_avg_price_sqm).toLocaleString('he-IL') : 'לא ידוע'}
-- מחיר נוכחי למ"ר: ${complex.price_per_sqm ? '₪' + parseInt(complex.price_per_sqm).toLocaleString('he-IL') : 'לא ידוע'}
 - יחידות מתוכננות: ${complex.planned_units || 'לא ידוע'}
 - יחידות קיימות: ${complex.existing_units || 'לא ידוע'}
 - אחוז חתימות: ${complex.signature_percent ? complex.signature_percent + '%' : 'לא ידוע'}
@@ -547,7 +546,7 @@ async function runClaudeSynthesis() {
   const { rows: complexes } = await pool.query(`
     SELECT c.id, c.name, c.city, c.status, c.iai_score,
            c.actual_premium, c.statutory_premium_estimate,
-           c.city_avg_price_sqm, c.price_per_sqm,
+           c.city_avg_price_sqm,
            c.planned_units, c.existing_units, c.signature_percent,
            c.local_committee_date, c.district_committee_date,
            c.is_tamal, c.is_vatmal, c.vatmal_status, c.vatmal_plan_number, c.vatmal_next_hearing,
@@ -716,24 +715,38 @@ async function runMasterPipeline(options = {}) {
     phase2_statutory: null,
     phase3_synthesis: null,
     phase4_iai: null,
+    phase5_discovery: null,
     duration_ms: 0,
     completed_at: null
   };
 
+  let logId = null;
+  const phaseErrors = [];
+
   try {
     // Ensure DB columns exist
-    await runStatutoryMigrations();
+    try { await runStatutoryMigrations(); } catch (e) { logger.warn(`[MasterPipeline] Statutory migrations failed (non-fatal): ${e.message}`); }
 
     // Log pipeline start
-    const { rows: [log] } = await pool.query(
-      `INSERT INTO scan_logs (scan_type, status, started_at) VALUES ('master_pipeline', 'running', NOW()) RETURNING id`
-    );
-    const logId = log.id;
+    try {
+      const { rows: [log] } = await pool.query(
+        `INSERT INTO scan_logs (scan_type, status, started_at) VALUES ('master_pipeline', 'running', NOW()) RETURNING id`
+      );
+      logId = log.id;
+    } catch (e) {
+      logger.error(`[MasterPipeline] Failed to insert scan_log: ${e.message}`);
+    }
 
     // ── PHASE 1: Scrape all platforms ──────────────────────────────────────
     logger.info('[MasterPipeline] PHASE 1: Scraping all platforms...');
-    result.phase1_scrapers = await runAllScrapers();
-    logger.info(`[MasterPipeline] PHASE 1 complete: ${result.phase1_scrapers.totalNew} new, ${result.phase1_scrapers.totalUpdated} updated`);
+    try {
+      result.phase1_scrapers = await runAllScrapers();
+      logger.info(`[MasterPipeline] PHASE 1 complete: ${result.phase1_scrapers.totalNew} new, ${result.phase1_scrapers.totalUpdated} updated`);
+    } catch (e) {
+      logger.error(`[MasterPipeline] PHASE 1 failed: ${e.message}`);
+      phaseErrors.push(`phase1: ${e.message}`);
+      result.phase1_scrapers = { totalNew: 0, totalUpdated: 0, error: e.message };
+    }
 
     // ── PHASE 1b: Phone reveal (unified orchestrator — all platforms) ─────
     logger.info('[MasterPipeline] PHASE 1b: Revealing phone numbers (v2 orchestrator)...');
@@ -761,18 +774,36 @@ async function runMasterPipeline(options = {}) {
 
     // ── PHASE 2: Statutory enrichment (Perplexity + Gemini) ───────────────
     logger.info('[MasterPipeline] PHASE 2: Statutory enrichment...');
-    result.phase2_statutory = await runStatutoryEnrichment();
-    logger.info(`[MasterPipeline] PHASE 2 complete: ${result.phase2_statutory.enriched} enriched, ${result.phase2_statutory.failed} failed`);
+    try {
+      result.phase2_statutory = await runStatutoryEnrichment();
+      logger.info(`[MasterPipeline] PHASE 2 complete: ${result.phase2_statutory.enriched} enriched, ${result.phase2_statutory.failed} failed`);
+    } catch (e) {
+      logger.error(`[MasterPipeline] PHASE 2 failed: ${e.message}`);
+      phaseErrors.push(`phase2: ${e.message}`);
+      result.phase2_statutory = { enriched: 0, failed: 0, error: e.message };
+    }
 
     // ── PHASE 3: Claude synthesis ──────────────────────────────────────────
     logger.info('[MasterPipeline] PHASE 3: Claude synthesis...');
-    result.phase3_synthesis = await runClaudeSynthesis();
-    logger.info(`[MasterPipeline] PHASE 3 complete: ${result.phase3_synthesis.synthesized} synthesized`);
+    try {
+      result.phase3_synthesis = await runClaudeSynthesis();
+      logger.info(`[MasterPipeline] PHASE 3 complete: ${result.phase3_synthesis.synthesized} synthesized`);
+    } catch (e) {
+      logger.error(`[MasterPipeline] PHASE 3 failed: ${e.message}`);
+      phaseErrors.push(`phase3: ${e.message}`);
+      result.phase3_synthesis = { synthesized: 0, error: e.message };
+    }
 
     // ── PHASE 4: IAI recalculation + investment ranking ────────────────────
     logger.info('[MasterPipeline] PHASE 4: IAI recalculation + ranking...');
-    result.phase4_iai = await runIAIAndRanking();
-    logger.info('[MasterPipeline] PHASE 4 complete');
+    try {
+      result.phase4_iai = await runIAIAndRanking();
+      logger.info('[MasterPipeline] PHASE 4 complete');
+    } catch (e) {
+      logger.error(`[MasterPipeline] PHASE 4 failed: ${e.message}`);
+      phaseErrors.push(`phase4: ${e.message}`);
+      result.phase4_iai = { error: e.message };
+    }
 
     // ── PHASE 4b: SSI recalculation for all active listings ─────────────────
     logger.info('[MasterPipeline] PHASE 4b: Recalculating SSI scores...');
@@ -786,23 +817,48 @@ async function runMasterPipeline(options = {}) {
       result.phase4b_ssi = { updated: 0, total: 0, error: ssiErr.message };
     }
 
+    // ── PHASE 5: Discovery (find NEW pinuy-binuy complexes) ─────────────────
+    // Added 2026-05-01: masterPipeline previously had no discovery step at all.
+    // Per the audit, 23/24 newly-declared complexes were missing. discoverDaily
+    // now scans ALL TARGET_REGIONS cities every morning (citiesPerDay logic
+    // removed in PR #39).
+    logger.info('[MasterPipeline] PHASE 5: Discovery (find new complexes)...');
+    try {
+      const discoveryService = require('../services/discoveryService');
+      const dResult = await discoveryService.discoverDaily();
+      result.phase5_discovery = {
+        newAdded: dResult.new_added || 0,
+        citiesScanned: dResult.cities_scanned || 0,
+        totalDiscovered: dResult.total_discovered || 0,
+        alreadyExisted: dResult.already_existed || 0
+      };
+      logger.info(`[MasterPipeline] PHASE 5 complete: ${result.phase5_discovery.citiesScanned} cities, ${result.phase5_discovery.newAdded} new complexes`);
+    } catch (discErr) {
+      logger.warn(`[MasterPipeline] PHASE 5 discovery failed (non-fatal): ${discErr.message}`);
+      result.phase5_discovery = { newAdded: 0, citiesScanned: 0, error: discErr.message };
+    }
+
     result.duration_ms = Date.now() - startTime;
     result.completed_at = new Date().toISOString();
 
-    const summary = `Pipeline complete in ${Math.round(result.duration_ms / 1000)}s: ` +
-      `${result.phase1_scrapers.totalNew} new listings | ` +
+    const summary = `Pipeline ${phaseErrors.length ? 'partial' : 'complete'} in ${Math.round(result.duration_ms / 1000)}s: ` +
+      `${(result.phase1_scrapers||{}).totalNew||0} new listings | ` +
       `${(result.phase1b_phones||{}).enriched||0} phones revealed | ` +
       `${(result.phase1c_linking||{}).linked||0} linked to complexes | ` +
-      `${result.phase2_statutory.enriched} statutory enriched | ` +
-      `${result.phase3_synthesis.synthesized} synthesized | ` +
-      `${(result.phase4b_ssi||{}).updated||0} SSI scored`;
+      `${(result.phase2_statutory||{}).enriched||0} statutory enriched | ` +
+      `${(result.phase3_synthesis||{}).synthesized||0} synthesized | ` +
+      `${(result.phase4b_ssi||{}).updated||0} SSI scored | ` +
+      `${(result.phase5_discovery||{}).newAdded||0} new complexes discovered` +
+      (phaseErrors.length ? ` | ERRORS: ${phaseErrors.join('; ')}` : '');
 
-    await pool.query(
-      `UPDATE scan_logs SET status = 'completed', completed_at = NOW(), summary = $1 WHERE id = $2`,
-      [summary, logId]
-    );
+    if (logId) {
+      await pool.query(
+        `UPDATE scan_logs SET status = $1, completed_at = NOW(), summary = $2, errors = $3 WHERE id = $4`,
+        [phaseErrors.length ? 'partial' : 'completed', summary, phaseErrors.length ? phaseErrors.join(' | ') : null, logId]
+      );
+    }
 
-    logger.info(`[MasterPipeline] ===== COMPLETE: ${summary} =====`);
+    logger.info(`[MasterPipeline] ===== ${phaseErrors.length ? 'PARTIAL' : 'COMPLETE'}: ${summary} =====`);
     lastResult = result;
     return result;
 
@@ -810,6 +866,17 @@ async function runMasterPipeline(options = {}) {
     logger.error('[MasterPipeline] Pipeline failed:', err);
     result.error = err.message;
     result.duration_ms = Date.now() - startTime;
+    // Critical: always update scan_logs so it doesn't stay 'running' for 3h until watchdog kills it
+    if (logId) {
+      try {
+        await pool.query(
+          `UPDATE scan_logs SET status = 'failed', completed_at = NOW(), errors = $1 WHERE id = $2`,
+          [err.message, logId]
+        );
+      } catch (e2) {
+        logger.error(`[MasterPipeline] Failed to update scan_log to failed status: ${e2.message}`);
+      }
+    }
     return result;
   } finally {
     isRunning = false;
