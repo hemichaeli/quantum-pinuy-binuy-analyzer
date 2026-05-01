@@ -6,6 +6,7 @@
 const axios = require('axios');
 const pool = require('../db/pool');
 const { logger } = require('./logger');
+const { findMatchingComplex } = require('./complexMatcher');
 
 const DELAY_MS = 1500; // 1.5s between requests to be polite
 const BASE_URL = 'https://www.komo.co.il';
@@ -160,11 +161,19 @@ async function fetchListingDetails(modaaNum) {
  */
 async function saveListing(listing) {
   try {
+    // Only save listings that match a pinuy-binuy complex (parity with yad2/yad1/dira/winwin/homeless/banknadlan)
+    const match = await findMatchingComplex(listing.address, listing.city);
+    if (!match) {
+      logger.debug(`[Komo] No complex match for: ${listing.address}, ${listing.city} — skipping`);
+      return 'no_complex_match';
+    }
+    const complexId = match.complexId;
+
     const existing = await pool.query(
       `SELECT id, phone FROM listings WHERE source = 'komo' AND source_listing_id = $1`,
       [listing.source_listing_id]
     );
-    
+
     if (existing.rows.length > 0) {
       const row = existing.rows[0];
       // Update if we have new phone or price
@@ -172,26 +181,28 @@ async function saveListing(listing) {
         await pool.query(
           `UPDATE listings SET phone = $1, contact_name = COALESCE($2, contact_name),
            asking_price = COALESCE($3, asking_price), url = COALESCE($4, url),
-           last_seen = CURRENT_DATE, updated_at = NOW() WHERE id = $5`,
-          [listing.phone, listing.contact_name, listing.price, listing.url, row.id]
+           complex_id = COALESCE(complex_id, $5),
+           last_seen = CURRENT_DATE, updated_at = NOW() WHERE id = $6`,
+          [listing.phone, listing.contact_name, listing.price, listing.url, complexId, row.id]
         );
         return 'phone_updated';
       }
       if (listing.price && listing.price !== row.asking_price) {
         await pool.query(
-          `UPDATE listings SET asking_price = $1, last_seen = CURRENT_DATE, updated_at = NOW() WHERE id = $2`,
-          [listing.price, row.id]
+          `UPDATE listings SET asking_price = $1, complex_id = COALESCE(complex_id, $2),
+           last_seen = CURRENT_DATE, updated_at = NOW() WHERE id = $3`,
+          [listing.price, complexId, row.id]
         );
         return 'price_updated';
       }
       return 'skipped';
     }
-    
+
     await pool.query(
       `INSERT INTO listings (source, source_listing_id, address, city, asking_price,
         rooms, area_sqm, floor, phone, contact_name, url, description_snippet,
-        is_active, first_seen, last_seen, created_at, updated_at)
-       VALUES ('komo', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+        complex_id, is_active, first_seen, last_seen, created_at, updated_at)
+       VALUES ('komo', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         TRUE, CURRENT_DATE, CURRENT_DATE, NOW(), NOW())
        ON CONFLICT (source, LOWER(TRIM(address)), LOWER(TRIM(city)))
        DO UPDATE SET last_seen=CURRENT_DATE, asking_price=COALESCE(EXCLUDED.asking_price, listings.asking_price),
@@ -203,7 +214,7 @@ async function saveListing(listing) {
         listing.source_listing_id, listing.address, listing.city, listing.price,
         listing.rooms, listing.area_sqm, listing.floor,
         listing.phone, listing.contact_name,
-        listing.url, listing.description
+        listing.url, listing.description, complexId
       ]
     );
     return 'inserted';
@@ -232,8 +243,8 @@ async function scanCity(city, maxPages = 3) {
   allIds = [...new Set(allIds)];
   logger.info(`[KomoDirect] ${city}: ${allIds.length} unique listings to process`);
   
-  let inserted = 0, phoneUpdated = 0, priceUpdated = 0, errors = 0;
-  
+  let inserted = 0, phoneUpdated = 0, priceUpdated = 0, skippedNoMatch = 0, errors = 0;
+
   for (const modaaNum of allIds) {
     try {
       // Fetch details and phone in parallel
@@ -241,25 +252,26 @@ async function scanCity(city, maxPages = 3) {
         fetchListingDetails(modaaNum),
         fetchPhone(modaaNum)
       ]);
-      
+
       if (!details) { errors++; continue; }
-      
+
       const listing = { ...details, ...phoneData };
       const result = await saveListing(listing);
-      
+
       if (result === 'inserted') inserted++;
       else if (result === 'phone_updated') phoneUpdated++;
       else if (result === 'price_updated') priceUpdated++;
-      
+      else if (result === 'no_complex_match') skippedNoMatch++;
+
       await sleep(DELAY_MS);
     } catch (err) {
       logger.warn(`[KomoDirect] Error processing ${modaaNum}: ${err.message}`);
       errors++;
     }
   }
-  
-  logger.info(`[KomoDirect] ${city}: ${inserted} new, ${phoneUpdated} phone updated, ${priceUpdated} price updated, ${errors} errors`);
-  return { city, total: allIds.length, inserted, phoneUpdated, priceUpdated, errors };
+
+  logger.info(`[KomoDirect] ${city}: ${inserted} new, ${phoneUpdated} phone updated, ${priceUpdated} price updated, ${skippedNoMatch} skipped (not pinuy-binuy), ${errors} errors`);
+  return { city, total: allIds.length, inserted, phoneUpdated, priceUpdated, skippedNoMatch, errors };
 }
 
 /**
