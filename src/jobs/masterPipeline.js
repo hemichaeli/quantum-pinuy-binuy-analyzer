@@ -31,10 +31,13 @@
 'use strict';
 
 const cron = require('node-cron');
+const axios = require('axios');
 const pool = require('../db/pool');
 const { logger } = require('../services/logger');
-let Anthropic = null;
-try { Anthropic = require('@anthropic-ai/sdk'); } catch (e) { logger.warn('[MasterPipeline] @anthropic-ai/sdk not installed — Claude synthesis disabled'); }
+// Direct axios calls to https://api.anthropic.com (consistent with claudeEnrichmentService,
+// claudeOrchestrator, mavatScraper, aiService, botRoutes — none use the SDK).
+const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
+const CLAUDE_MODEL = 'claude-sonnet-4-6';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const PIPELINE_CRON = process.env.MASTER_PIPELINE_CRON || '0 6 * * *'; // 06:00 daily Israel time
@@ -491,30 +494,42 @@ ${JSON.stringify(statutory, null, 2).slice(0, 1500)}
  */
 async function synthesizeComplex(complex) {
   try {
-    if (!Anthropic) throw new Error('@anthropic-ai/sdk not installed');
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
 
-    const client = new Anthropic({ apiKey });
     const prompt = buildSynthesisPrompt(complex);
 
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }]
-    });
+    const response = await axios.post(
+      CLAUDE_API_URL,
+      {
+        model: CLAUDE_MODEL,
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }]
+      },
+      {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000
+      }
+    );
 
-    const content = message.content[0]?.text || '';
+    const content = response.data?.content?.[0]?.text || '';
     let data = null;
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) data = JSON.parse(jsonMatch[0]);
     } catch (e) {
-      logger.warn(`[Synthesis] JSON parse failed for ${complex.name}`);
+      logger.warn(`[Synthesis] JSON parse failed for ${complex.name}: ${e.message}`);
       return null;
     }
 
-    if (!data) return null;
+    if (!data) {
+      logger.warn(`[Synthesis] Claude returned no parseable JSON for ${complex.name} (content len ${content.length})`);
+      return null;
+    }
 
     // Store synthesis results
     await pool.query(`
@@ -535,7 +550,10 @@ async function synthesizeComplex(complex) {
 
     return data;
   } catch (err) {
-    logger.warn(`[Synthesis] Claude failed for ${complex.name}: ${err.message}`);
+    // Elevated to error so silent failures (like @anthropic-ai/sdk not installed —
+    // happened for ~3 days, every complex returned null) become visible immediately.
+    const apiErr = err.response?.data?.error?.message || err.message;
+    logger.error(`[Synthesis] Claude failed for ${complex.name}: ${apiErr}`);
     return null;
   }
 }
