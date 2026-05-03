@@ -493,11 +493,13 @@ ${JSON.stringify(statutory, null, 2).slice(0, 1500)}
  * Synthesize a single complex using Claude
  */
 async function synthesizeComplex(complex) {
+  const tag = `[Synthesis #${complex.id} ${complex.name}]`;
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
 
     const prompt = buildSynthesisPrompt(complex);
+    logger.info(`${tag} START — prompt ${prompt.length} chars, model=${CLAUDE_MODEL}`);
 
     const response = await axios.post(
       CLAUDE_API_URL,
@@ -517,17 +519,24 @@ async function synthesizeComplex(complex) {
     );
 
     const content = response.data?.content?.[0]?.text || '';
+    const stopReason = response.data?.stop_reason || '?';
+    const usage = response.data?.usage || {};
+    logger.info(`${tag} HTTP ${response.status} stop=${stopReason} content=${content.length}ch in_tok=${usage.input_tokens||'?'} out_tok=${usage.output_tokens||'?'}`);
+
     let data = null;
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) data = JSON.parse(jsonMatch[0]);
     } catch (e) {
-      logger.warn(`[Synthesis] JSON parse failed for ${complex.name}: ${e.message}`);
+      // Surface the head of the content so we can see what Claude actually returned.
+      const head = content.slice(0, 300).replace(/\s+/g, ' ');
+      logger.error(`${tag} JSON_PARSE_FAIL: ${e.message} — head: "${head}"`);
       return null;
     }
 
     if (!data) {
-      logger.warn(`[Synthesis] Claude returned no parseable JSON for ${complex.name} (content len ${content.length})`);
+      const head = content.slice(0, 300).replace(/\s+/g, ' ');
+      logger.error(`${tag} NO_JSON: stop=${stopReason} content_head="${head}"`);
       return null;
     }
 
@@ -548,12 +557,13 @@ async function synthesizeComplex(complex) {
       complex.id
     ]);
 
+    logger.info(`${tag} OK — premium=${data.premium_potential_score} realize=${data.realization_speed_score} months=${data.estimated_months_to_realization}`);
     return data;
   } catch (err) {
-    // Elevated to error so silent failures (like @anthropic-ai/sdk not installed —
-    // happened for ~3 days, every complex returned null) become visible immediately.
+    const status = err.response?.status;
     const apiErr = err.response?.data?.error?.message || err.message;
-    logger.error(`[Synthesis] Claude failed for ${complex.name}: ${apiErr}`);
+    const errType = err.response?.data?.error?.type || err.code || '?';
+    logger.error(`${tag} FAIL status=${status||'?'} type=${errType} — ${apiErr}`);
     return null;
   }
 }
