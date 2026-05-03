@@ -461,7 +461,8 @@ function buildSynthesisPrompt(complex) {
 - עד תחילת בנייה: ${monthsToConstruction}
 
 ## נתוני שוק:
-- מחיר ממוצע למ"ר: ${complex.city_avg_price_sqm ? '₪' + parseInt(complex.city_avg_price_sqm).toLocaleString('he-IL') : 'לא ידוע'}
+- מחיר ממוצע למ"ר בעיר: ${complex.city_avg_price_sqm ? '₪' + parseInt(complex.city_avg_price_sqm).toLocaleString('he-IL') : 'לא ידוע'}
+- מחיר ממוצע למ"ר במתחם (מודעות פעילות): ${complex.current_avg_price_sqm ? '₪' + parseInt(complex.current_avg_price_sqm).toLocaleString('he-IL') : 'לא ידוע (אין מודעות פעילות)'}
 - יחידות מתוכננות: ${complex.planned_units || 'לא ידוע'}
 - יחידות קיימות: ${complex.existing_units || 'לא ידוע'}
 - אחוז חתימות: ${complex.signature_percent ? complex.signature_percent + '%' : 'לא ידוע'}
@@ -547,6 +548,11 @@ async function runClaudeSynthesis() {
     SELECT c.id, c.name, c.city, c.status, c.iai_score,
            c.actual_premium, c.statutory_premium_estimate,
            c.city_avg_price_sqm,
+           (SELECT ROUND(AVG(price_per_sqm))::int
+              FROM listings
+              WHERE complex_id = c.id
+                AND is_active = TRUE
+                AND price_per_sqm > 0) AS current_avg_price_sqm,
            c.planned_units, c.existing_units, c.signature_percent,
            c.local_committee_date, c.district_committee_date,
            c.is_tamal, c.is_vatmal, c.vatmal_status, c.vatmal_plan_number, c.vatmal_next_hearing,
