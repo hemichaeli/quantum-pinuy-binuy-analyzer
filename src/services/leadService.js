@@ -1,13 +1,14 @@
 /**
  * Lead Management Service for QUANTUM
- * Handles: DB storage, email notifications, Trello cards, lead scoring
- * v1.1.0 - Added contact form support
+ * Handles: DB storage, email notifications, Trello cards, lead scoring, Brevo welcome sequence
+ * v1.2.0 - Added Brevo welcome email + mailing list consent handling
  */
 
 const pool = require('../db/pool');
 const { logger } = require('./logger');
 const notificationService = require('./notificationService');
 const trelloService = require('./trelloService');
+const { sendWelcomeEmail } = require('./brevoService');
 
 async function ensureLeadsTable() {
   try {
@@ -26,7 +27,6 @@ async function ensureLeadsTable() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_website_leads_status ON website_leads(status)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_website_leads_created ON website_leads(created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_website_leads_urgent ON website_leads(is_urgent) WHERE is_urgent = TRUE`);
-    // Campaign tracking columns (idempotent)
     await pool.query(`ALTER TABLE website_leads ADD COLUMN IF NOT EXISTS campaign_tag TEXT`).catch(() => {});
     await pool.query(`ALTER TABLE website_leads ADD COLUMN IF NOT EXISTS utm_source TEXT`).catch(() => {});
     await pool.query(`ALTER TABLE website_leads ADD COLUMN IF NOT EXISTS utm_campaign TEXT`).catch(() => {});
@@ -41,20 +41,17 @@ function isLeadUrgent(lead) {
   const { user_type, form_data } = lead;
   if (user_type === 'contact') return false;
   const data = typeof form_data === 'string' ? JSON.parse(form_data) : (form_data || {});
-
   if (user_type === 'investor') {
     if (data.budget === '5m+') return true;
     if (data.hasMultipleInvestments === true) return true;
     if ((data.areas || []).length >= 3) return true;
   }
-
   if (user_type === 'owner') {
     if (data.propertyType === 'building' || data.propertyType === 'commercial') return true;
     if (data.hasMultipleProperties === true) return true;
     if (data.status === 'project') return true;
     if (data.purpose === 'offer') return true;
   }
-
   return false;
 }
 
@@ -80,59 +77,28 @@ function formatLeadEmailHTML(lead) {
   const typeInfo = TYPE_LABELS[lead.user_type] || TYPE_LABELS.contact;
   const urgentBadge = lead.is_urgent ? '<span style="background:#dc2626;color:white;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:bold;">URGENT</span>' : '';
   const data = typeof lead.form_data === 'string' ? JSON.parse(lead.form_data) : (lead.form_data || {});
-
   let detailsHTML = '';
   if (lead.user_type === 'investor') {
     const budgetMap = { '1-2m': '1-2 מיליון ₪', '2-5m': '2-5 מיליון ₪', '5m+': '5 מיליון ₪+' };
     const horizonMap = { 'short': 'טווח קצר', 'long': 'טווח ארוך' };
     const areaMap = { 'center': 'מרכז', 'sharon': 'השרון', 'north': 'צפון', 'south': 'דרום', 'jerusalem': 'ירושלים', 'haifa': 'חיפה והקריות' };
-    detailsHTML = `
-      <tr><td style="padding:4px 8px;font-weight:bold;">תקציב:</td><td>${budgetMap[data.budget] || '-'}</td></tr>
-      <tr><td style="padding:4px 8px;font-weight:bold;">אזורים:</td><td>${(data.areas || []).map(a => areaMap[a] || a).join(', ') || '-'}</td></tr>
-      <tr><td style="padding:4px 8px;font-weight:bold;">אופק:</td><td>${horizonMap[data.horizon] || '-'}</td></tr>
-      <tr><td style="padding:4px 8px;font-weight:bold;">מספר נכסים:</td><td>${data.hasMultipleInvestments ? 'כן' : 'נכס אחד'}</td></tr>`;
+    detailsHTML = `<tr><td style="padding:4px 8px;font-weight:bold;">תקציב:</td><td>${budgetMap[data.budget] || '-'}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">אזורים:</td><td>${(data.areas || []).map(a => areaMap[a] || a).join(', ') || '-'}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">אופק:</td><td>${horizonMap[data.horizon] || '-'}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">מספר נכסים:</td><td>${data.hasMultipleInvestments ? 'כן' : 'נכס אחד'}</td></tr>`;
   } else if (lead.user_type === 'owner') {
     const propertyTypeMap = { 'residential': 'דירת מגורים', 'building': 'בניין שלם', 'commercial': 'נכס מסחרי' };
     const purposeMap = { 'rights': 'בדיקת זכויות', 'offer': 'רכישה מהירה', 'management': 'ניהול' };
     const statusMap = { 'project': 'יש פרויקט', 'no-info': 'אין מידע' };
     const addresses = (data.addresses || []).map(a => `${a.street} ${a.buildingNumber}, ${a.city}`).join('<br>');
-    detailsHTML = `
-      <tr><td style="padding:4px 8px;font-weight:bold;">כתובות:</td><td>${addresses || '-'}</td></tr>
-      <tr><td style="padding:4px 8px;font-weight:bold;">סוג נכס:</td><td>${propertyTypeMap[data.propertyType] || '-'}</td></tr>
-      <tr><td style="padding:4px 8px;font-weight:bold;">מטרה:</td><td>${purposeMap[data.purpose] || '-'}</td></tr>
-      <tr><td style="padding:4px 8px;font-weight:bold;">סטטוס:</td><td>${statusMap[data.status] || '-'}</td></tr>
-      <tr><td style="padding:4px 8px;font-weight:bold;">מספר נכסים:</td><td>${data.hasMultipleProperties ? 'כן' : 'נכס אחד'}</td></tr>`;
+    detailsHTML = `<tr><td style="padding:4px 8px;font-weight:bold;">כתובות:</td><td>${addresses || '-'}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">סוג נכס:</td><td>${propertyTypeMap[data.propertyType] || '-'}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">מטרה:</td><td>${purposeMap[data.purpose] || '-'}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">סטטוס:</td><td>${statusMap[data.status] || '-'}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">מספר נכסים:</td><td>${data.hasMultipleProperties ? 'כן' : 'נכס אחד'}</td></tr>`;
   } else if (lead.user_type === 'contact') {
     const message = data.message || data.notes || '';
     const subject = data.subject || '';
-    detailsHTML = `
-      ${subject ? `<tr><td style="padding:4px 8px;font-weight:bold;">נושא:</td><td>${subject}</td></tr>` : ''}
-      <tr><td style="padding:4px 8px;font-weight:bold;vertical-align:top;">הודעה:</td><td style="white-space:pre-wrap;">${message || 'ללא הודעה'}</td></tr>`;
+    detailsHTML = `${subject ? `<tr><td style="padding:4px 8px;font-weight:bold;">נושא:</td><td>${subject}</td></tr>` : ''}<tr><td style="padding:4px 8px;font-weight:bold;vertical-align:top;">הודעה:</td><td style="white-space:pre-wrap;">${message || 'ללא הודעה'}</td></tr>`;
   }
-
-  return `<div dir="rtl" style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-    <div style="background:linear-gradient(135deg,#1e3a5f,#0f2b46);color:white;padding:20px;border-radius:8px 8px 0 0;">
-      <h1 style="margin:0;font-size:22px;">${typeInfo.emoji} QUANTUM - ${typeInfo.label} ${urgentBadge}</h1>
-      <p style="margin:8px 0 0;opacity:0.8;font-size:14px;">${new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })}</p>
-    </div>
-    <div style="background:#fff;padding:20px;border:1px solid #e5e7eb;">
-      <h2 style="color:#1e3a5f;margin:0 0 16px;font-size:18px;">פרטי קשר</h2>
-      <table style="width:100%;border-collapse:collapse;">
-        <tr><td style="padding:4px 8px;font-weight:bold;">שם:</td><td>${lead.name}</td></tr>
-        <tr><td style="padding:4px 8px;font-weight:bold;">טלפון:</td><td><a href="tel:${lead.phone}">${lead.phone}</a></td></tr>
-        <tr><td style="padding:4px 8px;font-weight:bold;">אימייל:</td><td><a href="mailto:${lead.email}">${lead.email}</a></td></tr>
-      </table>
-      ${detailsHTML ? `<h2 style="color:#1e3a5f;margin:20px 0 16px;font-size:18px;">פרטים</h2><table style="width:100%;border-collapse:collapse;">${detailsHTML}</table>` : ''}
-      ${lead.mailing_list_consent ? '<p style="color:#16a34a;font-size:12px;margin-top:16px;">✅ אישר/ה רשימת תפוצה</p>' : ''}
-    </div>
-    <div style="background:#f9fafb;padding:12px 20px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;text-align:center;">
-      <p style="margin:0;font-size:11px;color:#9ca3af;">QUANTUM Lead Management v1.1</p>
-    </div></div>`;
+  return `<div dir="rtl" style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;"><div style="background:linear-gradient(135deg,#1e3a5f,#0f2b46);color:white;padding:20px;border-radius:8px 8px 0 0;"><h1 style="margin:0;font-size:22px;">${typeInfo.emoji} QUANTUM - ${typeInfo.label} ${urgentBadge}</h1><p style="margin:8px 0 0;opacity:0.8;font-size:14px;">${new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })}</p></div><div style="background:#fff;padding:20px;border:1px solid #e5e7eb;"><h2 style="color:#1e3a5f;margin:0 0 16px;font-size:18px;">פרטי קשר</h2><table style="width:100%;border-collapse:collapse;"><tr><td style="padding:4px 8px;font-weight:bold;">שם:</td><td>${lead.name}</td></tr><tr><td style="padding:4px 8px;font-weight:bold;">טלפון:</td><td><a href="tel:${lead.phone}">${lead.phone}</a></td></tr><tr><td style="padding:4px 8px;font-weight:bold;">אימייל:</td><td><a href="mailto:${lead.email}">${lead.email}</a></td></tr></table>${detailsHTML ? `<h2 style="color:#1e3a5f;margin:20px 0 16px;font-size:18px;">פרטים</h2><table style="width:100%;border-collapse:collapse;">${detailsHTML}</table>` : ''}${lead.mailing_list_consent ? '<p style="color:#16a34a;font-size:12px;margin-top:16px;">✅ אישר/ה רשימת תפוצה</p>' : ''}</div><div style="background:#f9fafb;padding:12px 20px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;text-align:center;"><p style="margin:0;font-size:11px;color:#9ca3af;">QUANTUM Lead Management v1.1</p></div></div>`;
 }
 
 async function processNewLead(leadData) {
   const results = { saved: false, emailSent: false, trelloCreated: false, leadId: null, errors: [] };
-
   try {
     await ensureLeadsTable();
     const isUrgent = isLeadUrgent(leadData);
@@ -162,7 +128,6 @@ async function processNewLead(leadData) {
       const urgentPrefix = isUrgent ? '🚨 URGENT ' : '';
       const subject = `${urgentPrefix}${typeInfo.emoji} [QUANTUM] ${typeInfo.label}: ${leadData.name}`;
       const htmlBody = formatLeadEmailHTML(lead);
-
       const emailTargets = [notificationService.PERSONAL_EMAIL, notificationService.OFFICE_EMAIL].filter(Boolean);
       let sentCount = 0;
       for (const email of emailTargets) {
@@ -185,22 +150,14 @@ async function processNewLead(leadData) {
     try {
       if (trelloService.isConfigured()) {
         let trelloResult;
-        if (leadData.user_type === 'investor') {
-          trelloResult = await trelloService.createInvestorCard(lead);
-        } else if (leadData.user_type === 'owner') {
-          trelloResult = await trelloService.createSellerCard(lead);
-        } else if (leadData.user_type === 'contact') {
-          trelloResult = await trelloService.createContactCard(lead);
-        } else {
-          // Unknown type fallback to contact
-          trelloResult = await trelloService.createContactCard(lead);
-        }
+        if (leadData.user_type === 'investor') trelloResult = await trelloService.createInvestorCard(lead);
+        else if (leadData.user_type === 'owner') trelloResult = await trelloService.createSellerCard(lead);
+        else trelloResult = await trelloService.createContactCard(lead);
         results.trelloCreated = trelloResult.success;
         if (trelloResult.success && results.leadId) {
           await pool.query('UPDATE website_leads SET trello_card_id = $1, trello_card_url = $2 WHERE id = $3',
             [trelloResult.cardId, trelloResult.url, results.leadId]).catch(() => {});
         }
-        // System notification card (skip for contact - the card itself is the notification)
         if (leadData.user_type !== 'contact') {
           const typeInfo = TYPE_LABELS[leadData.user_type] || TYPE_LABELS.contact;
           await trelloService.createNotificationCard(
@@ -209,7 +166,6 @@ async function processNewLead(leadData) {
           ).catch(err => logger.warn('Notification card failed:', err.message));
         }
       } else {
-        // Fallback: Trello email-to-board
         try {
           const trelloEmail = notificationService.TRELLO_EMAIL;
           if (trelloEmail) {
@@ -226,7 +182,19 @@ async function processNewLead(leadData) {
       results.errors.push({ step: 'trello', error: err.message });
     }
 
-    logger.info(`Lead processed: #${results.leadId}`, { type: leadData.user_type, urgent: isUrgent, db: results.saved, email: results.emailSent, trello: results.trelloCreated });
+    // 4. Send welcome email via Brevo (mailing list opt-in)
+    if (leadData.mailing_list_consent && leadData.email) {
+      try {
+        const brevoResult = await sendWelcomeEmail({ ...lead, form_data: leadData.form_data, utm_campaign: leadData.utm_campaign });
+        results.welcomeEmailSent = brevoResult.sent;
+        if (!brevoResult.sent) logger.warn('[Brevo] Welcome email not sent:', brevoResult);
+      } catch (err) {
+        logger.error('[Brevo] Welcome email error (non-blocking):', err.message);
+        results.welcomeEmailSent = false;
+      }
+    }
+
+    logger.info(`Lead processed: #${results.leadId}`, { type: leadData.user_type, urgent: isUrgent, db: results.saved, email: results.emailSent, trello: results.trelloCreated, brevo: results.welcomeEmailSent || false });
     return results;
   } catch (err) {
     logger.error('Lead processing failed:', err.message);
