@@ -131,6 +131,64 @@ function detectLang(leadData) {
   return WELCOME_EMAIL[lang] ? lang : 'en';
 }
 
+// Brevo template IDs for Emails 2-7 in 6 languages.
+// Uploaded via Brevo API 2026-05-12. Source: docs/marketing-council/email-drip-sequence.md.
+const DRIP_TEMPLATE_IDS = {
+  he: { 2: 2,  3: 7,  4: 13, 5: 19, 6: 25, 7: 31 },
+  en: { 2: 1,  3: 8,  4: 14, 5: 20, 6: 26, 7: 32 },
+  fr: { 2: 3,  3: 9,  4: 15, 5: 21, 6: 27, 7: 33 },
+  es: { 2: 4,  3: 10, 4: 16, 5: 22, 6: 28, 7: 34 },
+  ru: { 2: 5,  3: 11, 4: 17, 5: 23, 6: 29, 7: 35 },
+  de: { 2: 6,  3: 12, 4: 18, 5: 24, 6: 30, 7: 36 },
+};
+// Days after lead capture to send each drip email
+const DRIP_DELAY_DAYS = { 2: 2, 3: 7, 4: 11, 5: 16, 6: 22, 7: 30 };
+
+async function scheduleDripSequence(leadData) {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) {
+    logger.warn('[Brevo Drip] BREVO_API_KEY not set, drip skipped');
+    return { scheduled: 0, reason: 'no_api_key' };
+  }
+  const lang = detectLang(leadData);
+  const templates = DRIP_TEMPLATE_IDS[lang] || DRIP_TEMPLATE_IDS.en;
+  const firstName = leadData.name?.split(' ')[0] || leadData.name || '';
+  const now = Date.now();
+  const batchId = `quantum-drip-${leadData.id || leadData.email || Date.now()}`;
+
+  let scheduled = 0;
+  const errors = [];
+  for (const [emailN, templateId] of Object.entries(templates)) {
+    const delayMs = DRIP_DELAY_DAYS[emailN] * 24 * 60 * 60 * 1000;
+    const scheduledAt = new Date(now + delayMs).toISOString();
+    try {
+      const res = await fetch(BREVO_API_URL, {
+        method: 'POST',
+        headers: { 'accept': 'application/json', 'api-key': apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          templateId,
+          to: [{ email: leadData.email, name: leadData.name }],
+          scheduledAt,
+          batchId,
+          params: { FIRSTNAME: firstName },
+          tags: ['drip-sequence', `email-${emailN}`, `lang-${lang}`, leadData.user_type || 'lead'],
+        }),
+      });
+      if (res.ok) {
+        scheduled++;
+      } else {
+        const errText = await res.text();
+        errors.push(`E${emailN}:${res.status}:${errText.slice(0, 120)}`);
+      }
+    } catch (err) {
+      errors.push(`E${emailN}:${err.message}`);
+    }
+  }
+  logger.info(`[Brevo Drip] Scheduled ${scheduled}/6 for ${leadData.email} (lang: ${lang}, batchId: ${batchId})`);
+  if (errors.length) logger.warn(`[Brevo Drip] Errors: ${errors.join(' | ')}`);
+  return { scheduled, total: 6, batchId, errors };
+}
+
 async function sendWelcomeEmail(leadData) {
   const apiKey = process.env.BREVO_API_KEY;
   if (!apiKey) {
@@ -166,6 +224,10 @@ async function sendWelcomeEmail(leadData) {
     }
 
     logger.info(`[Brevo] Welcome email sent to ${leadData.email} (lang: ${lang})`);
+
+    // Fire and forget the drip schedule. Welcome success is not gated on drip success.
+    scheduleDripSequence(leadData).catch(err => logger.error('[Brevo Drip] Unhandled:', err.message));
+
     return { sent: true, lang };
   } catch (err) {
     logger.error('[Brevo] Request error:', err.message);
@@ -173,4 +235,4 @@ async function sendWelcomeEmail(leadData) {
   }
 }
 
-module.exports = { sendWelcomeEmail };
+module.exports = { sendWelcomeEmail, scheduleDripSequence };
