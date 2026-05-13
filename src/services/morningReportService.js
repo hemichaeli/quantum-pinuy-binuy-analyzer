@@ -38,7 +38,87 @@ async function sendEmail({ subject, html }) {
   }
 }
 
-function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum }) {
+async function _digestSafeCount(sql) {
+  try {
+    const { rows } = await pool.query(sql);
+    return parseInt(rows[0]?.c || 0, 10);
+  } catch (e) { return -1; }
+}
+
+async function _digestGetSetting(key, defaultValue = '') {
+  try {
+    const { rows } = await pool.query('SELECT value FROM system_settings WHERE key = $1', [key]);
+    return rows.length > 0 ? rows[0].value : defaultValue;
+  } catch (e) { return defaultValue; }
+}
+
+async function buildSystemDigest() {
+  // IMPORTANT (2026-05-13): listings table is general-purpose (Yad2, Facebook, Komo,
+  // BankNadlan, Yad1, Winwin, Homeless, etc.) with a nullable complex_id. Only
+  // listings matched into a known pinuy-binuy complex have complex_id populated.
+  // We scope listings-derived counts to `complex_id IS NOT NULL` so this digest
+  // reflects pinuy-binuy activity only — matching the original 08:00 scan intent
+  // (which was missing the filter and over-counted everything).
+  //
+  // hot_opportunity_alerts and lead_matches are already pinuy-binuy-scoped at
+  // ingest time (alerts JOIN complexes with iai/ssi thresholds; matches carry
+  // complex_id from the matchEngine), so no extra WHERE clause needed there.
+  const since = "NOW() - INTERVAL '24 hours'";
+  const [leadsNew, listingsSeen, messagesSent, hotOpps, matchesNew, optoutsNew] = await Promise.all([
+    _digestSafeCount(`SELECT COUNT(*) AS c FROM website_leads WHERE created_at > ${since}`),
+    _digestSafeCount(`SELECT COUNT(*) AS c FROM listings WHERE first_seen > ${since} AND complex_id IS NOT NULL`),
+    _digestSafeCount(`SELECT COUNT(*) AS c FROM listings WHERE last_message_sent_at > ${since} AND complex_id IS NOT NULL`),
+    _digestSafeCount(`SELECT COUNT(*) AS c FROM hot_opportunity_alerts WHERE created_at > ${since}`),
+    _digestSafeCount(`SELECT COUNT(*) AS c FROM lead_matches WHERE created_at > ${since}`),
+    _digestSafeCount(`SELECT COUNT(*) AS c FROM wa_optouts WHERE opted_out_at > ${since}`),
+  ]);
+  const [bulkEnabled, bulkTemplate, agentPhone] = await Promise.all([
+    _digestGetSetting('bulk_outreach_enabled', 'false'),
+    _digestGetSetting('bulk_outreach_template_id', ''),
+    _digestGetSetting('agent_phone', ''),
+  ]);
+  return { leadsNew, listingsSeen, messagesSent, hotOpps, matchesNew, optoutsNew, bulkEnabled, bulkTemplate, agentPhone };
+}
+
+function buildDigestSectionHtml(d) {
+  const linkStyle = 'color:#4ecdc4; text-decoration:none; font-weight:600;';
+  const fmt = (v) => (v < 0 ? '⚠︎' : v);
+  const valColor = (v) => (v < 0 ? '#f87171' : v > 0 ? '#4ecdc4' : '#9aa0b0');
+  const row = (label, value, link) => `
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.06);">
+      <td style="padding:10px 14px; color:#e8eaf0; font-size:13px;">${label}</td>
+      <td style="padding:10px 14px; text-align:left; color:${valColor(value)}; font-weight:700; font-size:17px;">
+        ${link ? `<a href="${link}" style="color:${valColor(value)}; text-decoration:none;">${fmt(value)}</a>` : fmt(value)}
+      </td>
+    </tr>`;
+  const enabledColor = d.bulkEnabled === 'true' ? '#4ade80' : '#f87171';
+
+  return `
+  <div style="background:#2a2d35; border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:16px; overflow:hidden;">
+    <div style="padding:16px 20px; border-bottom:1px solid rgba(255,255,255,0.08); display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-weight:700; font-size:15px;">📊 מערכת ובוט (24 שעות)</span>
+      <a href="${DASHBOARD_BASE}" style="${linkStyle} font-size:12px;">פתח דשבורד &larr;</a>
+    </div>
+    <table style="width:100%; border-collapse:collapse;">
+      ${row('לידים חדשים', d.leadsNew, tabLink('leads'))}
+      ${row('דירות חדשות במתחמי פינוי-בינוי', d.listingsSeen, tabLink('ads'))}
+      ${row('הודעות יוצאות (פינוי-בינוי)', d.messagesSent, tabLink('messages'))}
+      ${row('התראות hot-opportunity', d.hotOpps)}
+      ${row('התאמות חדשות (Match Engine)', d.matchesNew)}
+      ${row('הסרות מרשימת תפוצה', d.optoutsNew)}
+    </table>
+    <div style="padding:12px 20px; background:rgba(0,0,0,0.18); border-top:1px solid rgba(255,255,255,0.06);">
+      <div style="color:#9aa0b0; font-size:11px; margin-bottom:4px; letter-spacing:1px; text-transform:uppercase;">מצב בוט מוכרים</div>
+      <div style="font-size:13px; color:#e8eaf0;">
+        enabled=<b style="color:${enabledColor};">${d.bulkEnabled}</b>
+        &nbsp;|&nbsp; template=<b style="color:#4ecdc4;">${d.bulkTemplate || '-'}</b>
+        &nbsp;|&nbsp; phone=<b style="color:#4ecdc4;">${d.agentPhone || '-'}</b>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum, digest, digestHtml }) {
   const linkStyle = 'color:#4ecdc4; text-decoration:none; font-weight:600;';
   const rowStyle = (bg) => `background:${bg}; border-bottom:1px solid #3a3f4a;`;
 
@@ -178,6 +258,8 @@ function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats,
     </table>
   </div>` : ''}
 
+  ${digestHtml || ''}
+
   <div style="text-align:center; padding:20px 0 10px;">
     <a href="${tabLink('dashboard')}" style="background:#4ecdc4; color:#1a1d24; padding:12px 32px; border-radius:8px; font-weight:700; font-size:14px; text-decoration:none; display:inline-block;">פתח דשבורד מלא &larr;</a>
     <div style="color:#6b7280; font-size:11px; margin-top:14px;">QUANTUM Analyzer | דוח אוטומטי יומי 07:30</div>
@@ -258,19 +340,31 @@ async function sendMorningReport() {
     });
     const scanNum = Math.floor(Date.now() / 86400000) % 1000 + 100;
 
+    // Merge 08:00 daily-digest data (bot ops canary) into the 07:30 report.
+    // The standalone 08:00 cron in src/cron/dailyDigestCron.js is now disabled
+    // in src/index.js — this is the single unified morning email.
+    let digest = null;
+    let digestHtml = '';
+    try {
+      digest = await buildSystemDigest();
+      digestHtml = buildDigestSectionHtml(digest);
+    } catch (digErr) {
+      logger.warn('[MorningReport] Digest build failed (continuing without):', digErr.message);
+    }
+
     let emailResult = { sent: false };
     try {
       emailResult = await sendEmail({
         subject: `🌅 [QUANTUM] דוח בוקר ${today}`,
-        html: buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum })
+        html: buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum, digest, digestHtml })
       });
     } catch (emailErr) {
       logger.warn('[MorningReport] Email failed:', emailErr.message);
       emailResult = { sent: false, error: emailErr.message };
     }
 
-    logger.info('[MorningReport] Complete', { stats });
-    return { success: true, stats, email: emailResult, generated_at: new Date().toISOString() };
+    logger.info('[MorningReport] Complete', { stats, digest });
+    return { success: true, stats, digest, email: emailResult, generated_at: new Date().toISOString() };
 
   } catch (err) {
     logger.error('[MorningReport] Fatal:', err.message);
@@ -278,4 +372,4 @@ async function sendMorningReport() {
   }
 }
 
-module.exports = { sendMorningReport };
+module.exports = { sendMorningReport, buildSystemDigest };

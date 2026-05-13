@@ -489,12 +489,20 @@ async function start() {
       logger.info('[OutreachEscalation] ACTIVE - checking every 30 min');
     } catch (e) { logger.warn('[OutreachEscalation] Failed:', e.message); }
 
-    try {
-      const cron = require('node-cron');
-      const { runDailyDigest } = require('./cron/dailyDigestCron');
-      cron.schedule('0 8 * * *', async () => { try { await runDailyDigest(); } catch (e) {} }, { timezone: 'Asia/Jerusalem' });
-      logger.info('[DailyDigest] ACTIVE - 08:00 IL');
-    } catch (e) { logger.warn('[DailyDigest] Failed:', e.message); }
+    // 2026-05-13: DailyDigest 08:00 cron disabled. Its data (leads/listings/messages/
+    // hot-opps/matches/optouts + bot config state) is now embedded in the 07:30
+    // Morning Intelligence Report via buildSystemDigest() in morningReportService.
+    // To re-enable as a separate canary, set ENABLE_DAILY_DIGEST=true.
+    if (process.env.ENABLE_DAILY_DIGEST === 'true') {
+      try {
+        const cron = require('node-cron');
+        const { runDailyDigest } = require('./cron/dailyDigestCron');
+        cron.schedule('0 8 * * *', async () => { try { await runDailyDigest(); } catch (e) {} }, { timezone: 'Asia/Jerusalem' });
+        logger.info('[DailyDigest] ACTIVE - 08:00 IL (legacy mode)');
+      } catch (e) { logger.warn('[DailyDigest] Failed:', e.message); }
+    } else {
+      logger.info('[DailyDigest] MERGED into 07:30 morning report (set ENABLE_DAILY_DIGEST=true to restore standalone 08:00 send)');
+    }
 
     try {
       const cron = require('node-cron');
