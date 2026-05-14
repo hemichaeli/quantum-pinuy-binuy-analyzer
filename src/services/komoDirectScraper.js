@@ -84,6 +84,108 @@ async function fetchPhone(modaaNum) {
 }
 
 /**
+ * Pure extractor — takes raw HTML and a modaaNum, returns the listing shape.
+ * Exported so the PoC harness and tests can run it without making HTTP calls.
+ */
+function extractFromHtml(html, modaaNum) {
+  // Decode common HTML entities up-front so regex patterns see plain text.
+  // Numeric entities matter especially: komo encodes ₪ as &#8362; on some pages.
+  const decoded = html
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = parseInt(n, 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _;
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => {
+      const code = parseInt(h, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _;
+    });
+
+  const titleMatch = decoded.match(/<title>([^<]+)<\/title>/);
+  const titleText = titleMatch ? titleMatch[1].trim() : '';
+
+  // Prefer og:title — its content shape is "למכירה דירות N חדרים  ב<city>, <street>"
+  const ogTitleMatch = decoded.match(/<meta\s+property="og:title"\s+content="([^"]+)"/);
+  const ogTitleText = ogTitleMatch ? ogTitleMatch[1].trim() : '';
+  const sourceTitle = ogTitleText || titleText;
+
+  // City from "ב<city>, <street>" — strip the prepositional ב prefix only,
+  // not every ב in the city name (the original cleanup deleted "תל אביב" down to "יב").
+  const cityMatch = sourceTitle.match(/\sב([^,]+),/);
+  let city = cityMatch ? cityMatch[1].trim().replace(/^ב/, '').trim() : '';
+
+  // Neighborhood / street comes after the comma. Two shapes seen:
+  //   - "<city>, <neighborhood> <month-name> <year>"  (page <title>)
+  //   - "<city>, <street_name> <house_number?>"        (og:title)
+  // Try the page <title> first because it has the month marker; fall back to og:title's everything-after-comma.
+  let neighborhood = '';
+  const neighFromTitle = titleText.match(/,\s*([^,\d]+?)\s+(?:ינואר|פברואר|מרץ|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר)/);
+  if (neighFromTitle) {
+    neighborhood = neighFromTitle[1].trim();
+  } else if (ogTitleText) {
+    const afterComma = ogTitleText.match(/,\s*(.+)$/);
+    if (afterComma) neighborhood = afterComma[1].trim();
+  }
+
+  const h1Match = decoded.match(/<h1[^>]*>([^<]+)<\/h1>/);
+  const h1Text = h1Match ? h1Match[1].trim() : '';
+
+  const address = neighborhood ? `${neighborhood}, ${city}` : city;
+
+  // Price — komo serves "₪3,420,000" (₪ THEN number). The legacy regex
+  // /([\d,]+)\s*₪/ looked for the opposite direction and missed every page.
+  const priceMatch = decoded.match(/₪\s*([\d,]+)/) || decoded.match(/([\d,]+)\s*₪/);
+  const price = priceMatch ? parseInt(priceMatch[1].replace(/,/g, ''), 10) || null : null;
+
+  const roomsMatch = decoded.match(/(\d+\.?\d*)\s*חד/);
+  const rooms = roomsMatch ? parseFloat(roomsMatch[1]) : null;
+
+  const sqmMatch = decoded.match(/(\d+)\s*מ['"]{0,2}ר/);
+  const area_sqm = sqmMatch ? parseInt(sqmMatch[1], 10) : null;
+
+  // "קומה: 3" or "קומה 3" — also "קומת קרקע" → 0
+  let floor = null;
+  if (/קומת\s+קרקע/.test(decoded)) {
+    floor = 0;
+  } else {
+    const floorMatch = decoded.match(/קומה[:\s]*(\d+)/);
+    if (floorMatch) floor = parseInt(floorMatch[1], 10);
+  }
+
+  // Description: the in-page "תיאור הנכס" block is rendered after JS hydration
+  // and the legacy regex never matched. og:description and meta name=Description
+  // both carry the canonical seller-written description in the initial HTML.
+  let description = '';
+  const ogDescMatch = decoded.match(/<meta\s+property="og:description"\s+content="([^"]+)"/);
+  const metaDescMatch = decoded.match(/<meta\s+name="Description"\s+content="([^"]+)"/);
+  if (ogDescMatch) description = ogDescMatch[1].trim().slice(0, 500);
+  else if (metaDescMatch) description = metaDescMatch[1].trim().slice(0, 500);
+  if (!description) {
+    const legacyDesc = decoded.match(/תיאור הנכס[:\s]*<\/[^>]+>\s*<[^>]+>([^<]{10,})/);
+    if (legacyDesc) description = legacyDesc[1].trim().slice(0, 500);
+  }
+
+  return {
+    source: 'komo',
+    source_listing_id: modaaNum,
+    address,
+    city,
+    neighborhood,
+    price,
+    rooms,
+    area_sqm,
+    floor,
+    description,
+    url: `${BASE_URL}/code/nadlan/details/?modaaNum=${modaaNum}`,
+    property_type: h1Text.includes('וילה') || h1Text.includes('בית') ? 'house' : 'apartment'
+  };
+}
+
+/**
  * Fetch full listing details from the detail page
  */
 async function fetchListingDetails(modaaNum) {
@@ -92,64 +194,27 @@ async function fetchListingDetails(modaaNum) {
       `${BASE_URL}/code/nadlan/details/?modaaNum=${modaaNum}`,
       { headers: HEADERS, timeout: 15000 }
     );
-    
-    const html = r.data;
-    
-    // Extract title: "למכירה דירה 4 חדרים  בתל אביב, הצפון הישן מרץ 2026"
-    const titleMatch = html.match(/<title>([^<]+)<\/title>/);
-    const titleText = titleMatch ? titleMatch[1] : '';
-    
-    // Extract city from title: "בתל אביב,"
-    const cityMatch = titleText.match(/ב([^,]+),/);
-    let city = cityMatch ? cityMatch[1].trim() : '';
-    // Clean up city (remove "ב" prefix artifacts)
-    city = city.replace(/^.*ב/, '').trim();
-    
-    // Extract neighborhood from title: ", נחלת יהודה מרץ"
-    const neighMatch = titleText.match(/,\s*([^,\d]+?)\s+(?:ינואר|פברואר|מרץ|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר)/);
-    const neighborhood = neighMatch ? neighMatch[1].trim() : '';
-    
-    // Extract H1 for property type + neighborhood
-    const h1Match = html.match(/<h1[^>]*>([^<]+)<\/h1>/);
-    const h1Text = h1Match ? h1Match[1].trim() : '';
-    
-    // Build address from neighborhood + city
-    const address = neighborhood ? `${neighborhood}, ${city}` : city;
-    
-    // Extract price
-    const priceMatch = html.match(/([\d,]+)\s*₪/);
-    const price = priceMatch ? parseInt(priceMatch[1].replace(/,/g, '')) : null;
-    
-    // Extract rooms
-    const roomsMatch = html.match(/(\d+\.?\d*)\s*חד/);
-    const rooms = roomsMatch ? parseFloat(roomsMatch[1]) : null;
-    
-    // Extract sqm
-    const sqmMatch = html.match(/(\d+)\s*מ['"]{0,2}ר/);
-    const area_sqm = sqmMatch ? parseInt(sqmMatch[1]) : null;
-    
-    // Extract floor
-    const floorMatch = html.match(/קומה[:\s]*(\d+)/);
-    const floor = floorMatch ? parseInt(floorMatch[1]) : null;
-    
-    // Extract description
-    const descMatch = html.match(/תיאור הנכס[:\s]*<\/[^>]+>\s*<[^>]+>([^<]{10,})/);
-    const description = descMatch ? descMatch[1].trim().substring(0, 500) : '';
-    
-    return {
-      source: 'komo',
-      source_listing_id: modaaNum,
-      address,
-      city,
-      neighborhood,
-      price,
-      rooms,
-      area_sqm,
-      floor,
-      description,
-      url: `${BASE_URL}/code/nadlan/details/?modaaNum=${modaaNum}`,
-      property_type: h1Text.includes('וילה') || h1Text.includes('בית') ? 'house' : 'apartment'
-    };
+    let listing = extractFromHtml(r.data, modaaNum);
+
+    // Tier-2 LLM fallback (gated, OFF by default). Fires only when regex
+    // misses one of the required fields the downstream pipeline needs.
+    const REQUIRED = ['address', 'price', 'rooms', 'area_sqm'];
+    const missing = REQUIRED.filter(k => listing[k] === null || listing[k] === '' || listing[k] === undefined);
+    if (missing.length > 0 && process.env.KOMO_LLM_FALLBACK_ENABLED === 'true') {
+      try {
+        const { extractKomoListing } = require('./llmExtractor');
+        const patched = await extractKomoListing(r.data, modaaNum, { onlyFields: missing });
+        if (patched) {
+          for (const k of missing) {
+            if (listing[k] == null && patched[k] != null) listing[k] = patched[k];
+          }
+          listing.address = listing.neighborhood ? `${listing.neighborhood}, ${listing.city}` : (listing.address || listing.city);
+        }
+      } catch (e) {
+        logger.warn(`[KomoDirect] LLM fallback failed for ${modaaNum}: ${e.message}`);
+      }
+    }
+    return listing;
   } catch (err) {
     logger.warn(`[KomoDirect] Detail fetch failed for ${modaaNum}: ${err.message}`);
     return null;
@@ -365,4 +430,4 @@ async function scanAll(options = {}) {
   return { total_cities: cities.length, total_inserted: totalInserted, total_phone_updated: totalPhoneUpdated, results };
 }
 
-module.exports = { scanAll, scanCity, enrichExistingListings, fetchPhone };
+module.exports = { scanAll, scanCity, enrichExistingListings, fetchPhone, extractFromHtml };
