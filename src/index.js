@@ -138,6 +138,7 @@ function loadAllRoutes() {
     { path: '/sandbox',                file: 'routes/sandboxRoute.js' },
     { path: '/api/projects',           file: 'routes/projects.js' },
     { path: '/api',                    file: 'routes/opportunities.js' },
+    { path: '/api/discovery',          file: 'routes/aiDiscoveryRoutes.js' },
     { path: '/api/scan',               file: 'routes/scan.js' },
     { path: '/api/alerts',             file: 'routes/alerts.js' },
     { path: '/api/leads',              file: 'routes/leadRoutes.js' },
