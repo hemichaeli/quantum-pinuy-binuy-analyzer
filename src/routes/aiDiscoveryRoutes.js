@@ -98,12 +98,12 @@ async function fetchTopMispriced(limit = 50, minListings = 1, minGap = 5) {
         c.accurate_price_sqm, c.city_avg_price_sqm,
         c.updated_at,
         COUNT(l.id) FILTER (WHERE l.is_active = TRUE) AS active_listings,
-        ROUND(AVG(l.asking_price)::numeric FILTER (WHERE l.is_active = TRUE), 0) AS avg_asking_price,
-        ROUND(AVG(l.price_per_sqm)::numeric FILTER (WHERE l.is_active = TRUE), 0) AS avg_price_per_sqm,
-        ROUND(MIN(l.asking_price)::numeric FILTER (WHERE l.is_active = TRUE), 0) AS min_asking_price,
-        ROUND(MAX(l.asking_price)::numeric FILTER (WHERE l.is_active = TRUE), 0) AS max_asking_price,
-        ROUND(AVG(l.area_sqm)::numeric FILTER (WHERE l.is_active = TRUE), 0) AS avg_area_sqm,
-        ROUND(AVG(l.rooms)::numeric FILTER (WHERE l.is_active = TRUE), 1) AS avg_rooms,
+        ROUND((AVG(l.asking_price)  FILTER (WHERE l.is_active = TRUE))::numeric, 0) AS avg_asking_price,
+        ROUND((AVG(l.price_per_sqm) FILTER (WHERE l.is_active = TRUE))::numeric, 0) AS avg_price_per_sqm,
+        ROUND((MIN(l.asking_price)  FILTER (WHERE l.is_active = TRUE))::numeric, 0) AS min_asking_price,
+        ROUND((MAX(l.asking_price)  FILTER (WHERE l.is_active = TRUE))::numeric, 0) AS max_asking_price,
+        ROUND((AVG(l.area_sqm)      FILTER (WHERE l.is_active = TRUE))::numeric, 0) AS avg_area_sqm,
+        ROUND((AVG(l.rooms)         FILTER (WHERE l.is_active = TRUE))::numeric, 1) AS avg_rooms,
         COUNT(l.id) FILTER (WHERE l.is_active = TRUE AND l.ssi_score >= 50) AS stressed_listings
       FROM complexes c
       LEFT JOIN listings l ON l.complex_id = c.id
