@@ -19,9 +19,13 @@ const { detectKeywords } = require('./ssiCalculator');
 // yad2 API endpoints
 const YAD2_API_BASE = 'https://gw.yad2.co.il/feed-search-legacy/realestate/forsale';
 const YAD2_ITEM_API = 'https://gw.yad2.co.il/feed-search-legacy/item';
+const YAD2_PUBLIC_SEARCH = 'https://www.yad2.co.il/realestate/forsale';
 const PERPLEXITY_API = 'https://api.perplexity.ai/chat/completions';
 
 // Cloudflare Worker proxy URL (bypasses yad2 IP blocking on Railway)
+// As of 2026-05, both the legacy gw.yad2 API and the original CF Worker domain
+// are dead. queryYad2NextData below reads server-rendered NEXT_DATA from the
+// public search page, which still works without any proxy.
 const YAD2_PROXY_URL = process.env.YAD2_PROXY_URL || 'https://yad2-proxy.pinuy-binuy.workers.dev';
 
 const DELAY_BETWEEN_REQUESTS = 3500; // 3.5s between requests
@@ -110,6 +114,172 @@ function getCityCode(cityName) {
 }
 
 /**
+ * Parse a yad2 NEXT_DATA feed item (private/agency/platinum/booster) into
+ * the same shape parseYad2Item produces from the legacy API.
+ *
+ * NEXT_DATA shape (sampled 2026-05):
+ *   {
+ *     token: 'xxxxxxxx',
+ *     price: 3050000,
+ *     address: {
+ *       region: {...}, city: { id, text }, area: { id, text },
+ *       neighborhood: { id, text }, street: { id, text }, house: { number, floor }
+ *     },
+ *     additionalDetails: { property, roomsCount, squareMeter, propertyCondition },
+ *     metaData: { coverImage, images, ... },
+ *     tags: [...]
+ *   }
+ */
+function parseYad2NextItem(item, complex) {
+  const addr = item.address || {};
+  const streetText = addr.street?.text || '';
+  const houseNum = addr.house?.number != null ? String(addr.house.number) : '';
+  const cityText = addr.city?.text || complex?.city || '';
+  const neighborhood = addr.neighborhood?.text || '';
+  const address = [streetText, houseNum].filter(Boolean).join(' ').trim()
+    || [neighborhood, cityText].filter(Boolean).join(', ')
+    || cityText;
+
+  const price = typeof item.price === 'number' ? item.price : parseInt(String(item.price || '').replace(/\D/g, ''), 10) || null;
+  const rooms = item.additionalDetails?.roomsCount != null ? parseFloat(item.additionalDetails.roomsCount) || null : null;
+  const sqm = item.additionalDetails?.squareMeter != null ? parseInt(item.additionalDetails.squareMeter, 10) || null : null;
+  const floor = item.address?.house?.floor != null ? parseInt(item.address.house.floor, 10) : null;
+
+  const thumbnail = item.metaData?.coverImage || item.metaData?.images?.[0] || null;
+  const text = [item.metaData?.text, item.title].filter(Boolean).join(' ');
+  const isUrgent = /דחוף|הזדמנות|חייב למכור|מחיר מיוחד/i.test(text);
+  const isForeclosure = /כינוס|כונס|הוצל"פ|הוצלפ/i.test(text);
+  const isInheritance = /ירושה|עיזבון/i.test(text);
+
+  return {
+    listing_id: String(item.token || item.orderId || ''),
+    address,
+    street: streetText,
+    house_number: houseNum,
+    asking_price: price,
+    rooms,
+    area_sqm: sqm,
+    floor: Number.isFinite(floor) ? floor : null,
+    days_on_market: 0,
+    description: text.substring(0, 500),
+    url: item.token ? `https://www.yad2.co.il/realestate/item/${item.token}` : null,
+    thumbnail_url: thumbnail,
+    is_urgent: isUrgent,
+    is_foreclosure: isForeclosure,
+    is_inheritance: isInheritance,
+    updated_at: new Date().toISOString()
+  };
+}
+
+/**
+ * Fetch the yad2 public search page and pull the server-rendered listings out
+ * of __NEXT_DATA__. Works without any API access, proxy, or session token —
+ * yad2's SSR puts the same shape that gw.yad2 used to return straight into the
+ * HTML response.
+ *
+ * Returns the same { listings, source } shape as queryYad2Direct so callers
+ * can swap them transparently.
+ */
+// Browser User-Agents we rotate through. Chrome / Firefox / Safari, recent
+// stable versions. yad2's ShieldSquare anti-bot keys on consistent UA + IP +
+// rate, so rotating + small backoff materially improves pass-through rate.
+const YAD2_NEXT_UAS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15'
+];
+
+function _isShieldSquareChallenge(html) {
+  return typeof html === 'string' && (
+    html.includes('ShieldSquare') ||
+    html.includes('__uzdbm_') ||
+    html.includes('SSJSConnectorObj')
+  );
+}
+
+async function queryYad2NextData(cityCode, opts = {}) {
+  const params = { city: cityCode, page: opts.page || 1 };
+  if (opts.topArea) params.topArea = opts.topArea;
+  if (opts.area) params.area = opts.area;
+  if (opts.neighborhood) params.neighborhood = opts.neighborhood;
+  if (opts.street) params.street = opts.street;
+
+  const maxAttempts = parseInt(process.env.YAD2_NEXT_MAX_ATTEMPTS || '3', 10);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const ua = YAD2_NEXT_UAS[(attempt - 1) % YAD2_NEXT_UAS.length];
+    try {
+      const r = await axios.get(YAD2_PUBLIC_SEARCH, {
+        params,
+        headers: {
+          'User-Agent': ua,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+          'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+          'Sec-Ch-Ua-Mobile': '?0',
+          'Sec-Ch-Ua-Platform': '"Windows"',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none',
+          'Sec-Fetch-User': '?1',
+          'Upgrade-Insecure-Requests': '1'
+        },
+        timeout: 25000,
+        responseType: 'text',
+        decompress: true,
+        validateStatus: () => true
+      });
+      if (r.status !== 200 || typeof r.data !== 'string') {
+        lastError = `HTTP ${r.status}`;
+        // Quick retry with different UA + jittered backoff
+        await new Promise(res => setTimeout(res, 500 + Math.random() * 800));
+        continue;
+      }
+      if (_isShieldSquareChallenge(r.data)) {
+        lastError = 'shieldsquare_challenge';
+        await new Promise(res => setTimeout(res, 1500 + Math.random() * 1500));
+        continue;
+      }
+      const m = r.data.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+      if (!m) {
+        lastError = 'no_next_data';
+        continue;
+      }
+      let data;
+      try { data = JSON.parse(m[1]); }
+      catch (e) {
+        lastError = 'json_parse_failed: ' + e.message;
+        continue;
+      }
+      const feed = data?.props?.pageProps?.feed || {};
+      const buckets = [
+        ...(feed.private || []),
+        ...(feed.agency || []),
+        ...(feed.platinum || []),
+        ...(feed.booster || [])
+      ];
+      if (buckets.length === 0) {
+        lastError = 'empty_feed';
+        // Don't retry on empty feed — it's a valid response, just no listings.
+        return null;
+      }
+      if (attempt > 1) logger.info(`[yad2-next] city=${cityCode} got ${buckets.length} listings on attempt ${attempt}`);
+      return buckets;
+    } catch (e) {
+      lastError = e.message;
+      await new Promise(res => setTimeout(res, 800 + Math.random() * 800));
+    }
+  }
+  logger.debug(`[yad2-next] gave up for city ${cityCode} after ${maxAttempts} attempts: ${lastError}`);
+  return null;
+}
+
+/**
  * Query yad2 API directly for listings in a specific area
  */
 async function queryYad2Direct(complex) {
@@ -126,6 +296,17 @@ async function queryYad2Direct(complex) {
     // Remove house numbers
     return addr.replace(/\d+/g, '').trim();
   }).filter(Boolean);
+
+  // Primary path: read server-rendered listings out of the public search page's
+  // __NEXT_DATA__. Works without proxy or session tokens.
+  const nextItems = await queryYad2NextData(cityCode, {
+    street: streetNames.length > 0 ? streetNames[0] : undefined
+  });
+  if (nextItems && nextItems.length > 0) {
+    const listings = nextItems.map(item => parseYad2NextItem(item, complex));
+    logger.debug(`yad2 NEXT_DATA returned ${listings.length} listings for ${complex.name}`);
+    return { listings, source: 'yad2_next' };
+  }
 
   const searchParams = {
     city: cityCode,
@@ -952,43 +1133,26 @@ async function scanAllByCities(options = {}) {
           return { city: cityName, skipped: true, reason: 'no_city_code' };
         }
 
-        // Fetch all listings for this city from yad2 API (paginated)
+        // Fetch all listings for this city from yad2's public search page
+        // (NEXT_DATA SSR). The legacy gw.yad2 API and the CF Worker proxy that
+        // wrapped it both went away in 2026-05; the NEXT_DATA path replaces both.
         const allListings = [];
         let page = 1;
-        let hasMore = true;
-
         let apiBlocked = false;
 
-        while (hasMore && page <= 10) { // max 10 pages = 500 listings per city
-          try {
-            // Use Cloudflare Worker proxy to bypass Railway IP blocking
-            const proxyUrl = `${YAD2_PROXY_URL}?city=${cityCode}&propertyGroup=apartments&dealType=forsale&page=${page}&limit=50&key=pinuy-binuy-2026`;
-            const response = await axios.get(proxyUrl, { timeout: 20000 });
-
-            // Check for bot challenge
-            if (response.data?.error === 'bot_challenge' || response.status === 404 || response.status === 403) {
-              logger.warn(`[yad2-city-scan] API blocked for ${cityName} (${response.status}) - will use Perplexity fallback`);
-              apiBlocked = true;
-              hasMore = false;
-              break;
-            }
-
-            // Worker returns yad2 response directly (same format as direct API)
-            const feedItems = response.data?.feed?.feed_items || [];
-            const ads = feedItems.filter(item => item.type === 'ad' && item.id);
-            allListings.push(...ads);
-
-            // Check if there are more pages
-            const totalCount = response.data?.feed?.total_items || 0;
-            hasMore = allListings.length < totalCount && ads.length === 50;
-            page++;
-
-            if (ads.length < 50) hasMore = false;
-          } catch (err) {
-            logger.warn(`[yad2-city-scan] Proxy error for ${cityName} page ${page}: ${err.message} - will use Perplexity fallback`);
-            apiBlocked = true;
-            hasMore = false;
+        while (page <= 10) { // max 10 pages
+          const nextItems = await queryYad2NextData(cityCode, { page });
+          if (!nextItems || nextItems.length === 0) {
+            if (page === 1) apiBlocked = true; // page 1 empty = the source itself is down
+            break;
           }
+          // NEXT_DATA returns a parsed object shape; downstream complexMatcher
+          // expects the legacy "feed_item" shape, so we keep them in a parallel
+          // local array and process them via the NEXT_DATA branch below.
+          allListings.push(...nextItems.map(it => ({ __next: true, ...it })));
+          page++;
+          // yad2 SSR typically renders ~44 per page; if we got less, that's the last page
+          if (nextItems.length < 30) break;
         }
 
         // Fallback to Perplexity if API was blocked or returned no results
@@ -1005,12 +1169,24 @@ async function scanAllByCities(options = {}) {
         let cityUpdated = 0;
         let cityMatched = 0;
 
-        // Process direct API listings (from yad2 feed)
+        // Process listings — items are NEXT_DATA shape (marked with __next).
+        // The legacy feed_item branch is kept for items that somehow still
+        // come through the old shape (defensive).
         for (const item of allListings) {
-          const address = [
-            item.street || item.street_name || '',
-            item.house_number || item.HomeNumber || ''
-          ].filter(Boolean).join(' ').trim() || item.address_more?.text || '';
+          // Build address — branch by shape
+          let address;
+          if (item.__next) {
+            const streetText = item.address?.street?.text || '';
+            const houseNum = item.address?.house?.number != null ? String(item.address.house.number) : '';
+            address = [streetText, houseNum].filter(Boolean).join(' ').trim()
+              || [item.address?.neighborhood?.text, item.address?.city?.text].filter(Boolean).join(', ')
+              || item.address?.city?.text || '';
+          } else {
+            address = [
+              item.street || item.street_name || '',
+              item.house_number || item.HomeNumber || ''
+            ].filter(Boolean).join(' ').trim() || item.address_more?.text || '';
+          }
 
           if (!address) continue;
 
@@ -1019,14 +1195,14 @@ async function scanAllByCities(options = {}) {
           if (!match) continue;
 
           cityMatched++;
-          // Parse the listing with the matched complex context
           const complexRow = { name: match.complexName, city: cityName, addresses: '', address: '' };
-          const listing = parseYad2Item(item, complexRow);
+          const listing = item.__next
+            ? parseYad2NextItem(item, complexRow)
+            : parseYad2Item(item, complexRow);
 
           const result = await processListing(listing, match.complexId, cityName);
           if (result.action === 'inserted') {
             cityNew++;
-            // Trigger alerts for new listings
             if (result.id) {
               const complexInfo = await pool.query('SELECT iai_score FROM complexes WHERE id = $1', [match.complexId]);
               const iai = complexInfo.rows[0]?.iai_score;
@@ -1154,7 +1330,10 @@ module.exports = {
   scanAllByCities,
   queryYad2Listings,
   queryYad2Direct,
+  queryYad2NextData,
   queryYad2Perplexity,
+  parseYad2Item,
+  parseYad2NextItem,
   processListing,
   getCityCode,
   createNewListingAlert,
