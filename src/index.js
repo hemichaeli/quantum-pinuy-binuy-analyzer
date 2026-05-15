@@ -139,6 +139,9 @@ function loadAllRoutes() {
     { path: '/api/projects',           file: 'routes/projects.js' },
     { path: '/api',                    file: 'routes/opportunities.js' },
     { path: '/api/discovery',          file: 'routes/aiDiscoveryRoutes.js' },
+    // 2026-05-15: alias the AI-Discovery endpoints at root paths too, so
+    // AI crawlers reading discovery.u-r-quantum.com/llms.txt land on them.
+    { path: '/',                       file: 'routes/aiDiscoveryRootAliases.js' },
     { path: '/api/scan',               file: 'routes/scan.js' },
     { path: '/api/alerts',             file: 'routes/alerts.js' },
     { path: '/api/leads',              file: 'routes/leadRoutes.js' },
@@ -395,6 +398,8 @@ async function start() {
   await runMigrationFile('Lead archive (028)', path.join(__dirname, 'db', 'migrations', '028_lead_archive.sql'));
   // 2026-05-01: deactivate komo listings that aren't pinuy-binuy (parity with yad2/dira/etc)
   await runMigrationFile('Komo non-pinuy-binuy cleanup (030)', path.join(__dirname, 'db', 'migrations', '030_cleanup_komo_non_pinuy_binuy.sql'));
+  // 2026-05-13: sweep ALL remaining orphan listings (complex_id IS NULL) across every source.
+  await runMigrationFile('Orphan non-pinuy-binuy cleanup (031)', path.join(__dirname, 'db', 'migrations', '031_cleanup_orphan_non_pinuy_binuy.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
