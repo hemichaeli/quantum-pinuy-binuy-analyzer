@@ -1,0 +1,27 @@
+name = "yad2-proxy"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+
+# This Worker reads yad2.co.il's public realestate/forsale page from the
+# Cloudflare edge (whose IPs yad2 still trusts) and returns the embedded
+# __NEXT_DATA__ feed to the Railway-hosted scraper.
+#
+# The original v1 of this Worker proxied gw.yad2.co.il/feed-search-legacy
+# which started returning 404 in 2026-04. v2 (this file) talks to the
+# public page and parses NEXT_DATA on the edge so the response payload
+# is small.
+
+[observability]
+enabled = true
+
+# To deploy:
+#   wrangler login        # one-time, opens browser
+#   wrangler deploy       # uploads worker.js
+#
+# After deploy, enable the workers.dev subdomain in the dashboard:
+#   Cloudflare dashboard → Workers & Pages → yad2-proxy → Settings →
+#   Triggers → enable workers.dev preview URL (the toggle that produces
+#   https://yad2-proxy.<your-subdomain>.workers.dev).
+#
+# Then set in Railway env on the pinuy-binuy-analyzer service:
+#   YAD2_PROXY_URL=https://yad2-proxy.<your-subdomain>.workers.dev

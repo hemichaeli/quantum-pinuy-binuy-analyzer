@@ -122,9 +122,16 @@ async function queryClaude(prompt, options = {}) {
     return null;
   }
 
+  // Default model: Haiku 4.5 (claude-haiku-4-5-20251001). Validated against
+  // this exact extraction/validation task in docs/poc-scrapegraph-vs-selectors-komo.md
+  // — 92% complete-row yield, $0.022/page. ~10x cheaper than Sonnet 4 for
+  // equivalent quality on structured-JSON real-estate tasks. Override via
+  // AI_SCAN_MODEL env or per-call `options.model` if specific complexes need
+  // Sonnet-class reasoning.
+  const model = options.model || process.env.AI_SCAN_MODEL || 'claude-haiku-4-5-20251001';
   try {
     const response = await axios.post(CLAUDE_API, {
-      model: options.model || 'claude-sonnet-4-20250514',
+      model,
       max_tokens: options.maxTokens || 2000,
       messages: [
         { role: 'user', content: prompt }
@@ -471,11 +478,18 @@ async function processListingFromAI(listing, complexId, city) {
  * Scan all complexes with unified AI
  */
 async function scanAllUnified(options = {}) {
-  const { city, limit = 20, staleOnly = true } = options;
+  // Per-run cap. Default raised 20 → 50 (was constrained by Sonnet cost; with
+  // Haiku 4.5 each scan is ~10x cheaper so we can scan further per cycle).
+  // Tunable via AI_SCAN_LIMIT env without a redeploy.
+  const defaultLimit = parseInt(process.env.AI_SCAN_LIMIT || '50', 10);
+  // Staleness threshold for "needs another look". Was 5 days; 3 days picks up
+  // new committee approvals and price drops sooner. Tunable via env.
+  const staleDays = parseInt(process.env.AI_SCAN_STALE_DAYS || '3', 10);
+  const { city, limit = defaultLimit, staleOnly = true } = options;
 
   let query = `
-    SELECT id, name, city 
-    FROM complexes 
+    SELECT id, name, city
+    FROM complexes
     WHERE status NOT IN ('construction', 'unknown')
   `;
   const params = [];
@@ -488,7 +502,7 @@ async function scanAllUnified(options = {}) {
   }
 
   if (staleOnly) {
-    query += ` AND (last_perplexity_update IS NULL OR last_perplexity_update < NOW() - INTERVAL '5 days')`;
+    query += ` AND (last_perplexity_update IS NULL OR last_perplexity_update < NOW() - INTERVAL '${staleDays} days')`;
   }
 
   query += ` ORDER BY iai_score DESC NULLS LAST LIMIT $${paramIdx}`;

@@ -205,6 +205,39 @@ async function queryYad2NextData(cityCode, opts = {}) {
   if (opts.neighborhood) params.neighborhood = opts.neighborhood;
   if (opts.street) params.street = opts.street;
 
+  // Prefer the CF Worker proxy when configured — yad2 blocks Railway egress
+  // IPs but trusts Cloudflare. The Worker returns the parsed feed buckets
+  // directly so we skip the HTML-extraction step entirely.
+  if (process.env.YAD2_PROXY_URL) {
+    try {
+      const proxyParams = { ...params, key: process.env.YAD2_PROXY_SECRET || 'pinuy-binuy-2026' };
+      const r = await axios.get(process.env.YAD2_PROXY_URL, {
+        params: proxyParams,
+        timeout: 25000,
+        validateStatus: () => true
+      });
+      if (r.status === 200 && r.data?.ok && r.data?.feed) {
+        const buckets = [
+          ...(r.data.feed.private || []),
+          ...(r.data.feed.agency || []),
+          ...(r.data.feed.platinum || []),
+          ...(r.data.feed.booster || [])
+        ];
+        if (buckets.length > 0) {
+          logger.debug(`[yad2-next:proxy] got ${buckets.length} for city ${cityCode}`);
+          return buckets;
+        }
+      } else if (r.data?.error === 'bot_challenge') {
+        logger.warn(`[yad2-next:proxy] worker hit ShieldSquare for city ${cityCode}; falling back to direct`);
+      } else {
+        logger.debug(`[yad2-next:proxy] status=${r.status} error=${r.data?.error || 'unknown'} city=${cityCode}; falling back to direct`);
+      }
+    } catch (e) {
+      logger.debug(`[yad2-next:proxy] error city=${cityCode}: ${e.message}; falling back to direct`);
+    }
+    // fall through to direct fetch attempts below (best-effort, will usually be blocked from Railway)
+  }
+
   const maxAttempts = parseInt(process.env.YAD2_NEXT_MAX_ATTEMPTS || '3', 10);
   let lastError = null;
 
