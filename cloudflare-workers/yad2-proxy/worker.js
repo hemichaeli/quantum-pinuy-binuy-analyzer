@@ -27,6 +27,7 @@
 
 const YAD2_PUBLIC = 'https://www.yad2.co.il/realestate/forsale';
 const SECRET_KEY = 'pinuy-binuy-2026';
+const SGAI_API = 'https://api.scrapegraphai.com/v1/smartscraper';
 
 // Browser User-Agents to rotate per request. ShieldSquare keys on UA+IP+rate;
 // CF egress IPs are not yet flagged, so rotation is mostly precautionary.
@@ -134,7 +135,93 @@ async function handleRequest(request) {
     const html = await yad2Resp.text();
 
     if (isShieldSquare(html)) {
-      return jsonResp(503, { error: 'bot_challenge', message: 'yad2 returned ShieldSquare', upstream_status: status });
+      // Direct CF egress IPs are blocked by yad2's ShieldSquare. Fall back to
+      // ScrapeGraphAI stealth (residential proxies) if SGAI_API_KEY is set as
+      // a Worker secret. Costs ~14 credits/call ($0.03ish at SG starter rates).
+      // Verified 2026-05-17: SG stealth successfully extracts listings from
+      // the same URL that gets bot_challenge for both CF and Railway IPs.
+      const sgaiKey = (typeof SGAI_API_KEY !== 'undefined') ? SGAI_API_KEY : null;
+      if (sgaiKey && url.searchParams.get('no_fallback') !== '1') {
+        try {
+          const sgResp = await fetch(SGAI_API, {
+            method: 'POST',
+            headers: { 'SGAI-APIKEY': sgaiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              website_url: targetUrl,
+              user_prompt: 'Extract all real-estate listings on this page. For each listing return: token (id from URL), price (integer ILS, no currency), rooms (number), area_sqm (integer), floor (integer, ground=0), address (object with street, house_number, neighborhood, city). Return JSON {"listings": [...]}.',
+              stealth: true,
+              mode: 'js'
+            })
+          });
+          const sgData = await sgResp.json();
+          if (sgData?.status === 'completed' && sgData?.result?.listings) {
+            const listings = sgData.result.listings;
+            // Shape-convert SG output to look like yad2 NEXT_DATA buckets so the
+            // Railway scraper's existing parser keeps working unchanged.
+            const buckets = { private: [], agency: [], platinum: [], booster: [] };
+            // SG returns address as either an object OR a string like
+            // "מוסינזון 17, תל אביב יפו". Normalise both to the structured
+            // shape that yad2Scraper.parseYad2NextItem expects.
+            const parseAddrString = (s) => {
+              if (!s || typeof s !== 'string') return { street: '', house: null, city: '' };
+              const parts = s.split(',').map(p => p.trim()).filter(Boolean);
+              if (parts.length === 1) return { street: '', house: null, city: parts[0] };
+              // Last segment is city. Earlier segments are street/neighborhood.
+              const city = parts[parts.length - 1];
+              const streetPart = parts.slice(0, -1).join(' ').trim();
+              // Try to peel off a trailing house number from streetPart
+              const m = streetPart.match(/^(.*?)\s+(\d+[א-ת]?)\s*$/);
+              if (m) return { street: m[1].trim(), house: m[2], city };
+              return { street: streetPart, house: null, city };
+            };
+            for (const l of listings) {
+              let street = '', house = null, neighborhood = '', city = '';
+              if (typeof l.address === 'object' && l.address !== null) {
+                const a = l.address;
+                if (a.street && typeof a.street === 'object') street = a.street.text || '';
+                else if (typeof a.street === 'string') street = a.street;
+                if (a.house && typeof a.house === 'object') house = a.house.number;
+                else if (a.house_number) house = a.house_number;
+                if (a.city && typeof a.city === 'object') city = a.city.text || '';
+                else if (typeof a.city === 'string') city = a.city;
+                if (a.neighborhood && typeof a.neighborhood === 'object') neighborhood = a.neighborhood.text || '';
+                else if (typeof a.neighborhood === 'string') neighborhood = a.neighborhood;
+              } else {
+                const parsed = parseAddrString(l.address || '');
+                street = parsed.street; house = parsed.house; city = parsed.city;
+              }
+              buckets.private.push({
+                token: l.token || null,
+                price: l.price || null,
+                additionalDetails: { roomsCount: l.rooms || null, squareMeter: l.area_sqm || null, property: null, propertyCondition: null },
+                address: {
+                  region: {},
+                  city: { text: city },
+                  area: {},
+                  neighborhood: { text: neighborhood },
+                  street: { text: street },
+                  house: { number: house, floor: l.floor != null ? l.floor : null }
+                },
+                metaData: {},
+                tags: ['sgai_stealth']
+              });
+            }
+            return jsonResp(200, {
+              ok: true,
+              source: 'sgai_stealth_fallback',
+              target_url: targetUrl,
+              counts: { private: buckets.private.length, agency: 0, platinum: 0, booster: 0 },
+              feed: buckets,
+              sgai_request_id: sgData.request_id || null,
+            });
+          }
+          // SG didn't return listings — fall through to the bot_challenge response below
+        } catch (e) {
+          // SG itself errored; report both
+          return jsonResp(503, { error: 'bot_challenge_and_sg_failed', message: 'yad2 ShieldSquare + SG fallback errored: ' + e.message });
+        }
+      }
+      return jsonResp(503, { error: 'bot_challenge', message: 'yad2 returned ShieldSquare', upstream_status: status, sgai_configured: !!sgaiKey });
     }
     if (status !== 200) {
       return jsonResp(502, { error: 'upstream_error', upstream_status: status, body_preview: html.slice(0, 300) });
