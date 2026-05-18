@@ -211,9 +211,13 @@ async function queryYad2NextData(cityCode, opts = {}) {
   if (process.env.YAD2_PROXY_URL) {
     try {
       const proxyParams = { ...params, key: process.env.YAD2_PROXY_SECRET || 'pinuy-binuy-2026' };
+      // SG stealth in the Worker fallback path consistently takes 25-30s
+      // (residential proxy fetch). The earlier 25s timeout was racing the
+      // SG response and dropping ~90% of Worker calls. 90s gives plenty
+      // of margin while still bounding cron-batch wall-clock.
       const r = await axios.get(process.env.YAD2_PROXY_URL, {
         params: proxyParams,
-        timeout: 25000,
+        timeout: parseInt(process.env.YAD2_PROXY_TIMEOUT_MS || '90000', 10),
         validateStatus: () => true
       });
       if (r.status === 200 && r.data?.ok && r.data?.feed) {
