@@ -782,6 +782,7 @@ async function processListing(listing, complexId, complexCity) {
           is_active
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, CURRENT_DATE, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, TRUE)
         ON CONFLICT (source, LOWER(TRIM(address)), LOWER(TRIM(city)))
+          WHERE address IS NOT NULL AND address <> '' AND city IS NOT NULL AND city <> ''
         DO UPDATE SET last_seen=CURRENT_DATE, asking_price=COALESCE(EXCLUDED.asking_price, listings.asking_price),
           phone=COALESCE(EXCLUDED.phone, listings.phone),
           url=COALESCE(EXCLUDED.url, listings.url),
