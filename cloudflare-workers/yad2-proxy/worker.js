@@ -143,6 +143,30 @@ async function handleRequest(request) {
       const sgaiKey = (typeof SGAI_API_KEY !== 'undefined') ? SGAI_API_KEY : null;
       if (sgaiKey && url.searchParams.get('no_fallback') !== '1') {
         try {
+          // Safety brake: refuse SG fallback when remaining credits drop below
+          // SGAI_FLOOR_CREDITS. Prevents runaway cron loops from draining a
+          // paid SG plan in minutes — which is exactly what happened the first
+          // time this Worker went live (300 calls × 14 credits = 4200 credits
+          // in ~25 minutes). Default floor = 500 credits ≈ $1 cushion.
+          const floorRaw = (typeof SGAI_FLOOR_CREDITS !== 'undefined') ? SGAI_FLOOR_CREDITS : '500';
+          const floor = parseInt(floorRaw, 10) || 500;
+          try {
+            const cResp = await fetch('https://api.scrapegraphai.com/v1/credits', {
+              headers: { 'SGAI-APIKEY': sgaiKey }
+            });
+            const cBody = await cResp.json();
+            if (typeof cBody?.remaining_credits === 'number' && cBody.remaining_credits < floor) {
+              return jsonResp(503, {
+                error: 'sgai_floor_hit',
+                message: `SG credits at ${cBody.remaining_credits} (floor=${floor}). Refusing SG fallback to preserve runway.`,
+                remaining_credits: cBody.remaining_credits,
+                floor
+              });
+            }
+          } catch (e) {
+            // If credits-check fails (network), proceed with the call — better
+            // a couple of unguarded calls than blocking the proxy entirely.
+          }
           const sgResp = await fetch(SGAI_API, {
             method: 'POST',
             headers: { 'SGAI-APIKEY': sgaiKey, 'Content-Type': 'application/json' },
