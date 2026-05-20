@@ -353,9 +353,14 @@ function initScheduler() {
       logger.info('[SCHEDULER] Tier 1 express yad2 scan (4h cycle)');
       try {
         const y = require('../services/yad2Scraper');
-        if (y?.scanAll) {
-          const result = await y.scanAll({ staleOnly: false, limit: 50, iai_min: 60 });
-          logger.info(`[SCHEDULER] Express scan: ${result.totalNew} new, ${result.totalAlerts} alerts`);
+        // scanAllByCities makes 1 Worker call per city (≈40 total) instead of
+        // scanAll's 1-per-complex (50+ per limited run, all hitting SG stealth).
+        // Caps express-scan SG cost at ~$1/tick instead of the runaway burn
+        // that happened on 2026-05-19 (4,200 credits in 25 min via scanAll).
+        if (y?.scanAllByCities) {
+          const result = await y.scanAllByCities({ staleOnly: true });
+          logger.info(`[SCHEDULER] Express scan (by-cities): ${result.totalNew} new, ${result.totalUpdated} updated across ${result.citiesScanned} cities`);
+          const totalAlerts = 0; // scanAllByCities doesn't emit alerts directly; relies on hourly alert check below
           // Immediately send any new alerts
           try {
             const ns = getNotificationService();
@@ -422,6 +427,27 @@ function initScheduler() {
       } catch (e) { logger.warn('[SCHEDULER] FB Groups scan failed', { error: e.message }); }
     }, { timezone: 'Asia/Jerusalem' })
   );
+
+  // Staleness Sweeper: Daily 07:15 IL — runs after the morning scrapers
+  // (which finish by 07:00) and BEFORE the 07:30 morning report. Marks
+  // listings inactive when their source has stopped advertising them, so
+  // the morning brief reflects "what's currently for sale" not "what was
+  // for sale weeks ago." Scoped to pinuy-binuy listings only. Gated by the
+  // same ENABLE_MORNING_REPORT flag so the singleton production deployment
+  // owns both jobs (prevents double-sweeps from multiple Railway services).
+  if (process.env.ENABLE_MORNING_REPORT === 'true') {
+    schedulerState.scheduledTasks.push(
+      cron.schedule('15 7 * * *', async () => {
+        logger.info('[SCHEDULER] Staleness Sweeper - running...');
+        try {
+          const { runSweep } = require('../services/stalenessSweeper');
+          const result = await runSweep();
+          logger.info('[SCHEDULER] Staleness Sweeper done', { total: result.total });
+        } catch (e) { logger.warn('[SCHEDULER] Staleness Sweeper failed:', e.message); }
+      }, { timezone: 'Asia/Jerusalem' })
+    );
+    logger.info('[SCHEDULER] Staleness Sweeper cron registered (07:15 IL daily)');
+  }
 
   // Morning Intelligence Report: Daily 07:30 (after listings scan at 07:00)
   // Only runs if ENABLE_MORNING_REPORT=true to prevent duplicate sends from multiple Railway services
