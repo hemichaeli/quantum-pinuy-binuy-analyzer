@@ -64,9 +64,12 @@ async function buildSystemDigest() {
   // ingest time (alerts JOIN complexes with iai/ssi thresholds; matches carry
   // complex_id from the matchEngine), so no extra WHERE clause needed there.
   const since = "NOW() - INTERVAL '24 hours'";
-  const [leadsNew, listingsSeen, messagesSent, hotOpps, matchesNew, optoutsNew] = await Promise.all([
+  const [leadsNew, listingsSeen, listingsDeactivated, messagesSent, hotOpps, matchesNew, optoutsNew] = await Promise.all([
     _digestSafeCount(`SELECT COUNT(*) AS c FROM website_leads WHERE created_at > ${since}`),
     _digestSafeCount(`SELECT COUNT(*) AS c FROM listings WHERE first_seen > ${since} AND complex_id IS NOT NULL`),
+    // Listings deactivated in the last 24h (mirrors what the StalenessSweeper
+    // does at 07:15 each morning — see src/services/stalenessSweeper.js).
+    _digestSafeCount(`SELECT COUNT(*) AS c FROM listings WHERE is_active = FALSE AND complex_id IS NOT NULL AND updated_at > ${since}`),
     _digestSafeCount(`SELECT COUNT(*) AS c FROM listings WHERE last_message_sent_at > ${since} AND complex_id IS NOT NULL`),
     _digestSafeCount(`SELECT COUNT(*) AS c FROM hot_opportunity_alerts WHERE created_at > ${since}`),
     _digestSafeCount(`SELECT COUNT(*) AS c FROM lead_matches WHERE created_at > ${since}`),
@@ -77,7 +80,7 @@ async function buildSystemDigest() {
     _digestGetSetting('bulk_outreach_template_id', ''),
     _digestGetSetting('agent_phone', ''),
   ]);
-  return { leadsNew, listingsSeen, messagesSent, hotOpps, matchesNew, optoutsNew, bulkEnabled, bulkTemplate, agentPhone };
+  return { leadsNew, listingsSeen, listingsDeactivated, messagesSent, hotOpps, matchesNew, optoutsNew, bulkEnabled, bulkTemplate, agentPhone };
 }
 
 function buildDigestSectionHtml(d) {
@@ -102,6 +105,7 @@ function buildDigestSectionHtml(d) {
     <table style="width:100%; border-collapse:collapse;">
       ${row('לידים חדשים', d.leadsNew, tabLink('leads'))}
       ${row('דירות חדשות במתחמי פינוי-בינוי', d.listingsSeen, tabLink('ads'))}
+      ${row('מודעות שירדו / הוסרו (24 שעות)', d.listingsDeactivated, tabLink('ads'))}
       ${row('הודעות יוצאות (פינוי-בינוי)', d.messagesSent, tabLink('messages'))}
       ${row('התראות hot-opportunity', d.hotOpps)}
       ${row('התאמות חדשות (Match Engine)', d.matchesNew)}
@@ -294,7 +298,25 @@ async function sendMorningReport() {
 
     logger.info('[MorningReport] Generating...');
 
-    const [oppResult, sellersResult, dropsResult, committeesResult] = await Promise.all([
+    // The display lists below (top-N leaderboards) are intentionally LIMIT-capped
+    // — the email body only has room for a few rows. But the headline STATS at
+    // the top of the email need to reflect actual 24h activity, not the LIMIT,
+    // otherwise the report shows the same numbers every day (opportunities=8,
+    // sellers=5, price_drops=5 forever, regardless of what changed).
+    //
+    // Display lists (top-N for the email body):
+    //   oppResult     — top-8 complexes by IAI for the leaderboard
+    //   sellersResult — top-5 stressed sellers for the leaderboard
+    //   dropsResult   — top-5 price-drop listings for the leaderboard
+    //
+    // Activity counts (real 24h deltas, drive the headline numbers):
+    //   oppActivityCount     — complexes (iai>=60) with a listing newly seen in 24h
+    //   sellersActivityCount — listings (ssi>=30) newly first_seen in 24h
+    //   dropsActivityCount   — listings with a >=5% price drop seen in 24h
+    const [
+      oppResult, sellersResult, dropsResult, committeesResult,
+      oppActivityResult, sellersActivityResult, dropsActivityResult
+    ] = await Promise.all([
       pool.query(`
         SELECT id, name, city, iai_score, status, developer, actual_premium,
                address, plan_stage, signature_percent
@@ -318,7 +340,29 @@ async function sendMorningReport() {
         SELECT COUNT(*) as count FROM committee_approvals
         WHERE meeting_date >= NOW() - INTERVAL '7 days'
           AND decision_type IN ('approval','advancement','declaration')
-      `).catch(() => ({ rows: [{ count: 0 }] }))
+      `).catch(() => ({ rows: [{ count: 0 }] })),
+      // Activity-count queries — these are what drive the headline stats.
+      pool.query(`
+        SELECT COUNT(DISTINCT c.id) AS cnt
+        FROM complexes c
+        WHERE c.iai_score >= 60
+          AND EXISTS (
+            SELECT 1 FROM listings l
+            WHERE l.complex_id = c.id
+              AND l.first_seen >= CURRENT_DATE - INTERVAL '1 day'
+          )
+      `),
+      pool.query(`
+        SELECT COUNT(*) AS cnt FROM listings
+        WHERE ssi_score >= 30
+          AND first_seen >= CURRENT_DATE - INTERVAL '1 day'
+      `),
+      pool.query(`
+        SELECT COUNT(*) AS cnt FROM listings
+        WHERE price_changes > 0
+          AND last_seen >= NOW() - INTERVAL '24 hours'
+          AND total_price_drop_percent >= 5
+      `)
     ]);
 
     const opportunities = oppResult.rows;
@@ -327,11 +371,17 @@ async function sendMorningReport() {
     const committees = committeesResult.rows;
 
     const stats = {
-      opportunities: opportunities.length,
-      stressed: sellers.length,
-      stressed_sellers: sellers.length,
-      price_drops: priceDrops.length,
-      committees: parseInt(committees[0]?.count || 0)
+      // Headline numbers: 24h activity counts, NOT the LIMIT of the display lists.
+      // The display lists below still show top-N — these counts drive the cards.
+      opportunities: parseInt(oppActivityResult.rows[0]?.cnt || 0),
+      stressed: parseInt(sellersActivityResult.rows[0]?.cnt || 0),
+      stressed_sellers: parseInt(sellersActivityResult.rows[0]?.cnt || 0),
+      price_drops: parseInt(dropsActivityResult.rows[0]?.cnt || 0),
+      committees: parseInt(committees[0]?.count || 0),
+      // Totals available for future report iterations (count of all-time qualifying rows)
+      _opportunities_total: opportunities.length,
+      _sellers_total_shown: sellers.length,
+      _drops_total_shown: priceDrops.length
     };
 
     const today = new Date().toLocaleDateString('he-IL', {
