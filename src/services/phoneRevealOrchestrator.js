@@ -144,7 +144,11 @@ async function runApifyPhoneReveal(listings) {
     return [];
   }
 
-  const actorId = process.env.APIFY_PHONE_REVEAL_ACTOR || 'quantum-phone-reveal';
+  // Apify REST API requires actor IDs in <username>~<actor-name> form. The env
+  // var sometimes ships with a `/` (the way the actor is displayed in the
+  // dashboard). Normalise both so the URL doesn't get parsed as two path
+  // segments and 404 silently. Live ID format e.g. quiescent_sunset~quantum-phone-reveal
+  const actorId = (process.env.APIFY_PHONE_REVEAL_ACTOR || 'quantum-phone-reveal').replace('/', '~');
 
   const input = {
     listings: listings.map(l => ({
