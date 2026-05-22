@@ -402,6 +402,25 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
+  // KomoDirect Scan: Daily 06:20 — discovers REAL komo.co.il listings via HTML
+  // (vs masterPipeline's komoScraper which only hits the dead JSON API and
+  // falls to Perplexity hallucinations). komo.co.il is reachable from Railway
+  // — no ShieldSquare, no anti-bot — so this is free incremental volume.
+  // Uses the ₪-direction + HTML-entity regex fixes from commit 8218bc1.
+  schedulerState.scheduledTasks.push(
+    cron.schedule('20 6 * * *', async () => {
+      if (!isEnrichmentDay()) return;
+      logger.info('[SCHEDULER] Daily komoDirect HTML scan (real komo.co.il listings)');
+      try {
+        const komoDirect = require('../services/komoDirectScraper');
+        if (komoDirect?.scanAll) {
+          const result = await komoDirect.scanAll({ maxPages: 2 });
+          logger.info(`[SCHEDULER] komoDirect done: ${result.total_inserted} new across ${result.total_cities} cities`);
+        }
+      } catch (e) { logger.warn('[SCHEDULER] komoDirect scan failed', { error: e.message }); }
+    }, { timezone: 'Asia/Jerusalem' })
+  );
+
   // Facebook Marketplace Scan: Every 3 days at 05:00 (Apify - before complex scan)
   schedulerState.scheduledTasks.push(
     cron.schedule('0 5 */3 * *', async () => {
