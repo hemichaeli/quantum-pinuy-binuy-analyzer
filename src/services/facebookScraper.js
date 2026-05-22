@@ -545,13 +545,22 @@ async function processListing(listing, complexId, complexCity) {
     if (listing.is_agent) description += ' [מתווך]';
     if (listing.phone) description += ` | טל: ${listing.phone}`;
 
+    // Run the (source, source_listing_id) check WITHOUT a complex_id filter — the
+    // unique index idx_listings_source_id is global per-source. If the same
+    // listing was previously ingested under a different complex_id (e.g. when an
+    // earlier match assigned the wrong complex), we need to find that row and
+    // update its complex_id rather than try an INSERT that fails the unique
+    // constraint and pollutes the log with "duplicate key" warnings.
+    // Falls back to the complex-scoped address+price match for listings without
+    // a stable source_listing_id.
     const existing = await pool.query(
-      `SELECT id, asking_price, original_price, price_changes, first_seen, days_on_market
-       FROM listings 
-       WHERE complex_id = $1 AND (
+      `SELECT id, asking_price, original_price, price_changes, first_seen, days_on_market, complex_id
+       FROM listings
+       WHERE source = 'facebook' AND is_active = TRUE AND (
          (source_listing_id = $2 AND source_listing_id IS NOT NULL AND source_listing_id != '')
-         OR (source = 'facebook' AND address = $3 AND ABS(COALESCE(asking_price,0) - $4) < 50000)
-       ) AND is_active = TRUE LIMIT 1`,
+         OR (complex_id = $1 AND address = $3 AND ABS(COALESCE(asking_price,0) - $4) < 50000)
+       )
+       LIMIT 1`,
       [complexId, sourceListingId, address, price || 0]
     );
 
