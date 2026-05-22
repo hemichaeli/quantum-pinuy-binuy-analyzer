@@ -9,7 +9,12 @@ const axios = require('axios');
 const pool = require('../db/pool');
 const { logger } = require('./logger');
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+// gemini-1.5-flash was deprecated and v1beta returns 404 since Google retired
+// the legacy 1.5 line in early 2026. gemini-2.5-flash is the drop-in: same
+// v1beta surface, lower latency, materially better Hebrew handling.
+// Configurable via GEMINI_MODEL for future bumps.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 const PERPLEXITY_MODEL = 'sonar';
 
