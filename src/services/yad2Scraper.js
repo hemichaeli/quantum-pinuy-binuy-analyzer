@@ -669,12 +669,20 @@ async function processListing(listing, complexId, complexCity) {
 
     // Check for existing listing
     const existing = await pool.query(
-      `SELECT id, asking_price, original_price, price_changes, first_seen, days_on_market
-       FROM listings 
-       WHERE complex_id = $1 AND (
+      // The (source, source_listing_id) check runs WITHOUT a complex_id filter
+      // because the unique index idx_listings_source_id is global per-source.
+      // If the same listing was previously ingested under a different complex_id
+      // (e.g. earlier Perplexity hallucination matched the wrong complex), we
+      // need to find that row and update its complex_id rather than try an
+      // INSERT that violates the unique constraint.
+      // Falls back to the complex-scoped address+price match for listings
+      // without a stable source_listing_id.
+      `SELECT id, asking_price, original_price, price_changes, first_seen, days_on_market, complex_id
+       FROM listings
+       WHERE source = 'yad2' AND is_active = TRUE AND (
          (source_listing_id = $2 AND source_listing_id IS NOT NULL AND source_listing_id != '')
-         OR (address = $3 AND ABS(asking_price - $4) < 50000)
-       ) AND is_active = TRUE
+         OR (complex_id = $1 AND address = $3 AND ABS(asking_price - $4) < 50000)
+       )
        LIMIT 1`,
       [complexId, sourceListingId, address, price || 0]
     );
@@ -731,6 +739,7 @@ async function processListing(listing, complexId, complexCity) {
           phone = COALESCE(phone, $13),
           contact_name = COALESCE(contact_name, $14),
           thumbnail_url = COALESCE(thumbnail_url, $15),
+          complex_id = $16,
           updated_at = NOW()
         WHERE id = $12`,
         [
@@ -744,12 +753,13 @@ async function processListing(listing, complexId, complexCity) {
           ex.id,
           updPhone,
           listing.contact_name || null,
-          listing.thumbnail_url || null
+          listing.thumbnail_url || null,
+          complexId
         ]
       );
 
-      return { 
-        action: 'updated', 
+      return {
+        action: 'updated',
         id: ex.id, 
         priceChanged: priceChanges > (ex.price_changes || 0),
         priceDrop: totalDrop > 0 ? totalDrop.toFixed(1) : null
