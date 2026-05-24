@@ -57,23 +57,41 @@ function buildFirstMessage(listing, source) {
 }
 
 // שלח הודעת WhatsApp דרך INFORU CAPI
+// CAPI changed auth: from body Authentication{} to HTTP Basic Auth header.
+// Pattern mirrors inforuService.js#getBasicAuth — using INFORU_USERNAME +
+// INFORU_PASSWORD (which is the same value as INFORU_TOKEN; InforU treats the
+// API token as the password for Basic Auth). The old body-Authentication
+// format silently fails with 401 since their 2026 CAPI migration.
 async function sendWhatsApp(phone, message) {
     try {
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return { success: false, error: 'Invalid phone number' };
 
+        const password = process.env.INFORU_PASSWORD || INFORU_TOKEN;
+        const basicAuth = 'Basic ' + Buffer.from(`${INFORU_USERNAME}:${password}`).toString('base64');
+
         const payload = {
             Data: { Message: message, Recipients: [{ Phone: cleanPhone }] },
-            Settings: { BusinessLine: INFORU_BUSINESS_LINE },
-            Authentication: { Username: INFORU_USERNAME, ApiToken: INFORU_TOKEN }
+            Settings: { BusinessLine: INFORU_BUSINESS_LINE }
         };
 
         const response = await axios.post(INFORU_API_URL, payload, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 15000
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': basicAuth
+            },
+            timeout: 15000,
+            validateStatus: () => true
         });
 
-        return { success: response.data?.Status === 'SUCCESS' || response.status === 200, data: response.data };
+        const data = response.data;
+        const success = response.status === 200 && (data?.StatusId === 1 || data?.Status === 'SUCCESS');
+        return {
+            success,
+            status: response.status,
+            data,
+            error: success ? null : (data?.StatusDescription || data?.Description || `HTTP ${response.status}`)
+        };
     } catch (err) {
         return { success: false, error: err.message };
     }
