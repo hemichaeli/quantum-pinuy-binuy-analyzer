@@ -142,6 +142,8 @@ function loadAllRoutes() {
     // 2026-05-15: alias the AI-Discovery endpoints at root paths too, so
     // AI crawlers reading discovery.u-r-quantum.com/llms.txt land on them.
     { path: '/',                       file: 'routes/aiDiscoveryRootAliases.js' },
+    // 2026-05-15: QUANTUM MCP Server (JSON-RPC 2.0) for Claude Desktop / mcp.directory.
+    { path: '/mcp',                    file: 'routes/mcpServerRoutes.js' },
     { path: '/api/scan',               file: 'routes/scan.js' },
     { path: '/api/alerts',             file: 'routes/alerts.js' },
     { path: '/api/leads',              file: 'routes/leadRoutes.js' },
