@@ -143,6 +143,7 @@ function loadAllRoutes() {
     { path: '/api/projects',           file: 'routes/projects.js' },
     { path: '/api',                    file: 'routes/opportunities.js' },
     { path: '/api/discovery',          file: 'routes/aiDiscoveryRoutes.js' },
+    { path: '/api/discovery',          file: 'routes/botStatsRoutes.js' },
     // 2026-05-15: alias the AI-Discovery endpoints at root paths too, so
     // AI crawlers reading discovery.u-r-quantum.com/llms.txt land on them.
     { path: '/',                       file: 'routes/aiDiscoveryRootAliases.js' },
