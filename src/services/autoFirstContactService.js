@@ -56,29 +56,28 @@ function buildFirstMessage(listing, source) {
 האם תרצה לשמוע על האפשרויות? נשמח לסייע.`;
 }
 
-// שלח הודעת WhatsApp דרך INFORU CAPI
-// Delegates to inforuService.sendWhatsAppChat — the canonical CAPI sender.
-// Two earlier auth styles failed in production:
-//   1. Body-Authentication{Username,ApiToken} → 401 (deprecated since CAPI 2026)
-//   2. Basic Auth header + Recipients[] array  → still 401 (wrong payload shape)
-// inforuService.sendWhatsAppChat uses the shape CAPI actually accepts:
-// {Data:{Message, Phone, Settings:{CustomerMessageId, CustomerParameter}}}
-// + HTTP Basic Auth header. Importing avoids drift between the two senders.
+// Cold first-contact via INFORU.
+// WhatsApp Business 24h rule: SendWhatsAppChat rejects cold numbers with
+// "Couldn't find active chat for phone number = ..." (verified in production
+// 2026-05-25 — auth + payload shape were correct, the recipient just hasn't
+// opened a session). For first-contact we delegate to inforuService.sendMessage
+// which tries WhatsApp chat first and falls back to SMS on that exact failure.
+// SMS has no 24h window and reaches every Israeli mobile.
 async function sendWhatsApp(phone, message) {
     try {
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return { success: false, error: 'Invalid phone number' };
 
         const inforu = require('./inforuService');
-        const result = await inforu.sendWhatsAppChat(cleanPhone, message, {
+        const result = await inforu.sendMessage(cleanPhone, message, {
+            preferWhatsApp: true,
             customerParameter: 'QUANTUM_AUTO_FIRST_CONTACT'
         });
 
-        // inforu returns either {success, status, ...} on 2xx or
-        // {success:false, httpStatus, inforuResponse, ...} on 4xx/5xx
         return {
             success: !!result?.success,
             status: result?.httpStatus || result?.status || null,
+            channel: result?.channel || null,
             data: result?.inforuResponse || result,
             error: result?.success ? null :
                 (result?.inforuResponse?.StatusDescription
@@ -86,7 +85,6 @@ async function sendWhatsApp(phone, message) {
                 || `HTTP ${result?.httpStatus || '?'}`)
         };
     } catch (err) {
-        // inforu's send throws on network errors only
         return { success: false, error: err.message };
     }
 }
