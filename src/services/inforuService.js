@@ -87,6 +87,24 @@ const WA_TEMPLATES = {
     pendingApproval: true
   },
 
+  // ---- seller cold first-contact (yad2 / komo / dira) ----
+  //
+  // Meta-approved 2026-04-29. Replaces SMS first-contact in AutoFirstContact.
+  // Body:
+  //   שלום,
+  //   אני חמי מקואנטום נדל"ן.
+  //   ראיתי את הדירה שלך ב-{{1}} למכירה.
+  //   יש לנו רוכשים שמחפשים באיזור הזה.
+  //   אשמח לשיחה קצרה אם זה רלוונטי.
+  //   QUANTUM | נדל"ן חכם
+  //   רישיון מתווך 3222024
+  //
+  // Body variables: {{1}} = location (address, city)
+  // Quick-reply buttons (rendered by Meta from approved template, no API params):
+  //   - "כן, אשמח לשמוע"   → opens 24h window, conversation continues via WhatsApp chat
+  //   - "אנא הסירו אותי"   → opt-out signal, add phone to opt-outs table
+  seller_outreach_v1:     { templateId: '255220', name: 'quantum_seller_outreach_v1 - פנייה ראשונית למוכר',         params: ['location'], hasButtons: false },
+
   // ---- ceremony templates ----
   ceremony_42:            { templateId: '158832', name: 'כנס ראשון - 42',                                         params: [], hasButtons: false },
   ceremony_44:            { templateId: '158833', name: 'כנס ראשון - 44',                                         params: [], hasButtons: false },

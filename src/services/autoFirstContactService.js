@@ -57,32 +57,54 @@ function buildFirstMessage(listing, source) {
 }
 
 // Cold first-contact via INFORU.
-// WhatsApp Business 24h rule: SendWhatsAppChat rejects cold numbers with
-// "Couldn't find active chat for phone number = ..." (verified in production
-// 2026-05-25 — auth + payload shape were correct, the recipient just hasn't
-// opened a session). For first-contact we delegate to inforuService.sendMessage
-// which tries WhatsApp chat first and falls back to SMS on that exact failure.
-// SMS has no 24h window and reaches every Israeli mobile.
-async function sendWhatsApp(phone, message) {
+//
+// PRIMARY: WhatsApp template `seller_outreach_v1` (Meta-approved 2026-04-29,
+// templateId 255220). Has two quick-reply buttons: "כן, אשמח לשמוע" and
+// "אנא הסירו אותי". Works for cold numbers because Meta only restricts FREE
+// chat outside the 24h window — approved templates can be sent any time.
+//
+// FALLBACK: SMS via InforU XML endpoint, used only if the WhatsApp template
+// send itself errors (recipient not on WhatsApp, blocked, etc.).
+async function sendWhatsApp(phone, message, listing) {
     try {
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return { success: false, error: 'Invalid phone number' };
 
         const inforu = require('./inforuService');
-        const result = await inforu.sendMessage(cleanPhone, message, {
-            preferWhatsApp: true,
+
+        // Build location string for {{1}}. Address first, fall back to city only.
+        const address = (listing?.address || '').trim();
+        const city = (listing?.city || '').trim();
+        let location;
+        if (address && city && !address.includes(city)) location = `${address}, ${city}`;
+        else if (address) location = address;
+        else if (city) location = city;
+        else location = 'באזור שלך';
+
+        // 1) Try Meta-approved template (works for cold numbers).
+        try {
+            const waResult = await inforu.sendWhatsApp(cleanPhone, 'seller_outreach_v1', { location }, {
+                customerParameter: 'QUANTUM_AUTO_FIRST_CONTACT',
+                listingId: listing?.id || null
+            });
+            if (waResult?.success) {
+                return { success: true, channel: 'whatsapp_template', status: waResult.status, data: waResult };
+            }
+            console.warn(`[AutoFirstContact] WhatsApp template failed for ${cleanPhone} (${waResult?.description || 'unknown'}), trying SMS`);
+        } catch (waErr) {
+            console.warn(`[AutoFirstContact] WhatsApp template error for ${cleanPhone}: ${waErr.message}, trying SMS`);
+        }
+
+        // 2) Fallback to SMS (legacy free-text path, no template needed).
+        const smsResult = await inforu.sendSms(cleanPhone, message, {
             customerParameter: 'QUANTUM_AUTO_FIRST_CONTACT'
         });
-
         return {
-            success: !!result?.success,
-            status: result?.httpStatus || result?.status || null,
-            channel: result?.channel || null,
-            data: result?.inforuResponse || result,
-            error: result?.success ? null :
-                (result?.inforuResponse?.StatusDescription
-                || result?.description
-                || `HTTP ${result?.httpStatus || '?'}`)
+            success: !!smsResult?.success,
+            channel: 'sms',
+            status: smsResult?.status || null,
+            data: smsResult,
+            error: smsResult?.success ? null : (smsResult?.description || 'SMS send failed')
         };
     } catch (err) {
         return { success: false, error: err.message };
@@ -149,7 +171,7 @@ async function processYad2() {
                 }
 
                 const message = buildFirstMessage(listing, 'yad2');
-                const res = await sendWhatsApp(listing.phone, message);
+                const res = await sendWhatsApp(listing.phone, message, listing);
 
                 if (res.success) {
                     await pool.query(
@@ -225,7 +247,7 @@ async function processFacebook() {
                 }
 
                 const message = buildFirstMessage(ad, 'facebook');
-                const res = await sendWhatsApp(ad.phone, message);
+                const res = await sendWhatsApp(ad.phone, message, ad);
                 if (res.success) {
                     await pool.query(
                         `UPDATE facebook_ads SET contact_status = 'contacted',
@@ -288,7 +310,7 @@ async function runKonesAutoContact() {
 
                 // Mobile number - send WhatsApp
                 const message = buildFirstMessage(k, 'kones');
-                const res = await sendWhatsApp(k.phone, message);
+                const res = await sendWhatsApp(k.phone, message, k);
                 if (res.success) {
                     await pool.query(
                         `UPDATE kones_listings SET contact_status = 'contacted',
