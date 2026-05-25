@@ -638,6 +638,43 @@ router.get('/feed.atom', async (req, res) => {
   }
 });
 
+router.get('/bot-fetches/stats', async (req, res) => {
+  const hours = Math.min(parseInt(req.query.hours) || 168, 24 * 30);
+  try {
+    const [byBot, byPath, recent] = await Promise.all([
+      pool.query(`
+        SELECT bot_name, COUNT(*)::int AS fetches, COUNT(DISTINCT path)::int AS distinct_paths,
+               MIN(fetched_at) AS first_seen, MAX(fetched_at) AS last_seen
+        FROM bot_fetches
+        WHERE fetched_at >= NOW() - ($1 || ' hours')::interval
+        GROUP BY bot_name ORDER BY fetches DESC
+      `, [hours]),
+      pool.query(`
+        SELECT path, COUNT(*)::int AS fetches, COUNT(DISTINCT bot_name)::int AS distinct_bots
+        FROM bot_fetches
+        WHERE fetched_at >= NOW() - ($1 || ' hours')::interval
+        GROUP BY path ORDER BY fetches DESC LIMIT 25
+      `, [hours]),
+      pool.query(`
+        SELECT bot_name, path, status_code, response_bytes, fetched_at
+        FROM bot_fetches ORDER BY fetched_at DESC LIMIT 50
+      `),
+    ]);
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json({
+      generated_at: new Date().toISOString(),
+      window_hours: hours,
+      total_fetches_in_window: byBot.rows.reduce((s, r) => s + r.fetches, 0),
+      distinct_bots_in_window: byBot.rows.length,
+      by_bot: byBot.rows,
+      by_path: byPath.rows,
+      recent_50: recent.rows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/health', async (req, res) => {
   try {
     const agg = await fetchGlobalAggregates();

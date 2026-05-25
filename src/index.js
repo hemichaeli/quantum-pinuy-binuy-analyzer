@@ -65,6 +65,10 @@ app.use(helmet({
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token', 'X-Webhook-Secret'] }));
 app.use(express.json({ limit: '10mb' }));
 
+// 2026-05-25: log AI crawler hits on Discovery paths (GPTBot, ClaudeBot, PerplexityBot, ...)
+const { aiBotLoggerMiddleware } = require('./services/aiBotLogger');
+app.use(aiBotLoggerMiddleware(pool));
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false,
   skip: (req) =>
@@ -404,6 +408,8 @@ async function start() {
   await runMigrationFile('Orphan non-pinuy-binuy cleanup (031)', path.join(__dirname, 'db', 'migrations', '031_cleanup_orphan_non_pinuy_binuy.sql'));
   // 2026-05-25: add missing status_code/status_description/channel/template_id columns so DLR matching works
   await runMigrationFile('sent_messages status columns (032)', path.join(__dirname, 'db', 'migrations', '032_sent_messages_status_columns.sql'));
+  // 2026-05-25: AI bot fetch logging (GPTBot/ClaudeBot/PerplexityBot/etc.)
+  await runMigrationFile('Bot fetches (033)', path.join(__dirname, 'db', 'migrations', '033_bot_fetches.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
