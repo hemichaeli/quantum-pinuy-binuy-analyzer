@@ -211,17 +211,35 @@ async function sendWhatsApp(recipients, templateKey, variables = {}, options = {
   try {
     const response = await axios.post(`${INFORU_CAPI_BASE}/WhatsApp/SendWhatsApp`, payload, {
       headers: { 'Content-Type': 'application/json', 'Authorization': getBasicAuth() },
-      timeout: 30000
+      timeout: 30000,
+      validateStatus: () => true
     });
     const data = response.data;
-    const result = { success: data.StatusId === 1, status: data.StatusId, description: data.StatusDescription, recipientsCount: data.Data?.Recipients || 0, errors: data.Data?.Errors || null, phones, channel: 'whatsapp', templateKey: actualTemplateKey, originalTemplateKey: templateKey, templateId: tmpl.templateId, timestamp: new Date().toISOString() };
+    const httpStatus = response.status;
+    // 2026-05-25: log the full InforU response on any non-success so 400s
+    // surface the actual StatusDescription instead of just "Request failed with status code 400".
+    if (httpStatus >= 400 || data?.StatusId !== 1) {
+      logger.warn('SendWhatsApp non-success', {
+        httpStatus,
+        templateKey: actualTemplateKey,
+        templateId: tmpl.templateId,
+        sentPayload: JSON.stringify(payload),
+        inforuResponse: JSON.stringify(data)
+      });
+    }
+    const result = { success: data?.StatusId === 1, status: data?.StatusId, description: data?.StatusDescription, recipientsCount: data?.Data?.Recipients || 0, errors: data?.Data?.Errors || null, phones, channel: 'whatsapp', templateKey: actualTemplateKey, originalTemplateKey: templateKey, templateId: tmpl.templateId, httpStatus, timestamp: new Date().toISOString() };
     const msgText = `[WA Template: ${tmpl.name}] ${JSON.stringify(variables)}`;
     await logMessage(result, msgText, phones, { ...options, channel: 'whatsapp', templateKey: actualTemplateKey });
-    if (data.StatusId === 1) logger.info(`WhatsApp sent to ${data.Data?.Recipients} recipients`, { templateKey: actualTemplateKey, templateId: tmpl.templateId, phones });
-    else logger.warn('WhatsApp send failed', { status: data.StatusId, description: data.StatusDescription, errors: data.Data?.Errors, templateKey: actualTemplateKey });
+    if (data?.StatusId === 1) logger.info(`WhatsApp sent to ${data.Data?.Recipients} recipients`, { templateKey: actualTemplateKey, templateId: tmpl.templateId, phones });
     return result;
   } catch (err) {
-    logger.error('WhatsApp API error', { error: err.message, templateKey: actualTemplateKey });
+    logger.error('WhatsApp API error', {
+      error: err.message,
+      templateKey: actualTemplateKey,
+      templateId: tmpl.templateId,
+      responseData: err.response?.data ? JSON.stringify(err.response.data) : null,
+      responseStatus: err.response?.status
+    });
     throw err;
   }
 }
