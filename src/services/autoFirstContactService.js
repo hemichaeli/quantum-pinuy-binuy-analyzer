@@ -11,13 +11,19 @@ const INFORU_TOKEN = process.env.INFORU_TOKEN || '95452ace-07cf-48be-8671-a197c1
 const INFORU_BUSINESS_LINE = process.env.INFORU_BUSINESS_LINE || '037572229';
 const INFORU_API_URL = 'https://capi.inforu.co.il/api/v2/WhatsApp/SendWhatsAppChat';
 
-// בדוק אם מספר הוא נייד ישראלי (05x)
+// Valid Israeli mobile carrier prefixes (Ministry of Communications, 2026):
+//   050 Pelephone, 052 Cellcom, 053 Hot Mobile, 054 Partner,
+//   055 multi-MVNO (Hot/Rami Levy/Golan/We4G), 058 multi-MVNO.
+// Invalid/reserved: 056, 057, 059.
+// Verified 2026-05-25: InforU returns StatusId -33 InvalidPhoneNumber for 059X,
+// so we filter these out client-side instead of repeatedly hitting the API.
+const ISRAELI_MOBILE_PREFIX = /^(050|052|053|054|055|058)\d{7}$/;
+const ISRAELI_MOBILE_INTL = /^972(50|52|53|54|55|58)\d{7}$/;
+
 function isMobilePhone(phone) {
     if (!phone) return false;
     const clean = phone.replace(/[^0-9]/g, '');
-    // Israeli mobile: 05x... (10 digits starting with 05)
-    // Or 9725x... (international format)
-    return /^05\d{8}$/.test(clean) || /^9725\d{8}$/.test(clean);
+    return ISRAELI_MOBILE_PREFIX.test(clean) || ISRAELI_MOBILE_INTL.test(clean);
 }
 
 // נקה מספר טלפון לפורמט בינלאומי
