@@ -57,42 +57,36 @@ function buildFirstMessage(listing, source) {
 }
 
 // שלח הודעת WhatsApp דרך INFORU CAPI
-// CAPI changed auth: from body Authentication{} to HTTP Basic Auth header.
-// Pattern mirrors inforuService.js#getBasicAuth — using INFORU_USERNAME +
-// INFORU_PASSWORD (which is the same value as INFORU_TOKEN; InforU treats the
-// API token as the password for Basic Auth). The old body-Authentication
-// format silently fails with 401 since their 2026 CAPI migration.
+// Delegates to inforuService.sendWhatsAppChat — the canonical CAPI sender.
+// Two earlier auth styles failed in production:
+//   1. Body-Authentication{Username,ApiToken} → 401 (deprecated since CAPI 2026)
+//   2. Basic Auth header + Recipients[] array  → still 401 (wrong payload shape)
+// inforuService.sendWhatsAppChat uses the shape CAPI actually accepts:
+// {Data:{Message, Phone, Settings:{CustomerMessageId, CustomerParameter}}}
+// + HTTP Basic Auth header. Importing avoids drift between the two senders.
 async function sendWhatsApp(phone, message) {
     try {
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return { success: false, error: 'Invalid phone number' };
 
-        const password = process.env.INFORU_PASSWORD || INFORU_TOKEN;
-        const basicAuth = 'Basic ' + Buffer.from(`${INFORU_USERNAME}:${password}`).toString('base64');
-
-        const payload = {
-            Data: { Message: message, Recipients: [{ Phone: cleanPhone }] },
-            Settings: { BusinessLine: INFORU_BUSINESS_LINE }
-        };
-
-        const response = await axios.post(INFORU_API_URL, payload, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': basicAuth
-            },
-            timeout: 15000,
-            validateStatus: () => true
+        const inforu = require('./inforuService');
+        const result = await inforu.sendWhatsAppChat(cleanPhone, message, {
+            customerParameter: 'QUANTUM_AUTO_FIRST_CONTACT'
         });
 
-        const data = response.data;
-        const success = response.status === 200 && (data?.StatusId === 1 || data?.Status === 'SUCCESS');
+        // inforu returns either {success, status, ...} on 2xx or
+        // {success:false, httpStatus, inforuResponse, ...} on 4xx/5xx
         return {
-            success,
-            status: response.status,
-            data,
-            error: success ? null : (data?.StatusDescription || data?.Description || `HTTP ${response.status}`)
+            success: !!result?.success,
+            status: result?.httpStatus || result?.status || null,
+            data: result?.inforuResponse || result,
+            error: result?.success ? null :
+                (result?.inforuResponse?.StatusDescription
+                || result?.description
+                || `HTTP ${result?.httpStatus || '?'}`)
         };
     } catch (err) {
+        // inforu's send throws on network errors only
         return { success: false, error: err.message };
     }
 }
