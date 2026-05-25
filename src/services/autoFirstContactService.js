@@ -118,19 +118,20 @@ async function saveOutgoingMessage(phone, message, listingId) {
 }
 
 // עבד מודעות יד2 חדשות שלא פנינו אליהן
+// DISTINCT ON (phone): one advertiser may have several listings.
+// Verified 2026-05-25: phone 0528788858 got 4 SMS in 30s because it had 4
+// listings in קריית אונו. After contacting once, sibling listings get marked
+// 'contacted_via_sibling' so they don't surface again.
 async function processYad2() {
-    let contacted = 0, failed = 0, skipped = 0;
+    let contacted = 0, failed = 0, skipped = 0, dedupedSiblings = 0;
     try {
-        // Day 8.5 fix: removed the 2-hour window. Scrapers run once daily so the
-        // window meant only the morning's listings were ever contacted, leaving
-        // 1,000+ older listings stuck forever. Now we work the full backlog.
         const result = await pool.query(`
-            SELECT id, phone, address, city, contact_name
+            SELECT DISTINCT ON (phone) id, phone, address, city, contact_name
             FROM listings
             WHERE contact_status IS NULL
               AND phone IS NOT NULL AND phone != ''
               AND is_active = TRUE
-            ORDER BY created_at DESC
+            ORDER BY phone, created_at DESC
             LIMIT 20
         `);
 
@@ -139,8 +140,8 @@ async function processYad2() {
                 // Skip landlines
                 if (!isMobilePhone(listing.phone)) {
                     await pool.query(
-                        `UPDATE listings SET contact_status = 'landline', updated_at = NOW() WHERE id = $1`,
-                        [listing.id]
+                        `UPDATE listings SET contact_status = 'landline', updated_at = NOW() WHERE phone = $1`,
+                        [listing.phone]
                     ).catch(() => null);
                     skipped++;
                     console.log(`[AutoFirstContact] SKIP landline: ${listing.phone}`);
@@ -158,9 +159,17 @@ async function processYad2() {
                          WHERE id = $1`,
                         [listing.id]
                     );
+                    // Mark sibling listings (same phone) as contacted via this one
+                    const siblings = await pool.query(
+                        `UPDATE listings SET contact_status = 'contacted_via_sibling',
+                         last_contact_at = NOW()
+                         WHERE phone = $1 AND id <> $2 AND contact_status IS NULL`,
+                        [listing.phone, listing.id]
+                    );
+                    if (siblings.rowCount > 0) dedupedSiblings += siblings.rowCount;
                     await saveOutgoingMessage(listing.phone, message, listing.id);
                     contacted++;
-                    console.log(`[AutoFirstContact] OK Yad2: ${listing.phone} (${listing.address})`);
+                    console.log(`[AutoFirstContact] OK Yad2: ${listing.phone} (${listing.address})${siblings.rowCount ? ` +${siblings.rowCount} siblings` : ''}`);
                 } else {
                     await pool.query(
                         `UPDATE listings SET contact_attempts = COALESCE(contact_attempts, 0) + 1,
@@ -177,6 +186,7 @@ async function processYad2() {
                 console.warn(`[AutoFirstContact] Error listing ${listing.id}:`, e.message);
             }
         }
+        if (dedupedSiblings > 0) console.log(`[AutoFirstContact] De-duped ${dedupedSiblings} sibling listings (same advertiser)`);
     } catch (e) {
         console.error('[AutoFirstContact] processYad2 error:', e.message);
     }

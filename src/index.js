@@ -400,6 +400,8 @@ async function start() {
   await runMigrationFile('Komo non-pinuy-binuy cleanup (030)', path.join(__dirname, 'db', 'migrations', '030_cleanup_komo_non_pinuy_binuy.sql'));
   // 2026-05-13: sweep ALL remaining orphan listings (complex_id IS NULL) across every source.
   await runMigrationFile('Orphan non-pinuy-binuy cleanup (031)', path.join(__dirname, 'db', 'migrations', '031_cleanup_orphan_non_pinuy_binuy.sql'));
+  // 2026-05-25: add missing status_code/status_description/channel/template_id columns so DLR matching works
+  await runMigrationFile('sent_messages status columns (032)', path.join(__dirname, 'db', 'migrations', '032_sent_messages_status_columns.sql'));
   if (isQuantum) await runOutreachMigration();
 
   loadAllRoutes();
