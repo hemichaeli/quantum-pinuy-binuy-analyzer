@@ -72,7 +72,7 @@ app.use(aiBotLoggerMiddleware(pool));
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false,
   skip: (req) =>
-    req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path === '/api/debug' ||
+    req.path.startsWith('/api/intelligence') || req.path === '/health' || req.path.startsWith('/api/debug') ||
     req.path.startsWith('/api/whatsapp/') || req.path.startsWith('/api/vapi/webhook') ||
     req.path.startsWith('/api/vapi/book-slot') ||
     req.path.startsWith('/api/vapi-call/') ||
@@ -124,6 +124,7 @@ function loadAllRoutes() {
   const shared = [
     { path: '/api/vapi',               file: 'routes/vapiRoutes.js' },
     { path: '/api/inforu',             file: 'routes/inforuRoutes.js' },
+    { path: '/api/debug',              file: 'routes/apifyDebugRoutes.js' },
     { path: '/api',                    file: 'routes/whatsappWebhookRoutes.js' },
     { path: '/api/whatsapp',           file: 'routes/whatsappAlertRoutes.js' },
     { path: '/api/whatsapp',           file: 'routes/whatsappRoutes.js' },
