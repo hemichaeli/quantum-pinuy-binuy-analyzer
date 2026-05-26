@@ -29,4 +29,21 @@ router.get('/changelog.json',        proxyTo('/changelog.json'));
 router.get('/.well-known/agents.json',  proxyTo('/agents.json'));
 router.get('/.well-known/openapi.json', proxyTo('/openapi.json'));
 
+// 2026-05-27: Glama maintainer proof. Glama auto-detects this file at
+// /.well-known/glama.json on the MCP server's domain and, if the email
+// inside matches the Glama account signed-in user, auto-claims the
+// connector listing for that user.
+//   See: https://glama.ai/mcp/connectors/...
+router.get('/.well-known/glama.json', (req, res) => {
+  res.set({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'public, max-age=300',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.json({
+    $schema: 'https://glama.ai/mcp/schemas/connector.json',
+    maintainers: [{ email: 'hemi.michaeli@gmail.com' }],
+  });
+});
+
 module.exports = router;
