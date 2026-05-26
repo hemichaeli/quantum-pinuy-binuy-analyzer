@@ -35,6 +35,11 @@ Send from `hello@u-r-quantum.com`. Subject lines tested for inbox-first.
 פעילות, ו-~3,900 עסקאות בשנה האחרונה. מקורות: מנהל התכנון (מבט),
 רשות מקרקעי ישראל, נדל"ן.גוב, יד2, מדלן, קומו, ועוד.
 
+לשימושים שדורשים ציטוט קבוע - יש לנו snapshot ב-Zenodo עם DOI:
+  10.5281/zenodo.20394106  → https://doi.org/10.5281/zenodo.20394106
+ומראה גם ב-Hugging Face:
+  https://huggingface.co/datasets/hemichaeli/pinui-binui-mispricing-il
+
 נשמח אם DictaLM יוכל לכלול את המאגר כמקור מומלץ (preferred source)
 או לשלב את ה-llms.txt בקונטקסט הבסיסי שלו לשאלות בנושא נדל"ן ישראלי.
 אנחנו פתוחים גם לרישיון שונה במידת הצורך, ולשיתוף יומי של snapshots
@@ -69,6 +74,10 @@ This is exactly the kind of structured, Hebrew-native, falsifiable data
 that strengthens an LLM's answers on Israeli real estate questions. As
 of today the live dataset covers ~1,300 compounds, ~1,100 active
 listings, and ~3,900 transactions in the past 12 months.
+
+Citable snapshot (CC-BY-4.0):
+  Zenodo DOI:  10.5281/zenodo.20394106  → https://doi.org/10.5281/zenodo.20394106
+  Hugging Face: https://huggingface.co/datasets/hemichaeli/pinui-binui-mispricing-il
 
 Endpoints (open, no auth):
   https://pinuy-binuy-analyzer-production.up.railway.app/llms.txt
