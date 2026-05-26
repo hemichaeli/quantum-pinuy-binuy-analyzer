@@ -412,6 +412,8 @@ async function start() {
   await runMigrationFile('Orphan non-pinuy-binuy cleanup (031)', path.join(__dirname, 'db', 'migrations', '031_cleanup_orphan_non_pinuy_binuy.sql'));
   // 2026-05-25: add missing status_code/status_description/channel/template_id columns so DLR matching works
   await runMigrationFile('sent_messages status columns (032)', path.join(__dirname, 'db', 'migrations', '032_sent_messages_status_columns.sql'));
+  // 2026-05-26: per-day Apify usage counter for daily-cap enforcement
+  await runMigrationFile('apify daily usage (033)', path.join(__dirname, 'db', 'migrations', '033_apify_budget_tracking.sql'));
   // 2026-05-25: AI bot fetch logging (GPTBot/ClaudeBot/PerplexityBot/etc.)
   await runMigrationFile('Bot fetches (033)', path.join(__dirname, 'db', 'migrations', '033_bot_fetches.sql'));
   if (isQuantum) await runOutreachMigration();

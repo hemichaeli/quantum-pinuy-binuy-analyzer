@@ -28,6 +28,22 @@ const { logger } = require('./logger');
 const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
 const APIFY_BASE = 'https://api.apify.com/v2';
 
+// Spend protection — see migration 033 and the postmortem of 2026-05-23.
+// Single day burned $29.52 against a $29 STARTER cap because 1,094 stale
+// listings hit residential proxy after the slash→tilde fix. The two limits
+// below ensure that can't happen again:
+//   1. DAILY_CAP: hard ceiling on phones/day. Reset at UTC midnight via
+//      apify_daily_usage row keyed on DATE.
+//   2. BUDGET_BRAKE: cents-level read from /users/me/usage/monthly before
+//      each batch. Skips Apify if monthly spend already crossed threshold,
+//      regardless of daily count.
+// Both are env-configurable so we can loosen them after upgrading plan.
+const APIFY_DAILY_CAP = parseInt(process.env.APIFY_DAILY_CAP || '50', 10);
+const APIFY_BUDGET_BRAKE_USD = parseFloat(process.env.APIFY_BUDGET_BRAKE_USD || '25');
+// Cache the brake check inside a single orchestrator pass so we don't slam
+// /users/me/usage/monthly for every 25-listing batch. 90s is plenty.
+let _brakeCache = { at: 0, usd: null };
+
 // ── Phone cleaning (shared) ─────────────────────────────────────────────────
 
 function cleanPhone(phone) {
@@ -138,9 +154,79 @@ async function enrichKomoListings(listings) {
  * Input: { listings: [{id, url, source, source_listing_id, address, city}] }
  * Output: [{id, phone, contact_name}]
  */
+// Today's Apify counter (UTC day). Returns {attempted, succeeded} for diagnostics.
+async function getTodayApifyUsage() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT phones_attempted, phones_succeeded FROM apify_daily_usage WHERE day = CURRENT_DATE`
+    );
+    return rows[0] || { phones_attempted: 0, phones_succeeded: 0 };
+  } catch {
+    return { phones_attempted: 0, phones_succeeded: 0 };
+  }
+}
+
+async function bumpTodayApifyUsage(attempted, succeeded) {
+  try {
+    await pool.query(
+      `INSERT INTO apify_daily_usage (day, phones_attempted, phones_succeeded)
+       VALUES (CURRENT_DATE, $1, $2)
+       ON CONFLICT (day) DO UPDATE
+         SET phones_attempted = apify_daily_usage.phones_attempted + EXCLUDED.phones_attempted,
+             phones_succeeded = apify_daily_usage.phones_succeeded + EXCLUDED.phones_succeeded,
+             updated_at = NOW()`,
+      [attempted, succeeded]
+    );
+  } catch (err) {
+    logger.warn(`[PhoneOrch] Failed to bump daily usage: ${err.message}`);
+  }
+}
+
+// Reads current month-to-date spend from Apify. Cached for 90s to avoid
+// hammering /users/me/usage/monthly on every batch.
+async function getCurrentMonthlySpendUsd() {
+  if (Date.now() - _brakeCache.at < 90_000 && _brakeCache.usd !== null) {
+    return _brakeCache.usd;
+  }
+  try {
+    const r = await axios.get(`${APIFY_BASE}/users/me/usage/monthly`, {
+      headers: { Authorization: `Bearer ${APIFY_TOKEN}` },
+      timeout: 8000,
+      validateStatus: () => true,
+    });
+    const usd = r.data?.data?.totalUsageCreditsUsdAfterVolumeDiscount;
+    if (typeof usd === 'number') {
+      _brakeCache = { at: Date.now(), usd };
+      return usd;
+    }
+  } catch (err) {
+    logger.warn(`[PhoneOrch] Brake usage check failed: ${err.message}`);
+  }
+  return null; // unknown → don't brake
+}
+
 async function runApifyPhoneReveal(listings) {
   if (!APIFY_TOKEN) {
     logger.warn('[PhoneOrch] APIFY_API_TOKEN not configured — skipping Apify enrichment');
+    return [];
+  }
+
+  // Daily cap — how many phones did we already attempt today?
+  const usage = await getTodayApifyUsage();
+  const remainingToday = Math.max(0, APIFY_DAILY_CAP - usage.phones_attempted);
+  if (remainingToday <= 0) {
+    logger.warn(`[PhoneOrch] Daily cap hit (${APIFY_DAILY_CAP}) — skipping ${listings.length} listings, retry tomorrow`);
+    return [];
+  }
+  if (listings.length > remainingToday) {
+    logger.info(`[PhoneOrch] Daily cap throttle: trimming ${listings.length} → ${remainingToday} (used ${usage.phones_attempted}/${APIFY_DAILY_CAP} today)`);
+    listings = listings.slice(0, remainingToday);
+  }
+
+  // Budget brake — has monthly spend already crossed the soft threshold?
+  const monthSpend = await getCurrentMonthlySpendUsd();
+  if (monthSpend !== null && monthSpend >= APIFY_BUDGET_BRAKE_USD) {
+    logger.warn(`[PhoneOrch] Budget brake engaged: month-to-date $${monthSpend.toFixed(2)} ≥ $${APIFY_BUDGET_BRAKE_USD} — skipping Apify entirely`);
     return [];
   }
 
@@ -181,13 +267,20 @@ async function runApifyPhoneReveal(listings) {
     );
 
     const results = resp.data || [];
-    logger.info(`[PhoneOrch] Apify returned ${results.length} results`);
+    const succeeded = results.filter(r => r && r.phone).length;
+    await bumpTodayApifyUsage(listings.length, succeeded);
+    logger.info(`[PhoneOrch] Apify returned ${results.length} results (${succeeded} with phones, daily ${usage.phones_attempted + listings.length}/${APIFY_DAILY_CAP})`);
     return results;
   } catch (err) {
     // If sync call times out, try async
     if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-      return await runApifyAsync(actorId, input);
+      const asyncResults = await runApifyAsync(actorId, input);
+      const asyncSucceeded = asyncResults.filter(r => r && r.phone).length;
+      await bumpTodayApifyUsage(listings.length, asyncSucceeded);
+      return asyncResults;
     }
+    // Count attempted but not succeeded — proxy time was still consumed.
+    await bumpTodayApifyUsage(listings.length, 0);
     logger.error(`[PhoneOrch] Apify actor failed: ${err.message}`);
     return [];
   }

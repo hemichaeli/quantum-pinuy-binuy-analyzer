@@ -12,6 +12,56 @@ const { logger } = require('../services/logger');
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 
+// Count of active listings without a phone, broken down by source. Used to
+// size the pay-as-you-go cost of clearing the entire backlog in one go.
+router.get('/phone-backlog', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const { rows } = await pool.query(`
+      SELECT source, COUNT(*)::int AS missing_phone
+      FROM listings
+      WHERE is_active = TRUE
+        AND (phone IS NULL OR phone = '' OR phone = 'NULL')
+      GROUP BY source
+      ORDER BY missing_phone DESC
+    `);
+    const total = rows.reduce((sum, r) => sum + r.missing_phone, 0);
+    const CENTS_PER_PHONE = 2.7; // measured 2026-05-23: $29.52 / 1,094
+    return res.json({
+      ok: true,
+      total_missing_phone: total,
+      by_source: rows,
+      cost_estimate: {
+        per_phone_usd: CENTS_PER_PHONE / 100,
+        total_usd: +(total * CENTS_PER_PHONE / 100).toFixed(2),
+        note: 'Based on 2026-05-23 burn: 1,094 phones / $29.52. Residential proxy dominates ($8/GB, ~3MB per phone). Actual could vary ±20%.'
+      },
+      daily_cap_runway_days: Math.ceil(total / parseInt(process.env.APIFY_DAILY_CAP || '50', 10))
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Today's Apify usage row — diagnostic for the daily cap.
+router.get('/apify-today', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const { rows } = await pool.query(
+      `SELECT day, phones_attempted, phones_succeeded, updated_at
+       FROM apify_daily_usage WHERE day = CURRENT_DATE`
+    );
+    return res.json({
+      ok: true,
+      today: rows[0] || { day: new Date().toISOString().slice(0, 10), phones_attempted: 0, phones_succeeded: 0 },
+      daily_cap: parseInt(process.env.APIFY_DAILY_CAP || '50', 10),
+      budget_brake_usd: parseFloat(process.env.APIFY_BUDGET_BRAKE_USD || '25')
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // When does the monthly budget reset?
 // Apify exposes the current billing period via /v2/users/me/usage/monthly.
 router.get('/apify-cycle', async (req, res) => {
