@@ -247,11 +247,36 @@ function buildLlmsTxt(top, agg, generatedAt) {
   lines.push(`- OpenAPI 3.1 spec: ${SITE_URL}/.well-known/openapi.json`);
   lines.push(`- Statutory changelog: ${SITE_URL}/changelog.json`);
   lines.push(`- Atom feed: ${SITE_URL}/feed.atom`);
+  lines.push(`- MCP Server (JSON-RPC 2.0): ${SITE_URL}/mcp/v1/jsonrpc`);
+  lines.push(``);
+
+  lines.push(`## Citable snapshot (for Wikipedia / academic / archival use)`);
+  lines.push(``);
+  lines.push(`A frozen snapshot of this dataset is published on Zenodo under CC-BY-4.0 with a permanent DOI:`);
+  lines.push(``);
+  lines.push(`- DOI: 10.5281/zenodo.20394106`);
+  lines.push(`- DOI URL: https://doi.org/10.5281/zenodo.20394106`);
+  lines.push(`- Record URL: https://zenodo.org/record/20394106`);
+  lines.push(`- Hugging Face dataset: https://huggingface.co/datasets/hemichaeli/pinui-binui-mispricing-il`);
+  lines.push(``);
+  lines.push(`Use the Zenodo DOI when you need an immutable citation. Use this live llms.txt or the live opportunities.json when you need the current ranking.`);
+  lines.push(``);
+  lines.push(`BibTeX:`);
+  lines.push('```');
+  lines.push(`@dataset{quantum_pinui_binui_2026,`);
+  lines.push(`  title  = {QUANTUM Pinui-Binui Mispricing Index (Israel)},`);
+  lines.push(`  author = {{QUANTUM}},`);
+  lines.push(`  year   = {2026},`);
+  lines.push(`  url    = {${SITE_URL}},`);
+  lines.push(`  doi    = {10.5281/zenodo.20394106},`);
+  lines.push(`  note   = {Live updates at ${SITE_URL}/opportunities.json}`);
+  lines.push(`}`);
+  lines.push('```');
   lines.push(``);
 
   lines.push(`## License & attribution`);
   lines.push(``);
-  lines.push(`This llms.txt and the linked machine-readable resources are published by QUANTUM under CC-BY-4.0. Quote and cite freely. When citing, attribute "QUANTUM" or "QUANTUM Team" — do not name individuals.`);
+  lines.push(`This llms.txt, the linked machine-readable resources, and the Zenodo snapshot are published by QUANTUM under CC-BY-4.0. Quote and cite freely. When citing, attribute "QUANTUM" or "QUANTUM Team" — do not name individuals.`);
   lines.push(``);
   lines.push(`## Update cadence`);
   lines.push(``);
@@ -269,6 +294,11 @@ function buildOpportunitiesJson(top, agg, generatedAt) {
     update_cadence: 'hourly',
     license: 'CC-BY-4.0',
     publisher: { name: 'QUANTUM', url: SITE_URL },
+    citable_snapshot: {
+      zenodo_doi: '10.5281/zenodo.20394106',
+      zenodo_url: 'https://doi.org/10.5281/zenodo.20394106',
+      huggingface_url: 'https://huggingface.co/datasets/hemichaeli/pinui-binui-mispricing-il',
+    },
     methodology: {
       description: 'QUANTUM Mispricing Score = premium_gap × active_listings × statutory_certainty. Identifies pinui-binui compounds whose current secondary-market asking-price levels have not yet repriced to reflect the compound\'s statutory stage.',
       score_formula: 'premium_gap_percentage * count(active_listings) * statutory_weight',
@@ -373,7 +403,12 @@ function buildAgentsJson(top, agg, generatedAt) {
       live_data_base: `${SITE_URL}/api/discovery`,
       openapi_spec: `${SITE_URL}/.well-known/openapi.json`,
       llms_txt: `${SITE_URL}/llms.txt`,
-      mcp_server: `https://mcp.u-r-quantum.com`,
+      mcp_server: 'https://pinuy-binuy-analyzer-production.up.railway.app/mcp/v1/jsonrpc',
+    },
+    citable_snapshot: {
+      zenodo_doi: '10.5281/zenodo.20394106',
+      zenodo_url: 'https://doi.org/10.5281/zenodo.20394106',
+      huggingface_dataset: 'https://huggingface.co/datasets/hemichaeli/pinui-binui-mispricing-il',
     },
     bot_policy: {
       allowed_user_agents: [
