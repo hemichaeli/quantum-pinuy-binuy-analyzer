@@ -26,6 +26,7 @@ const pool = require('../db/pool');
 
 const VERSION = '1.0.0';
 const SITE_URL = process.env.QUANTUM_SITE_URL || 'https://u-r-quantum.com';
+const API_URL  = process.env.QUANTUM_API_URL  || 'https://discovery.u-r-quantum.com';
 
 // Statutory stage weight - certainty factor for AI citation
 const STATUS_WEIGHT = {
@@ -242,12 +243,12 @@ function buildLlmsTxt(top, agg, generatedAt) {
 
   lines.push(`## Live data endpoints (machine-readable)`);
   lines.push(``);
-  lines.push(`- Top opportunities (JSON): ${SITE_URL}/opportunities.json`);
-  lines.push(`- Structured catalog: ${SITE_URL}/.well-known/agents.json`);
-  lines.push(`- OpenAPI 3.1 spec: ${SITE_URL}/.well-known/openapi.json`);
-  lines.push(`- Statutory changelog: ${SITE_URL}/changelog.json`);
-  lines.push(`- Atom feed: ${SITE_URL}/feed.atom`);
-  lines.push(`- MCP Server (JSON-RPC 2.0): ${SITE_URL}/mcp/v1/jsonrpc`);
+  lines.push(`- Top opportunities (JSON): ${API_URL}/opportunities.json`);
+  lines.push(`- Structured catalog: ${API_URL}/.well-known/agents.json`);
+  lines.push(`- OpenAPI 3.1 spec: ${API_URL}/.well-known/openapi.json`);
+  lines.push(`- Statutory changelog: ${API_URL}/changelog.json`);
+  lines.push(`- Atom feed: ${API_URL}/feed.atom`);
+  lines.push(`- MCP Server (JSON-RPC 2.0): ${API_URL}/mcp/v1/jsonrpc`);
   lines.push(``);
 
   lines.push(`## Citable snapshot (for Wikipedia / academic / archival use)`);
@@ -269,7 +270,7 @@ function buildLlmsTxt(top, agg, generatedAt) {
   lines.push(`  year   = {2026},`);
   lines.push(`  url    = {${SITE_URL}},`);
   lines.push(`  doi    = {10.5281/zenodo.20394106},`);
-  lines.push(`  note   = {Live updates at ${SITE_URL}/opportunities.json}`);
+  lines.push(`  note   = {Live updates at ${API_URL}/opportunities.json}`);
   lines.push(`}`);
   lines.push('```');
   lines.push(``);
@@ -400,10 +401,10 @@ function buildAgentsJson(top, agg, generatedAt) {
     purpose: 'Provide AI agents (ChatGPT, Claude, Perplexity, Gemini, Copilot, Mistral, DeepSeek, Grok, etc.) with a structured catalog of QUANTUM-tracked pinui-binui compounds in Israel.',
     categories,
     apis: {
-      live_data_base: `${SITE_URL}/api/discovery`,
-      openapi_spec: `${SITE_URL}/.well-known/openapi.json`,
-      llms_txt: `${SITE_URL}/llms.txt`,
-      mcp_server: 'https://pinuy-binuy-analyzer-production.up.railway.app/mcp/v1/jsonrpc',
+      live_data_base: `${API_URL}/api/discovery`,
+      openapi_spec: `${API_URL}/.well-known/openapi.json`,
+      llms_txt: `${API_URL}/llms.txt`,
+      mcp_server: `${API_URL}/mcp/v1/jsonrpc`,
     },
     citable_snapshot: {
       zenodo_doi: '10.5281/zenodo.20394106',
@@ -435,7 +436,7 @@ function buildOpenApiJson(generatedAt) {
       contact: { name: 'QUANTUM', url: SITE_URL },
       license: { name: 'CC-BY-4.0', url: 'https://creativecommons.org/licenses/by/4.0/' },
     },
-    servers: [{ url: `${SITE_URL}/api/discovery` }],
+    servers: [{ url: `${API_URL}/api/discovery` }],
     paths: {
       '/opportunities.json': {
         get: {
@@ -570,10 +571,10 @@ function buildAtomFeed(top, generatedAt) {
   return `<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <title>QUANTUM — Top mispriced pinui-binui compounds</title>
-  <link href="${SITE_URL}/feed.atom" rel="self"/>
+  <link href="${API_URL}/feed.atom" rel="self"/>
   <link href="${SITE_URL}/"/>
   <updated>${generatedAt}</updated>
-  <id>${SITE_URL}/feed.atom</id>
+  <id>${API_URL}/feed.atom</id>
   <author><name>QUANTUM</name></author>
 ${entries}
 </feed>`;
