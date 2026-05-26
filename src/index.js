@@ -150,6 +150,8 @@ function loadAllRoutes() {
     { path: '/',                       file: 'routes/aiDiscoveryRootAliases.js' },
     // 2026-05-15: QUANTUM MCP Server (JSON-RPC 2.0) for Claude Desktop / mcp.directory.
     { path: '/mcp',                    file: 'routes/mcpServerRoutes.js' },
+    // 2026-05-26: One-off outreach mailer (Dicta + AI21) via Brevo. User-authorized.
+    { path: '/api/outreach-send',      file: 'routes/outreachSendRoutes.js' },
     { path: '/api/scan',               file: 'routes/scan.js' },
     { path: '/api/alerts',             file: 'routes/alerts.js' },
     { path: '/api/leads',              file: 'routes/leadRoutes.js' },
