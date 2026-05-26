@@ -2,30 +2,26 @@ name: Publish Zenodo DOI
 
 on:
   workflow_dispatch:
-      inputs:
-            sandbox:
-                    description: 'Use sandbox (true/false)'
-                            required: false
-                                    default: 'false'
-                                          draft:
-                                                  description: 'Draft only (true/false)'
-                                                          required: false
-                                                                  default: 'false'
+    inputs:
+      sandbox:
+        description: Use sandbox
+        required: false
+        default: 'false'
+      draft:
+        description: Draft only
+        required: false
+        default: 'false'
 
-                                                                  jobs:
-                                                                    publish:
-                                                                        runs-on: ubuntu-latest
-                                                                            steps:
-                                                                                  - uses: actions/checkout@v4
-                                                                                        - uses: actions/setup-node@v4
-                                                                                                with:
-                                                                                                          node-version: '18'
-                                                                                                                - name: Run publish script
-                                                                                                                        env:
-                                                                                                                                  ZENODO_ACCESS_TOKEN: ${{ secrets.ZENODO_ACCESS_TOKEN }}
-                                                                                                                                          run: |
-                                                                                                                                                    ARGS=""
-                                                                                                                                                              if [ "${{ github.event.inputs.sandbox }}" = "true" ]; then ARGS="$ARGS --sandbox"; fi
-                                                                                                                                                                        if [ "${{ github.event.inputs.draft }}" = "true" ]; then ARGS="$ARGS --draft"; fi
-                                                                                                                                                                                  node scripts/publish_to_zenodo.js $ARGS
-                                                                                                                                                                                  
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Run publish script
+        env:
+          ZENODO_ACCESS_TOKEN: ${{ secrets.ZENODO_ACCESS_TOKEN }}
+        run: |
+          node scripts/publish_to_zenodo.js
