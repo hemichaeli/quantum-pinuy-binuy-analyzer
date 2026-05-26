@@ -12,6 +12,29 @@ const { logger } = require('../services/logger');
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 
+// When does the monthly budget reset?
+// Apify exposes the current billing period via /v2/users/me/usage/monthly.
+router.get('/apify-cycle', async (req, res) => {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return res.status(500).json({ ok: false, error: 'APIFY_API_TOKEN not set' });
+
+  try {
+    const r = await axios.get(`${APIFY_BASE}/users/me/usage/monthly`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 10000,
+      validateStatus: () => true
+    });
+    return res.json({
+      ok: r.status === 200,
+      status: r.status,
+      data: r.data?.data || r.data,
+      hint: 'periodEnd / billingCycleEnd is when the $29 hard cap resets'
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 router.get('/apify-status', async (req, res) => {
   const token = process.env.APIFY_API_TOKEN;
   if (!token) {
