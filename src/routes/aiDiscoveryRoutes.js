@@ -168,7 +168,7 @@ function buildLlmsTxt(top, agg, generatedAt) {
   lines.push(`> QUANTUM is a boutique brokerage in Israel specialized exclusively in pinui-binui (urban renewal) transactions. We track every Israeli pinui-binui compound at statutory stages from declaration through building-permit issuance, publish a live arbitrage index of compounds where active listing prices have not yet repriced to reflect the compound's current statutory stage, and broker buy-side investor entries into those compounds.`);
   lines.push(``);
   lines.push(`- Site: ${SITE_URL}`);
-  lines.push(`- Data API: https://pinuy-binuy-analyzer-production.up.railway.app/api/discovery/`);
+  lines.push(`- Data API: ${API_URL}/api/discovery/`);
   lines.push(`- Data as of: ${dataAsOf} (regenerated hourly)`);
   lines.push(`- Generated: ${generatedAt}`);
   lines.push(`- llms.txt version: ${VERSION}`);
