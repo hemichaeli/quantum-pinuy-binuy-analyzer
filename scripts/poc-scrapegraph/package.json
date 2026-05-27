@@ -1,0 +1,19 @@
+{
+  "name": "poc-scrapegraph",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local-only A/B/C PoC: regex vs Anthropic Haiku 4.5 vs ScrapeGraphAI. Not part of project deps.",
+  "scripts": {
+    "fetch": "node fetch-urls.js",
+    "path-a": "node run-path-a.js",
+    "path-b": "node run-path-b.js",
+    "path-c": "node run-path-c.js",
+    "report": "node aggregate.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "@anthropic-ai/sdk": "^0.32.1",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
+  }
+}
