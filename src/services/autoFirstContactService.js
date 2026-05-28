@@ -170,11 +170,13 @@ async function processYad2() {
             FROM listings l
             JOIN complexes c ON c.id = l.complex_id
             LEFT JOIN phone_blocklist b ON b.phone = l.phone
+            LEFT JOIN wa_optouts       o ON o.phone = l.phone
             WHERE l.contact_status IS NULL
               AND l.phone IS NOT NULL AND l.phone != ''
               AND l.is_active = TRUE
               AND l.complex_id IS NOT NULL
               AND b.phone IS NULL
+              AND o.phone IS NULL
             ORDER BY l.phone, l.created_at DESC
             LIMIT 20
         `);
@@ -186,12 +188,42 @@ async function processYad2() {
             try {
                 // Skip landlines
                 if (!isMobilePhone(listing.phone)) {
+                    // Landline — WhatsApp/SMS won't reach. Route to Vapi instead
+                    // (per CLAUDE.md Auto-Dialer Integration). Best-effort: any
+                    // failure here just leaves the listing marked 'landline' so
+                    // it doesn't return to the queue.
                     await pool.query(
                         `UPDATE listings SET contact_status = 'landline', updated_at = NOW() WHERE phone = $1`,
                         [listing.phone]
                     ).catch(() => null);
                     skipped++;
-                    console.log(`[AutoFirstContact] SKIP landline: ${listing.phone}`);
+                    try {
+                        const dedup = await pool.query(
+                            `SELECT id FROM phone_calls WHERE phone = $1 AND lead_source = 'yad2' LIMIT 1`,
+                            [listing.phone]
+                        );
+                        if (dedup.rowCount === 0) {
+                            await pool.query(
+                                `INSERT INTO phone_calls (phone, lead_source, status, created_at)
+                                 VALUES ($1, 'yad2', 'pending', NOW())`,
+                                [listing.phone]
+                            );
+                            const vapi = require('./vapiCampaignService');
+                            const call = await vapi.placeVapiCall({
+                                phone: listing.phone,
+                                leadName: listing.contact_name || '',
+                                leadCity: listing.city || '',
+                                scriptType: 'pinuy_binuy',
+                                campaignLeadId: listing.id,
+                                campaignId: null,
+                            });
+                            console.log(`[AutoFirstContact] LANDLINE → Vapi tier${listing.heat_tier || '?'}: ${listing.phone} (${listing.address}) call_id=${call.callId}`);
+                        } else {
+                            console.log(`[AutoFirstContact] LANDLINE already-queued: ${listing.phone}`);
+                        }
+                    } catch (vapiErr) {
+                        console.warn(`[AutoFirstContact] Vapi landline call failed for ${listing.phone}: ${vapiErr.message}`);
+                    }
                     continue;
                 }
 

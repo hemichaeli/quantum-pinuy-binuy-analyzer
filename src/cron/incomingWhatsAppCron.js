@@ -10,11 +10,12 @@
  * Schedule: every 60 seconds (set in src/index.js)
  */
 
-const inforuService = require('../services/inforuService');
-const botEngine     = require('../services/botEngine');
-const optoutService = require('../services/optoutService');
-const pool          = require('../db/pool');
-const { logger }    = require('../services/logger');
+const inforuService       = require('../services/inforuService');
+const botEngine           = require('../services/botEngine');
+const optoutService       = require('../services/optoutService');
+const positiveReplyService = require('../services/positiveReplyService');
+const pool                = require('../db/pool');
+const { logger }          = require('../services/logger');
 
 let _running = false;  // prevent overlapping runs
 
@@ -59,6 +60,26 @@ async function pollIncomingWhatsApp() {
               'הוסרת מרשימת התפוצה של QUANTUM. לא תקבלו הודעות נוספות. תודה.');
           } catch (e) { /* best-effort confirmation */ }
           continue;
+        }
+
+        // Positive-reply detection — the "כן, אשמח לשמוע" button on
+        // seller_outreach_v1 arrives as a normal text message. Capture it,
+        // flip the listing(s) to 'replied_interested', acknowledge, and stop
+        // here so botEngine doesn't drop it as "no campaign".
+        const positiveKw = positiveReplyService.matchPositiveKeyword(body);
+        if (positiveKw) {
+          const r = await positiveReplyService.recordPositiveReply({
+            phone, replyText: body, source: 'wa_button',
+          });
+          if (r.ok && r.listingsMarked > 0) {
+            try {
+              await inforuService.sendWhatsAppChat(phone,
+                'תודה על העניין! נציג של QUANTUM ייצור איתך קשר בהקדם.');
+            } catch (e) { /* best-effort ack */ }
+            logger.info(`[IncomingWACron] Positive reply from ${phone} ("${positiveKw}") → ${r.listingsMarked} listings flagged`);
+            continue;
+          }
+          // No matching listing — fall through to bot engine instead of dropping.
         }
 
         // Find the campaign from existing bot session
