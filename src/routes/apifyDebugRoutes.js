@@ -317,4 +317,31 @@ router.get('/swerve-poc', async (req, res) => {
   }
 });
 
+// ───── Swerve backlog drain ─────
+// One-time bulk operation that scrapes Swerve per city and fuzzy-matches
+// results against our bound-missing-phone backlog. Returns a job id; poll
+// /api/debug/swerve-drain/:jobId for status.
+router.post('/swerve-drain', async (req, res) => {
+  const drain = require('../services/swerveBacklogDrain');
+  const { dryRun = false, maxCities = 50, cityFilter = null, perCityCap = 200 } = req.body || {};
+  try {
+    const { jobId } = await drain.runSwerveDrain({ dryRun, maxCities, cityFilter, perCityCap });
+    res.json({ ok: true, jobId, dryRun, maxCities, cityFilter, perCityCap });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get('/swerve-drain/:jobId', (req, res) => {
+  const drain = require('../services/swerveBacklogDrain');
+  const job = drain.getDrainStatus(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, error: 'job not found' });
+  res.json({ ok: true, job });
+});
+
+router.get('/swerve-drain-jobs', (req, res) => {
+  const drain = require('../services/swerveBacklogDrain');
+  res.json({ ok: true, jobs: drain.listDrainJobs() });
+});
+
 module.exports = router;
