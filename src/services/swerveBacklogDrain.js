@@ -92,6 +92,23 @@ function isAddressMatch(ours, theirs) {
   return false;
 }
 
+// ───── Heat tier ─────
+// Same formula as /api/debug/complexes-heat. Inline so callers in either
+// service or route can use the same canonical scoring.
+const HEAT_TIER_SQL = `
+  LEAST(5,
+    CASE
+      WHEN c.approval_date    IS NOT NULL OR c.signature_percent >= 85 THEN 5
+      WHEN c.deposit_date     IS NOT NULL OR c.signature_percent >= 65 THEN 4
+      WHEN c.submission_date  IS NOT NULL OR c.signature_percent >= 45 THEN 3
+      WHEN c.declaration_date IS NOT NULL OR c.signature_percent >= 25 THEN 2
+      ELSE 1
+    END
+    + CASE WHEN c.multiplier >= 2.5 THEN 1 ELSE 0 END
+  )
+`;
+const TIER_LABEL = { 5: '5 🔥', 4: '4', 3: '3', 2: '2', 1: '1 🧊' };
+
 // ───── Swerve API ─────
 
 async function fetchSwerveCity(city, dealType, maxItems, neighbourhood = null) {
@@ -120,7 +137,7 @@ async function fetchSwerveCity(city, dealType, maxItems, neighbourhood = null) {
 
 const _runs = new Map(); // jobId → { status, stats, startedAt, finishedAt }
 
-async function runSwerveDrain({ dryRun = false, maxGroups = 50, cityFilter = null, perGroupCap = 100, useNeighborhood = true } = {}) {
+async function runSwerveDrain({ dryRun = false, maxGroups = 50, cityFilter = null, perGroupCap = 100, useNeighborhood = true, minHeatTier = 1 } = {}) {
   const jobId = `drain_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const job = {
     status: 'running',
@@ -147,39 +164,46 @@ async function runSwerveDrain({ dryRun = false, maxGroups = 50, cityFilter = nul
       const { rows: backlog } = await pool.query(`
         SELECT
           l.id, l.city, l.address, l.complex_id, l.source_listing_id, l.url,
-          c.neighborhood
+          c.neighborhood,
+          ${HEAT_TIER_SQL}::int AS heat_tier
         FROM listings l
-        LEFT JOIN complexes c ON c.id = l.complex_id
+        JOIN complexes c ON c.id = l.complex_id
         WHERE l.is_active = TRUE
           AND l.complex_id IS NOT NULL
           AND (l.phone IS NULL OR l.phone = '' OR l.phone = 'NULL')
           AND l.city IS NOT NULL AND l.city <> ''
           AND l.address IS NOT NULL AND l.address <> ''
+          AND ${HEAT_TIER_SQL} >= ${parseInt(minHeatTier, 10) || 1}
           ${cityFilter ? `AND l.city = '${String(cityFilter).replace(/'/g, "''")}'` : ''}
       `);
       job.stats.backlog_total = backlog.length;
 
       // Group key: city + (optional) neighborhood. Listings without a known
       // neighborhood fall back to a city-only group keyed `${city}::*`.
+      // Track the max heat_tier per group so we can process burning blocks
+      // first when budget is tight.
       const byGroup = {};
       for (const l of backlog) {
         const nb = useNeighborhood && l.neighborhood ? l.neighborhood : null;
         const key = `${l.city}::${nb || '*'}`;
-        if (!byGroup[key]) byGroup[key] = { city: l.city, neighborhood: nb, listings: [] };
+        if (!byGroup[key]) byGroup[key] = { city: l.city, neighborhood: nb, listings: [], maxHeat: 0 };
         byGroup[key].listings.push(l);
+        if (l.heat_tier > byGroup[key].maxHeat) byGroup[key].maxHeat = l.heat_tier;
       }
+      // Sort groups: hottest first, then by backlog size (more = more value
+      // per Swerve call). Tier 5🔥 → Tier 1🧊.
       const groups = Object.entries(byGroup)
-        .sort((a, b) => b[1].listings.length - a[1].listings.length)
+        .sort((a, b) => (b[1].maxHeat - a[1].maxHeat) || (b[1].listings.length - a[1].listings.length))
         .slice(0, maxGroups)
         .map(([k, v]) => ({ key: k, ...v }));
       job.stats.groups_total = groups.length;
 
-      logger.info(`[SwerveDrain] Job ${jobId}: ${backlog.length} listings across ${groups.length} (city,neighborhood) groups (dryRun=${dryRun}, useNeighborhood=${useNeighborhood})`);
+      logger.info(`[SwerveDrain] Job ${jobId}: ${backlog.length} listings across ${groups.length} (city,neighborhood) groups, minHeatTier=${minHeatTier}, sorted hot→cold (dryRun=${dryRun}, useNeighborhood=${useNeighborhood})`);
 
       for (const group of groups) {
         const { city, neighborhood, listings: groupRows, key } = group;
         const maxItems = Math.min(perGroupCap, Math.max(30, groupRows.length * 3));
-        const gStats = { city, neighborhood, backlog: groupRows.length, items: 0, matched: 0 };
+        const gStats = { city, neighborhood, heat_tier: group.maxHeat, heat_label: TIER_LABEL[group.maxHeat] || String(group.maxHeat), backlog: groupRows.length, items: 0, matched: 0 };
         job.stats.per_group[key] = gStats;
 
         const { items, error } = await fetchSwerveCity(city, 'buy', maxItems, neighborhood);
@@ -222,7 +246,7 @@ async function runSwerveDrain({ dryRun = false, maxGroups = 50, cityFilter = nul
         }
 
         job.stats.groups_processed++;
-        logger.info(`[SwerveDrain] ${city}/${neighborhood || '*'}: ${gStats.items} items, ${gStats.matched}/${gStats.backlog} matched`);
+        logger.info(`[SwerveDrain] ${TIER_LABEL[group.maxHeat]} ${city}/${neighborhood || '*'}: ${gStats.items} items, ${gStats.matched}/${gStats.backlog} matched`);
       }
 
       job.status = 'done';

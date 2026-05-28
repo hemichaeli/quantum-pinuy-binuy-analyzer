@@ -433,10 +433,11 @@ router.post('/swerve-drain', async (req, res) => {
     cityFilter = null,
     perGroupCap = 100,
     useNeighborhood = true,
+    minHeatTier = 1,
   } = req.body || {};
   try {
-    const { jobId } = await drain.runSwerveDrain({ dryRun, maxGroups, cityFilter, perGroupCap, useNeighborhood });
-    res.json({ ok: true, jobId, dryRun, maxGroups, cityFilter, perGroupCap, useNeighborhood });
+    const { jobId } = await drain.runSwerveDrain({ dryRun, maxGroups, cityFilter, perGroupCap, useNeighborhood, minHeatTier });
+    res.json({ ok: true, jobId, dryRun, maxGroups, cityFilter, perGroupCap, useNeighborhood, minHeatTier });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
