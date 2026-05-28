@@ -198,16 +198,17 @@ async function processYad2() {
                     ).catch(() => null);
                     skipped++;
                     try {
+                        // Dedup against prior Vapi calls for the same phone+agent.
+                        // We use the existing vapi_calls table (consistent with
+                        // vapiRoutes.js + reminderJob.js); the 'pinuy_binuy_landline'
+                        // agent_type identifies calls placed by this code path.
                         const dedup = await pool.query(
-                            `SELECT id FROM phone_calls WHERE phone = $1 AND lead_source = 'yad2' LIMIT 1`,
+                            `SELECT id FROM vapi_calls
+                             WHERE phone = $1 AND agent_type = 'pinuy_binuy_landline'
+                             LIMIT 1`,
                             [listing.phone]
                         );
                         if (dedup.rowCount === 0) {
-                            await pool.query(
-                                `INSERT INTO phone_calls (phone, lead_source, status, created_at)
-                                 VALUES ($1, 'yad2', 'pending', NOW())`,
-                                [listing.phone]
-                            );
                             const vapi = require('./vapiCampaignService');
                             const call = await vapi.placeVapiCall({
                                 phone: listing.phone,
@@ -217,6 +218,23 @@ async function processYad2() {
                                 campaignLeadId: listing.id,
                                 campaignId: null,
                             });
+                            await pool.query(
+                                `INSERT INTO vapi_calls
+                                   (call_id, phone, agent_type, lead_id, status, metadata, created_at)
+                                 VALUES ($1, $2, 'pinuy_binuy_landline', $3, $4, $5, NOW())`,
+                                [
+                                    call.callId,
+                                    listing.phone,
+                                    listing.id,
+                                    call.status || 'queued',
+                                    JSON.stringify({
+                                        source: 'auto_first_contact',
+                                        address: listing.address,
+                                        city: listing.city,
+                                        heat_tier: listing.heat_tier,
+                                    }),
+                                ]
+                            ).catch(err => console.warn(`[AutoFirstContact] vapi_calls log failed: ${err.message}`));
                             console.log(`[AutoFirstContact] LANDLINE → Vapi tier${listing.heat_tier || '?'}: ${listing.phone} (${listing.address}) call_id=${call.callId}`);
                         } else {
                             console.log(`[AutoFirstContact] LANDLINE already-queued: ${listing.phone}`);
