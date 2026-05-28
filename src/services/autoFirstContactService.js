@@ -145,23 +145,42 @@ async function saveOutgoingMessage(phone, message, listingId) {
     }
 }
 
-// עבד מודעות יד2 חדשות שלא פנינו אליהן
-// DISTINCT ON (phone): one advertiser may have several listings.
-// Verified 2026-05-25: phone 0528788858 got 4 SMS in 30s because it had 4
-// listings in קריית אונו. After contacting once, sibling listings get marked
-// 'contacted_via_sibling' so they don't surface again.
+// עבד מודעות יד2 חדשות שלא פנינו אליהן.
+// DISTINCT ON (phone) — one advertiser, one outreach (verified 2026-05-25:
+// phone 0528788858 got 4 SMS in 30s because it had 4 listings in קריית אונו).
+// Phones in phone_blocklist (mass aggregators, opt-outs) are excluded.
+// Order: hottest complex tier first so deals closest to closing get the limited
+// daily template volume.
 async function processYad2() {
     let contacted = 0, failed = 0, skipped = 0, dedupedSiblings = 0;
     try {
         const result = await pool.query(`
-            SELECT DISTINCT ON (phone) id, phone, address, city, contact_name
-            FROM listings
-            WHERE contact_status IS NULL
-              AND phone IS NOT NULL AND phone != ''
-              AND is_active = TRUE
-            ORDER BY phone, created_at DESC
+            SELECT DISTINCT ON (l.phone)
+                   l.id, l.phone, l.address, l.city, l.contact_name,
+                   LEAST(5,
+                     CASE
+                       WHEN c.approval_date    IS NOT NULL OR c.signature_percent >= 85 THEN 5
+                       WHEN c.deposit_date     IS NOT NULL OR c.signature_percent >= 65 THEN 4
+                       WHEN c.submission_date  IS NOT NULL OR c.signature_percent >= 45 THEN 3
+                       WHEN c.declaration_date IS NOT NULL OR c.signature_percent >= 25 THEN 2
+                       ELSE 1
+                     END
+                     + CASE WHEN c.multiplier >= 2.5 THEN 1 ELSE 0 END
+                   ) AS heat_tier
+            FROM listings l
+            JOIN complexes c ON c.id = l.complex_id
+            LEFT JOIN phone_blocklist b ON b.phone = l.phone
+            WHERE l.contact_status IS NULL
+              AND l.phone IS NOT NULL AND l.phone != ''
+              AND l.is_active = TRUE
+              AND l.complex_id IS NOT NULL
+              AND b.phone IS NULL
+            ORDER BY l.phone, l.created_at DESC
             LIMIT 20
         `);
+        // Re-sort the de-duped result by heat_tier desc so the WhatsApp
+        // template budget goes to the hottest complexes first within this tick.
+        result.rows.sort((a, b) => (b.heat_tier || 0) - (a.heat_tier || 0));
 
         for (const listing of result.rows) {
             try {
@@ -197,7 +216,7 @@ async function processYad2() {
                     if (siblings.rowCount > 0) dedupedSiblings += siblings.rowCount;
                     await saveOutgoingMessage(listing.phone, message, listing.id);
                     contacted++;
-                    console.log(`[AutoFirstContact] OK Yad2: ${listing.phone} (${listing.address})${siblings.rowCount ? ` +${siblings.rowCount} siblings` : ''}`);
+                    console.log(`[AutoFirstContact] OK Yad2 tier${listing.heat_tier || '?'}: ${listing.phone} (${listing.address})${siblings.rowCount ? ` +${siblings.rowCount} siblings` : ''}`);
                 } else {
                     await pool.query(
                         `UPDATE listings SET contact_attempts = COALESCE(contact_attempts, 0) + 1,

@@ -414,6 +414,8 @@ async function start() {
   await runMigrationFile('sent_messages status columns (032)', path.join(__dirname, 'db', 'migrations', '032_sent_messages_status_columns.sql'));
   // 2026-05-26: per-day Apify usage counter for daily-cap enforcement
   await runMigrationFile('apify daily usage (033)', path.join(__dirname, 'db', 'migrations', '033_apify_budget_tracking.sql'));
+  // 2026-05-28: phone blocklist for mass aggregators and opt-outs
+  await runMigrationFile('phone blocklist (034)', path.join(__dirname, 'db', 'migrations', '034_phone_blocklist.sql'));
   // 2026-05-25: AI bot fetch logging (GPTBot/ClaudeBot/PerplexityBot/etc.)
   await runMigrationFile('Bot fetches (033)', path.join(__dirname, 'db', 'migrations', '033_bot_fetches.sql'));
   if (isQuantum) await runOutreachMigration();
