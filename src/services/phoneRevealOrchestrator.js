@@ -230,59 +230,100 @@ async function runApifyPhoneReveal(listings) {
     return [];
   }
 
-  // Apify REST API requires actor IDs in <username>~<actor-name> form. The env
-  // var sometimes ships with a `/` (the way the actor is displayed in the
-  // dashboard). Normalise both so the URL doesn't get parsed as two path
-  // segments and 404 silently. Live ID format e.g. quiescent_sunset~quantum-phone-reveal
-  const actorId = (process.env.APIFY_PHONE_REVEAL_ACTOR || 'quantum-phone-reveal').replace('/', '~');
+  // 2026-05-28: switched from `quiescent_sunset/quantum-phone-reveal` (broken,
+  // 0-2% success rate) to `swerve/yad2-scraper` ($5/1000 results, 100% in POC).
+  // Architectural difference: Swerve doesn't accept URLs — it takes a search
+  // query (city + dealType) and returns up to maxItems enriched results. We
+  // group missing listings by city, run one Swerve scrape per (city,dealType),
+  // then match results back to our DB rows via the yad2 token in /item/{token}.
+  const actorId = (process.env.APIFY_PHONE_REVEAL_ACTOR || 'swerve/yad2-scraper').replace('/', '~');
+  // Multiplier on backlog count to ask Swerve for — gives us headroom in case
+  // some target listings aren't in the first N results. 3x covers most cases.
+  const SWERVE_OVERFETCH = parseFloat(process.env.SWERVE_OVERFETCH || '3');
+  const SWERVE_MIN_ITEMS = parseInt(process.env.SWERVE_MIN_ITEMS || '50', 10);
 
-  const input = {
-    listings: listings.map(l => ({
-      id: l.id,
-      url: l.url,
-      source: l.source,
-      sourceListingId: l.source_listing_id,
-      address: l.address,
-      city: l.city,
-    })),
-    maxConcurrency: 5,
-    proxyConfig: {
-      useApifyProxy: true,
-      apifyProxyGroups: ['RESIDENTIAL'],
-      countryCode: 'IL',
-    },
-  };
+  // Filter to listings we can actually match: must have city + source_listing_id
+  // (the yad2 token). Without a token there's nothing to match Swerve results to.
+  const matchable = listings.filter(l => l.city && l.source_listing_id);
+  const unmatchable = listings.length - matchable.length;
+  if (unmatchable > 0) {
+    logger.warn(`[PhoneOrch] Swerve: skipping ${unmatchable} listings without city/source_listing_id`);
+  }
+  if (matchable.length === 0) return [];
+
+  // Group by (city, dealType). Default dealType=buy since QUANTUM focuses on
+  // pinuy-binuy sales; if listing.deal_type explicitly says rent, route there.
+  const groups = {};
+  for (const l of matchable) {
+    const dealType = (l.deal_type === 'rent' || /rent|השכרה/i.test(l.url || '')) ? 'rent' : 'buy';
+    const key = `${l.city}::${dealType}`;
+    if (!groups[key]) groups[key] = { city: l.city, dealType, listings: [] };
+    groups[key].listings.push(l);
+  }
+
+  const allResults = [];
+  let totalAttempted = 0;
+  let totalSucceeded = 0;
 
   try {
-    logger.info(`[PhoneOrch] Apify: sending ${listings.length} listings to actor ${actorId}`);
+    for (const { city, dealType, listings: cityListings } of Object.values(groups)) {
+      // Token → listing.id map for matching Swerve responses back to our rows.
+      const tokenToId = new Map();
+      for (const l of cityListings) tokenToId.set(String(l.source_listing_id).toLowerCase(), l.id);
 
-    const resp = await axios.post(
-      `${APIFY_BASE}/acts/${actorId}/run-sync-get-dataset-items`,
-      input,
-      {
-        headers: { Authorization: `Bearer ${APIFY_TOKEN}` },
-        timeout: 600000, // 10 min for large batches
-        params: { timeout: 600 },
+      const maxItems = Math.max(SWERVE_MIN_ITEMS, Math.ceil(cityListings.length * SWERVE_OVERFETCH));
+      const input = { city, dealType, maxItems, enrichListings: true };
+      logger.info(`[PhoneOrch] Swerve: ${city}/${dealType}, asking for ${maxItems} items to cover ${cityListings.length} backlog`);
+
+      let items = [];
+      try {
+        const resp = await axios.post(
+          `${APIFY_BASE}/acts/${actorId}/run-sync-get-dataset-items`,
+          input,
+          {
+            headers: { Authorization: `Bearer ${APIFY_TOKEN}` },
+            timeout: 600000,
+            params: { timeout: 580 },
+            validateStatus: () => true,
+          }
+        );
+        if (resp.status >= 400) {
+          logger.error(`[PhoneOrch] Swerve ${city}/${dealType} HTTP ${resp.status}: ${JSON.stringify(resp.data).slice(0, 200)}`);
+          continue;
+        }
+        items = Array.isArray(resp.data) ? resp.data : [];
+      } catch (err) {
+        logger.error(`[PhoneOrch] Swerve ${city}/${dealType} error: ${err.message}`);
+        continue;
       }
-    );
 
-    const results = resp.data || [];
-    const succeeded = results.filter(r => r && r.phone).length;
-    await bumpTodayApifyUsage(listings.length, succeeded);
-    logger.info(`[PhoneOrch] Apify returned ${results.length} results (${succeeded} with phones, daily ${usage.phones_attempted + listings.length}/${APIFY_DAILY_CAP})`);
-    return results;
-  } catch (err) {
-    // If sync call times out, try async
-    if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-      const asyncResults = await runApifyAsync(actorId, input);
-      const asyncSucceeded = asyncResults.filter(r => r && r.phone).length;
-      await bumpTodayApifyUsage(listings.length, asyncSucceeded);
-      return asyncResults;
+      let matchedThisRound = 0;
+      for (const item of items) {
+        if (!item || !item.contactPhone) continue;
+        const m = String(item.url || '').match(/\/item\/([A-Za-z0-9]+)/);
+        if (!m) continue;
+        const token = m[1].toLowerCase();
+        const listingId = tokenToId.get(token);
+        if (!listingId) continue; // not one of our backlog listings; ignore
+        allResults.push({
+          id: listingId,
+          phone: item.contactPhone,
+          contact_name: item.contactName || null,
+        });
+        matchedThisRound++;
+      }
+      totalAttempted += cityListings.length;
+      totalSucceeded += matchedThisRound;
+      logger.info(`[PhoneOrch] Swerve ${city}/${dealType}: ${items.length} items returned, ${matchedThisRound}/${cityListings.length} matched`);
     }
-    // Count attempted but not succeeded — proxy time was still consumed.
-    await bumpTodayApifyUsage(listings.length, 0);
-    logger.error(`[PhoneOrch] Apify actor failed: ${err.message}`);
-    return [];
+
+    await bumpTodayApifyUsage(totalAttempted, totalSucceeded);
+    logger.info(`[PhoneOrch] Swerve total: ${totalSucceeded}/${totalAttempted} phones matched across ${Object.keys(groups).length} city/dealType groups`);
+    return allResults;
+  } catch (err) {
+    await bumpTodayApifyUsage(totalAttempted || matchable.length, totalSucceeded);
+    logger.error(`[PhoneOrch] Swerve top-level error: ${err.message}`);
+    return allResults;
   }
 }
 
