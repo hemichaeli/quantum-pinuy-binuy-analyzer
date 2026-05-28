@@ -488,4 +488,42 @@ router.get('/swerve-complex-drain-jobs', (req, res) => {
   res.json({ ok: true, jobs: drain.listDrainJobs() });
 });
 
+// Diagnostic: dump parsed complex addresses + Swerve sample for one city,
+// side-by-side, so we can eyeball why the matcher returns 0.
+router.get('/parse-debug', async (req, res) => {
+  const pool = require('../db/pool');
+  const drain = require('../services/swerveByComplexAddress');
+  const token = process.env.APIFY_API_TOKEN;
+  const city = req.query.city || 'פתח תקווה';
+
+  try {
+    const { rows: complexes } = await pool.query(`
+      SELECT id, name, addresses FROM complexes WHERE city = $1 LIMIT 5
+    `, [city]);
+
+    const parsedComplexes = complexes.map(c => ({
+      id: c.id,
+      name: c.name,
+      raw_addresses: c.addresses,
+      parsed: drain.parseAddressesField(c.addresses),
+    }));
+
+    let swerveSample = [];
+    if (token && req.query.fetch_swerve === '1') {
+      const r = await axios.post(
+        'https://api.apify.com/v2/acts/swerve~yad2-scraper/run-sync-get-dataset-items',
+        { city, dealType: 'buy', maxItems: 5, enrichListings: false },
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 120000, params: { timeout: 110 }, validateStatus: () => true }
+      );
+      if (Array.isArray(r.data)) {
+        swerveSample = r.data.slice(0, 10).map(i => ({ address: i?.address, url: i?.url }));
+      }
+    }
+
+    res.json({ ok: true, city, parsedComplexes, swerveSample, hint: 'Add ?fetch_swerve=1 to also fetch 5 Swerve items (~\$0.025).' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = router;
