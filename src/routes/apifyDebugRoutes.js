@@ -359,6 +359,68 @@ router.get('/complexes-coverage', async (req, res) => {
   }
 });
 
+// Heat-tier distribution across complexes. Drives Swerve scan prioritization
+// so we spend the Apify budget on the deals closest to closing.
+//
+// Tier formula:
+//   5  approval_date   IS NOT NULL OR signature_percent >= 85
+//   4  deposit_date    IS NOT NULL OR signature_percent >= 65
+//   3  submission_date IS NOT NULL OR signature_percent >= 45
+//   2  declaration_date IS NOT NULL OR signature_percent >= 25
+//   1  otherwise
+// Bonus: multiplier >= 2.5 → +1 tier (capped at 5)
+router.get('/complexes-heat', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const heatSql = `
+      LEAST(5,
+        CASE
+          WHEN approval_date    IS NOT NULL OR signature_percent >= 85 THEN 5
+          WHEN deposit_date     IS NOT NULL OR signature_percent >= 65 THEN 4
+          WHEN submission_date  IS NOT NULL OR signature_percent >= 45 THEN 3
+          WHEN declaration_date IS NOT NULL OR signature_percent >= 25 THEN 2
+          ELSE 1
+        END
+        + CASE WHEN multiplier >= 2.5 THEN 1 ELSE 0 END
+      )
+    `;
+    const { rows: dist } = await pool.query(`
+      SELECT ${heatSql} AS heat_tier, COUNT(*)::int AS complexes
+      FROM complexes
+      GROUP BY heat_tier
+      ORDER BY heat_tier DESC
+    `);
+    const { rows: byCity } = await pool.query(`
+      SELECT city,
+             SUM(CASE WHEN ${heatSql} = 5 THEN 1 ELSE 0 END)::int AS tier5,
+             SUM(CASE WHEN ${heatSql} = 4 THEN 1 ELSE 0 END)::int AS tier4,
+             SUM(CASE WHEN ${heatSql} = 3 THEN 1 ELSE 0 END)::int AS tier3,
+             SUM(CASE WHEN ${heatSql} = 2 THEN 1 ELSE 0 END)::int AS tier2,
+             SUM(CASE WHEN ${heatSql} = 1 THEN 1 ELSE 0 END)::int AS tier1,
+             COUNT(*)::int                                       AS total
+      FROM complexes
+      GROUP BY city
+      ORDER BY tier5 DESC, tier4 DESC, total DESC
+      LIMIT 30
+    `);
+    const { rows: hottest } = await pool.query(`
+      SELECT id, name, city, neighborhood,
+             ${heatSql}::int  AS heat_tier,
+             multiplier, signature_percent,
+             (approval_date IS NOT NULL)    AS has_approval,
+             (deposit_date IS NOT NULL)     AS has_deposit,
+             (submission_date IS NOT NULL)  AS has_submission,
+             (declaration_date IS NOT NULL) AS has_declaration
+      FROM complexes
+      ORDER BY ${heatSql} DESC, multiplier DESC NULLS LAST, signature_percent DESC NULLS LAST
+      LIMIT 15
+    `);
+    res.json({ ok: true, distribution: dist, by_city: byCity, top_15_hottest: hottest });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ───── Swerve backlog drain ─────
 // One-time bulk operation that scrapes Swerve per city and fuzzy-matches
 // results against our bound-missing-phone backlog. Returns a job id; poll
