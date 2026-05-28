@@ -153,6 +153,14 @@ async function saveOutgoingMessage(phone, message, listingId) {
 // daily template volume.
 async function processYad2() {
     let contacted = 0, failed = 0, skipped = 0, dedupedSiblings = 0;
+    // 2026-05-29: KILL SWITCH after Meta InforU WA platform restriction notice.
+    // While the WABA quality is at risk, do not send any cold first-contact —
+    // not via WhatsApp template, not via SMS fallback. Re-enable only after
+    // the InforU app restriction is resolved and policy/consent are validated.
+    if (process.env.AUTO_FIRST_CONTACT_KILL === '1') {
+        console.warn('[AutoFirstContact] KILLED — AUTO_FIRST_CONTACT_KILL=1, no sends this tick');
+        return { contacted: 0, failed: 0, skipped: 0, killed: true };
+    }
     try {
         const result = await pool.query(`
             SELECT DISTINCT ON (l.phone)
@@ -346,6 +354,10 @@ async function processFacebook() {
 
 // פנייה אוטומטית לכינוסי נכסים חדשים - רק מספרי נייד
 async function runKonesAutoContact() {
+    if (process.env.AUTO_FIRST_CONTACT_KILL === '1') {
+        console.warn('[KonesContact] KILLED — AUTO_FIRST_CONTACT_KILL=1');
+        return { contacted: 0, failed: 0, skipped_landline: 0, skipped_no_phone: 0, killed: true };
+    }
     let contacted = 0, failed = 0, skipped_landline = 0, skipped_no_phone = 0;
     try {
         // Get all uncontacted active kones listings
@@ -422,6 +434,13 @@ async function runKonesAutoContact() {
 
 // הפעל את כל הפניות הראשונות (יד2 + פייסבוק)
 async function runAutoFirstContact() {
+    // 2026-05-29: outer kill switch. While the Meta InforU WA platform
+    // restriction notice is open, the entire run is a no-op. We log so the
+    // 30-min cron heartbeat is still visible.
+    if (process.env.AUTO_FIRST_CONTACT_KILL === '1') {
+        console.warn('[AutoFirstContact] KILLED — AUTO_FIRST_CONTACT_KILL=1, run aborted before any sends');
+        return { contacted: 0, failed: 0, skipped: 0, killed: true };
+    }
     console.log('[AutoFirstContact] Starting run...');
     const yad2 = await processYad2();
     const fb = await processFacebook();
