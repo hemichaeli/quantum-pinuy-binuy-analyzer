@@ -171,6 +171,61 @@ router.get('/apify-status', async (req, res) => {
   res.json(result);
 });
 
+// Token-format diagnostic. Compares our stored source_listing_id values for
+// yad2 listings against the token Swerve returns inside /item/{token} URLs,
+// so we can see why integration matched 0/12 today despite Swerve POC = 100%.
+router.get('/yad2-token-sample', async (req, res) => {
+  const pool = require('../db/pool');
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return res.status(500).json({ ok: false, error: 'APIFY_API_TOKEN not set' });
+  const city = req.query.city || 'Tel Aviv';
+
+  try {
+    // Our DB sample for the city
+    const { rows: ours } = await pool.query(`
+      SELECT id, source_listing_id, url, address
+      FROM listings
+      WHERE is_active = TRUE AND source = 'yad2' AND city ILIKE $1
+        AND (phone IS NULL OR phone = '' OR phone = 'NULL')
+      ORDER BY id DESC
+      LIMIT 10
+    `, [`%${city}%`]);
+
+    // Swerve sample for the same city
+    const r = await axios.post(
+      'https://api.apify.com/v2/acts/swerve~yad2-scraper/run-sync-get-dataset-items',
+      { city, dealType: 'buy', maxItems: 10, enrichListings: false },
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 120000,
+        params: { timeout: 110 },
+        validateStatus: () => true,
+      }
+    );
+    const swerveItems = Array.isArray(r.data) ? r.data : [];
+    const swerveSample = swerveItems.slice(0, 10).map(i => {
+      const m = String(i?.url || '').match(/\/item\/([A-Za-z0-9]+)/);
+      return { token: m ? m[1] : null, url: i?.url, id_field: i?.id || null };
+    });
+
+    return res.json({
+      ok: true,
+      city,
+      our_listings: ours.map(o => ({
+        id: o.id,
+        source_listing_id: o.source_listing_id,
+        url: o.url,
+        url_token: (String(o.url || '').match(/\/item\/([A-Za-z0-9]+)/) || [])[1] || null,
+        address: o.address
+      })),
+      swerve_sample: swerveSample,
+      hint: 'Compare our source_listing_id and url_token to swerve_sample.token. The matcher in runApifyPhoneReveal uses source_listing_id lowercased.'
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POC for swerve/yad2-scraper as replacement actor.
 // Costs ~$0.025 per call (5 listings × $5/1000). Returns phone-enriched samples
 // so we can verify the new actor produces real phones before refactoring.
