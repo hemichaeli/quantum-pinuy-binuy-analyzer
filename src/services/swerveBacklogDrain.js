@@ -107,7 +107,7 @@ const HEAT_TIER_SQL = `
     + CASE WHEN c.multiplier >= 2.5 THEN 1 ELSE 0 END
   )
 `;
-const TIER_LABEL = { 5: '5 🔥', 4: '4', 3: '3', 2: '2', 1: '1 🧊' };
+const TIER_LABEL = { 5: '5', 4: '4', 3: '3', 2: '2', 1: '1' };
 
 // ───── Swerve API ─────
 

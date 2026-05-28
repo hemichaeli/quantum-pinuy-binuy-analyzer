@@ -455,4 +455,37 @@ router.get('/swerve-drain-jobs', (req, res) => {
   res.json({ ok: true, jobs: drain.listDrainJobs() });
 });
 
+// ───── Drain v2: complex-address anchored ─────
+router.post('/swerve-complex-drain', async (req, res) => {
+  const drain = require('../services/swerveByComplexAddress');
+  const {
+    dryRun = false,
+    maxGroups = 50,
+    cityFilter = null,
+    perGroupCap = 100,
+    minHeatTier = 1,
+    useNeighborhood = true,
+  } = req.body || {};
+  try {
+    const { jobId } = await drain.runComplexAddressDrain({
+      dryRun, maxGroups, cityFilter, perGroupCap, minHeatTier, useNeighborhood,
+    });
+    res.json({ ok: true, jobId, dryRun, maxGroups, cityFilter, perGroupCap, minHeatTier, useNeighborhood });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get('/swerve-complex-drain/:jobId', (req, res) => {
+  const drain = require('../services/swerveByComplexAddress');
+  const job = drain.getDrainStatus(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, error: 'job not found' });
+  res.json({ ok: true, job });
+});
+
+router.get('/swerve-complex-drain-jobs', (req, res) => {
+  const drain = require('../services/swerveByComplexAddress');
+  res.json({ ok: true, jobs: drain.listDrainJobs() });
+});
+
 module.exports = router;
