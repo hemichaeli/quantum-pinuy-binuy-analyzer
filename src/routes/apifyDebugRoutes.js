@@ -488,6 +488,24 @@ router.get('/swerve-complex-drain-jobs', (req, res) => {
   res.json({ ok: true, jobs: drain.listDrainJobs() });
 });
 
+// Show the current phone_blocklist + how many listings each entry covers.
+router.get('/blocklist', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const { rows } = await pool.query(`
+      SELECT b.phone, b.reason, b.contact_name, b.notes, b.blocked_at,
+             COUNT(l.id)::int AS covered_listings
+      FROM phone_blocklist b
+      LEFT JOIN listings l ON l.phone = b.phone AND l.is_active = TRUE
+      GROUP BY b.phone, b.reason, b.contact_name, b.notes, b.blocked_at
+      ORDER BY covered_listings DESC, b.blocked_at DESC
+    `);
+    res.json({ ok: true, total: rows.length, entries: rows });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Phone-centric view: aggregate listings by phone, classify owner vs agent,
 // surface where each contact's listings sit. This is the outreach pool — one
 // row per unique phone, with everything we need to know before sending.
