@@ -488,6 +488,79 @@ router.get('/swerve-complex-drain-jobs', (req, res) => {
   res.json({ ok: true, jobs: drain.listDrainJobs() });
 });
 
+// Phone-centric view: aggregate listings by phone, classify owner vs agent,
+// surface where each contact's listings sit. This is the outreach pool — one
+// row per unique phone, with everything we need to know before sending.
+router.get('/contacts', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const heatSql = `
+      LEAST(5,
+        CASE
+          WHEN c.approval_date    IS NOT NULL OR c.signature_percent >= 85 THEN 5
+          WHEN c.deposit_date     IS NOT NULL OR c.signature_percent >= 65 THEN 4
+          WHEN c.submission_date  IS NOT NULL OR c.signature_percent >= 45 THEN 3
+          WHEN c.declaration_date IS NOT NULL OR c.signature_percent >= 25 THEN 2
+          ELSE 1
+        END
+        + CASE WHEN c.multiplier >= 2.5 THEN 1 ELSE 0 END
+      )
+    `;
+    // Build per-phone aggregates: counts, locations, heat, and contact_type.
+    const { rows: contacts } = await pool.query(`
+      WITH per_phone AS (
+        SELECT
+          l.phone,
+          COUNT(DISTINCT l.id)::int                                          AS listings,
+          COUNT(DISTINCT l.complex_id)::int                                  AS complexes,
+          COUNT(DISTINCT l.city)::int                                        AS cities,
+          MAX(${heatSql})::int                                               AS top_tier,
+          (ARRAY_AGG(DISTINCT c.name))[1:5]                                  AS sample_complexes,
+          (ARRAY_AGG(DISTINCT l.city))[1:5]                                  AS sample_cities,
+          (ARRAY_AGG(DISTINCT l.contact_name)
+             FILTER (WHERE l.contact_name IS NOT NULL))[1:3]                 AS contact_names
+        FROM listings l
+        JOIN complexes c ON c.id = l.complex_id
+        WHERE l.is_active = TRUE
+          AND l.phone IS NOT NULL AND l.phone <> '' AND l.phone <> 'NULL'
+        GROUP BY l.phone
+      )
+      SELECT
+        phone,
+        listings,
+        complexes,
+        cities,
+        top_tier,
+        sample_complexes,
+        sample_cities,
+        contact_names,
+        CASE
+          WHEN complexes >= 3 OR cities >= 2 THEN 'agent'
+          WHEN listings >= 5                  THEN 'agent_likely'
+          ELSE 'owner'
+        END AS contact_type
+      FROM per_phone
+      ORDER BY top_tier DESC, listings DESC
+    `);
+    // Roll up for the summary view.
+    const summary = contacts.reduce((acc, c) => {
+      acc.total++;
+      acc.by_type[c.contact_type] = (acc.by_type[c.contact_type] || 0) + 1;
+      acc.by_tier[c.top_tier] = (acc.by_tier[c.top_tier] || 0) + 1;
+      acc.listings_total += c.listings;
+      return acc;
+    }, { total: 0, listings_total: 0, by_type: {}, by_tier: {} });
+    res.json({
+      ok: true,
+      summary,
+      top_50: contacts.slice(0, 50),
+      total_count: contacts.length,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // "Where do our 1,165 with-phone listings actually sit?" — does the complex_id
 // distribution look healthy (spread across many complexes/tiers) or did the
 // scrapers force-assign all listings of a city to one complex?
