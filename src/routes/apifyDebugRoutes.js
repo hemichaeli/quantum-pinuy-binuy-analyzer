@@ -317,6 +317,46 @@ router.get('/swerve-poc', async (req, res) => {
   }
 });
 
+// Complexes-table snapshot: how many complexes do we have, how many have
+// usable addresses, what does the address field actually contain? Drives
+// the "match against authoritative complex addresses" pivot.
+router.get('/complexes-coverage', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const { rows: summary } = await pool.query(`
+      SELECT
+        COUNT(*)::int                                         AS total,
+        COUNT(*) FILTER (WHERE addresses IS NOT NULL
+                              AND array_length(addresses, 1) > 0)::int  AS with_addresses,
+        COUNT(*) FILTER (WHERE neighborhood IS NOT NULL
+                              AND neighborhood <> '')::int              AS with_neighborhood,
+        COUNT(DISTINCT city)::int                            AS distinct_cities
+      FROM complexes
+    `);
+    const { rows: byCity } = await pool.query(`
+      SELECT city,
+             COUNT(*)::int AS complexes,
+             COUNT(*) FILTER (WHERE addresses IS NOT NULL
+                                  AND array_length(addresses, 1) > 0)::int AS with_addresses,
+             SUM(COALESCE(array_length(addresses, 1), 0))::int AS total_addresses
+      FROM complexes
+      GROUP BY city
+      ORDER BY complexes DESC
+      LIMIT 25
+    `);
+    const { rows: samples } = await pool.query(`
+      SELECT id, city, neighborhood, name, addresses
+      FROM complexes
+      WHERE addresses IS NOT NULL AND array_length(addresses, 1) > 0
+      ORDER BY id
+      LIMIT 5
+    `);
+    res.json({ ok: true, summary: summary[0], by_city: byCity, samples });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ───── Swerve backlog drain ─────
 // One-time bulk operation that scrapes Swerve per city and fuzzy-matches
 // results against our bound-missing-phone backlog. Returns a job id; poll
