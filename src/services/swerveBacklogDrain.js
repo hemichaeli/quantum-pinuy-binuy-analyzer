@@ -94,11 +94,13 @@ function isAddressMatch(ours, theirs) {
 
 // ───── Swerve API ─────
 
-async function fetchSwerveCity(city, dealType, maxItems) {
+async function fetchSwerveCity(city, dealType, maxItems, neighbourhood = null) {
   const t0 = Date.now();
+  const input = { city, dealType, maxItems, enrichListings: true };
+  if (neighbourhood) input.neighbourhood = neighbourhood;
   const resp = await axios.post(
     `${APIFY_BASE}/acts/${SWERVE_ACTOR}/run-sync-get-dataset-items`,
-    { city, dealType, maxItems, enrichListings: true },
+    input,
     {
       headers: { Authorization: `Bearer ${process.env.APIFY_API_TOKEN}` },
       timeout: 600000,
@@ -108,7 +110,7 @@ async function fetchSwerveCity(city, dealType, maxItems) {
   );
   const elapsed = Date.now() - t0;
   if (resp.status >= 400) {
-    logger.warn(`[SwerveDrain] ${city}/${dealType} HTTP ${resp.status}: ${JSON.stringify(resp.data).slice(0, 200)}`);
+    logger.warn(`[SwerveDrain] ${city}/${neighbourhood || '*'}/${dealType} HTTP ${resp.status}: ${JSON.stringify(resp.data).slice(0, 200)}`);
     return { items: [], elapsed, error: resp.data };
   }
   return { items: Array.isArray(resp.data) ? resp.data : [], elapsed, error: null };
@@ -118,85 +120,93 @@ async function fetchSwerveCity(city, dealType, maxItems) {
 
 const _runs = new Map(); // jobId → { status, stats, startedAt, finishedAt }
 
-async function runSwerveDrain({ dryRun = false, maxCities = 50, cityFilter = null, perCityCap = 200 } = {}) {
+async function runSwerveDrain({ dryRun = false, maxGroups = 50, cityFilter = null, perGroupCap = 100, useNeighborhood = true } = {}) {
   const jobId = `drain_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const job = {
     status: 'running',
     startedAt: new Date().toISOString(),
     stats: {
       backlog_total: 0,
-      cities_processed: 0,
-      cities_total: 0,
+      groups_processed: 0,
+      groups_total: 0,
       items_fetched: 0,
       matched: 0,
       not_matched: 0,
       no_phone: 0,
       estimated_cost_usd: 0,
-      per_city: {},
+      per_group: {},
     },
   };
   _runs.set(jobId, job);
 
   (async () => {
     try {
+      // Join with complexes so we know each listing's neighborhood. This lets
+      // us scope Swerve searches to exactly the pinuy-binuy block, not the
+      // whole city. Big win for match rate.
       const { rows: backlog } = await pool.query(`
-        SELECT id, city, address, complex_id, source_listing_id, url
-        FROM listings
-        WHERE is_active = TRUE
-          AND complex_id IS NOT NULL
-          AND (phone IS NULL OR phone = '' OR phone = 'NULL')
-          AND city IS NOT NULL AND city <> ''
-          AND address IS NOT NULL AND address <> ''
-          ${cityFilter ? `AND city = '${String(cityFilter).replace(/'/g, "''")}'` : ''}
+        SELECT
+          l.id, l.city, l.address, l.complex_id, l.source_listing_id, l.url,
+          c.neighborhood
+        FROM listings l
+        LEFT JOIN complexes c ON c.id = l.complex_id
+        WHERE l.is_active = TRUE
+          AND l.complex_id IS NOT NULL
+          AND (l.phone IS NULL OR l.phone = '' OR l.phone = 'NULL')
+          AND l.city IS NOT NULL AND l.city <> ''
+          AND l.address IS NOT NULL AND l.address <> ''
+          ${cityFilter ? `AND l.city = '${String(cityFilter).replace(/'/g, "''")}'` : ''}
       `);
       job.stats.backlog_total = backlog.length;
 
-      // Group by city, sorted desc by city backlog size.
-      const byCity = {};
+      // Group key: city + (optional) neighborhood. Listings without a known
+      // neighborhood fall back to a city-only group keyed `${city}::*`.
+      const byGroup = {};
       for (const l of backlog) {
-        if (!byCity[l.city]) byCity[l.city] = [];
-        byCity[l.city].push(l);
+        const nb = useNeighborhood && l.neighborhood ? l.neighborhood : null;
+        const key = `${l.city}::${nb || '*'}`;
+        if (!byGroup[key]) byGroup[key] = { city: l.city, neighborhood: nb, listings: [] };
+        byGroup[key].listings.push(l);
       }
-      const cities = Object.entries(byCity)
-        .sort((a, b) => b[1].length - a[1].length)
-        .slice(0, maxCities)
-        .map(([c]) => c);
-      job.stats.cities_total = cities.length;
+      const groups = Object.entries(byGroup)
+        .sort((a, b) => b[1].listings.length - a[1].listings.length)
+        .slice(0, maxGroups)
+        .map(([k, v]) => ({ key: k, ...v }));
+      job.stats.groups_total = groups.length;
 
-      logger.info(`[SwerveDrain] Job ${jobId}: ${backlog.length} listings across ${cities.length} cities (dryRun=${dryRun})`);
+      logger.info(`[SwerveDrain] Job ${jobId}: ${backlog.length} listings across ${groups.length} (city,neighborhood) groups (dryRun=${dryRun}, useNeighborhood=${useNeighborhood})`);
 
-      for (const city of cities) {
-        const cityRows = byCity[city];
-        const maxItems = Math.min(perCityCap, Math.max(50, cityRows.length * 3));
-        const cityStats = { backlog: cityRows.length, items: 0, matched: 0 };
-        job.stats.per_city[city] = cityStats;
+      for (const group of groups) {
+        const { city, neighborhood, listings: groupRows, key } = group;
+        const maxItems = Math.min(perGroupCap, Math.max(30, groupRows.length * 3));
+        const gStats = { city, neighborhood, backlog: groupRows.length, items: 0, matched: 0 };
+        job.stats.per_group[key] = gStats;
 
-        const { items, error } = await fetchSwerveCity(city, 'buy', maxItems);
-        cityStats.items = items.length;
+        const { items, error } = await fetchSwerveCity(city, 'buy', maxItems, neighborhood);
+        gStats.items = items.length;
         job.stats.items_fetched += items.length;
         job.stats.estimated_cost_usd += items.length * PER_PHONE_USD;
 
         if (error) {
-          cityStats.error = error?.error?.message || String(error).slice(0, 100);
-          job.stats.cities_processed++;
+          gStats.error = error?.error?.message || String(error).slice(0, 100);
+          job.stats.groups_processed++;
           continue;
         }
 
-        // Match each Swerve item against our city rows
+        // Match each Swerve item against our group rows
         for (const item of items) {
           if (!item || !item.contactPhone) { job.stats.no_phone++; continue; }
           let matched = null;
-          for (const ours of cityRows) {
+          for (const ours of groupRows) {
             if (ours._matched) continue;
             if (isAddressMatch(ours.address, item.address)) { matched = ours; break; }
           }
           if (!matched) { job.stats.not_matched++; continue; }
           matched._matched = true;
-          cityStats.matched++;
+          gStats.matched++;
           job.stats.matched++;
 
           if (!dryRun) {
-            // Extract token from Swerve URL so future runs use the cheap token path.
             const m = String(item.url || '').match(/\/item\/([A-Za-z0-9]+)/);
             const token = m ? m[1] : null;
             await pool.query(
@@ -211,8 +221,8 @@ async function runSwerveDrain({ dryRun = false, maxCities = 50, cityFilter = nul
           }
         }
 
-        job.stats.cities_processed++;
-        logger.info(`[SwerveDrain] ${city}: ${cityStats.items} items, ${cityStats.matched}/${cityStats.backlog} matched`);
+        job.stats.groups_processed++;
+        logger.info(`[SwerveDrain] ${city}/${neighborhood || '*'}: ${gStats.items} items, ${gStats.matched}/${gStats.backlog} matched`);
       }
 
       job.status = 'done';

@@ -323,10 +323,16 @@ router.get('/swerve-poc', async (req, res) => {
 // /api/debug/swerve-drain/:jobId for status.
 router.post('/swerve-drain', async (req, res) => {
   const drain = require('../services/swerveBacklogDrain');
-  const { dryRun = false, maxCities = 50, cityFilter = null, perCityCap = 200 } = req.body || {};
+  const {
+    dryRun = false,
+    maxGroups = 50,
+    cityFilter = null,
+    perGroupCap = 100,
+    useNeighborhood = true,
+  } = req.body || {};
   try {
-    const { jobId } = await drain.runSwerveDrain({ dryRun, maxCities, cityFilter, perCityCap });
-    res.json({ ok: true, jobId, dryRun, maxCities, cityFilter, perCityCap });
+    const { jobId } = await drain.runSwerveDrain({ dryRun, maxGroups, cityFilter, perGroupCap, useNeighborhood });
+    res.json({ ok: true, jobId, dryRun, maxGroups, cityFilter, perGroupCap, useNeighborhood });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
