@@ -171,6 +171,45 @@ router.get('/apify-status', async (req, res) => {
   res.json(result);
 });
 
+// Breakdown of listings by source × complex-bound vs orphan, to size the
+// pinuy-binuy-only cleanup. Counts only is_active=TRUE rows.
+router.get('/listings-by-complex-bound', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        source,
+        COUNT(*) FILTER (WHERE complex_id IS NOT NULL)                                            AS bound,
+        COUNT(*) FILTER (WHERE complex_id IS NULL)                                                AS orphan,
+        COUNT(*) FILTER (WHERE complex_id IS NOT NULL AND (phone IS NULL OR phone='' OR phone='NULL')) AS bound_missing_phone,
+        COUNT(*) FILTER (WHERE complex_id IS NULL     AND (phone IS NULL OR phone='' OR phone='NULL')) AS orphan_missing_phone,
+        COUNT(*)::int AS total
+      FROM listings
+      WHERE is_active = TRUE
+      GROUP BY source
+      ORDER BY total DESC
+    `);
+    const summary = rows.reduce(
+      (a, r) => ({
+        bound: a.bound + Number(r.bound),
+        orphan: a.orphan + Number(r.orphan),
+        bound_missing_phone: a.bound_missing_phone + Number(r.bound_missing_phone),
+        orphan_missing_phone: a.orphan_missing_phone + Number(r.orphan_missing_phone),
+        total: a.total + Number(r.total),
+      }),
+      { bound: 0, orphan: 0, bound_missing_phone: 0, orphan_missing_phone: 0, total: 0 }
+    );
+    return res.json({
+      ok: true,
+      summary,
+      by_source: rows,
+      hint: 'orphan = no complex_id, candidates for archiving. bound_missing_phone is the real Apify enrichment target.'
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Token-format diagnostic. Compares our stored source_listing_id values for
 // yad2 listings against the token Swerve returns inside /item/{token} URLs,
 // so we can see why integration matched 0/12 today despite Swerve POC = 100%.
