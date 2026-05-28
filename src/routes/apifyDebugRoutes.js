@@ -488,6 +488,77 @@ router.get('/swerve-complex-drain-jobs', (req, res) => {
   res.json({ ok: true, jobs: drain.listDrainJobs() });
 });
 
+// "Where do our 1,165 with-phone listings actually sit?" — does the complex_id
+// distribution look healthy (spread across many complexes/tiers) or did the
+// scrapers force-assign all listings of a city to one complex?
+router.get('/phones-by-complex', async (req, res) => {
+  const pool = require('../db/pool');
+  try {
+    const heatSql = `
+      LEAST(5,
+        CASE
+          WHEN c.approval_date    IS NOT NULL OR c.signature_percent >= 85 THEN 5
+          WHEN c.deposit_date     IS NOT NULL OR c.signature_percent >= 65 THEN 4
+          WHEN c.submission_date  IS NOT NULL OR c.signature_percent >= 45 THEN 3
+          WHEN c.declaration_date IS NOT NULL OR c.signature_percent >= 25 THEN 2
+          ELSE 1
+        END
+        + CASE WHEN c.multiplier >= 2.5 THEN 1 ELSE 0 END
+      )
+    `;
+    const { rows: byTier } = await pool.query(`
+      SELECT ${heatSql}::int AS heat_tier,
+             COUNT(DISTINCT l.id)::int        AS listings_with_phone,
+             COUNT(DISTINCT l.complex_id)::int AS distinct_complexes,
+             COUNT(DISTINCT l.phone)::int     AS distinct_phones
+      FROM listings l
+      JOIN complexes c ON c.id = l.complex_id
+      WHERE l.is_active = TRUE
+        AND l.phone IS NOT NULL AND l.phone <> '' AND l.phone <> 'NULL'
+      GROUP BY heat_tier
+      ORDER BY heat_tier DESC
+    `);
+    const { rows: top10 } = await pool.query(`
+      SELECT c.id AS complex_id, c.name, c.city,
+             ${heatSql}::int AS heat_tier,
+             COUNT(DISTINCT l.id)::int    AS listings_with_phone,
+             COUNT(DISTINCT l.phone)::int AS distinct_phones
+      FROM listings l
+      JOIN complexes c ON c.id = l.complex_id
+      WHERE l.is_active = TRUE
+        AND l.phone IS NOT NULL AND l.phone <> '' AND l.phone <> 'NULL'
+      GROUP BY c.id, c.name, c.city
+      ORDER BY listings_with_phone DESC
+      LIMIT 10
+    `);
+    const { rows: concentration } = await pool.query(`
+      WITH per_complex AS (
+        SELECT complex_id, COUNT(DISTINCT id)::int AS n
+        FROM listings
+        WHERE is_active = TRUE
+          AND phone IS NOT NULL AND phone <> '' AND phone <> 'NULL'
+        GROUP BY complex_id
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE n = 1)::int       AS one_listing,
+        COUNT(*) FILTER (WHERE n BETWEEN 2 AND 5)::int AS two_to_five,
+        COUNT(*) FILTER (WHERE n BETWEEN 6 AND 20)::int AS six_to_twenty,
+        COUNT(*) FILTER (WHERE n > 20)::int      AS more_than_twenty,
+        COUNT(*)::int                            AS total_complexes
+      FROM per_complex
+    `);
+    res.json({
+      ok: true,
+      by_heat_tier: byTier,
+      top_10_complexes_by_phones: top10,
+      complex_concentration: concentration[0],
+      hint: 'If "more_than_twenty" is large, complex_id was probably force-assigned and quality is low.',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Diagnostic: dump parsed complex addresses + Swerve sample for one city,
 // side-by-side, so we can eyeball why the matcher returns 0.
 router.get('/parse-debug', async (req, res) => {
