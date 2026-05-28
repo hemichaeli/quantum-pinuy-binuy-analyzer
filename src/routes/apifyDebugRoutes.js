@@ -171,4 +171,56 @@ router.get('/apify-status', async (req, res) => {
   res.json(result);
 });
 
+// POC for swerve/yad2-scraper as replacement actor.
+// Costs ~$0.025 per call (5 listings × $5/1000). Returns phone-enriched samples
+// so we can verify the new actor produces real phones before refactoring.
+router.get('/swerve-poc', async (req, res) => {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return res.status(500).json({ ok: false, error: 'APIFY_API_TOKEN not set' });
+  const city = req.query.city || 'Tel Aviv';
+  const maxItems = Math.min(parseInt(req.query.max || '5', 10), 10);
+  const dealType = req.query.dealType || 'buy';
+
+  const input = { city, dealType, maxItems, enrichListings: true };
+  const t0 = Date.now();
+  try {
+    const r = await axios.post(
+      'https://api.apify.com/v2/acts/swerve~yad2-scraper/run-sync-get-dataset-items',
+      input,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 120000,
+        params: { timeout: 110 },
+        validateStatus: () => true,
+      }
+    );
+    const elapsedMs = Date.now() - t0;
+    const items = Array.isArray(r.data) ? r.data : [];
+    const withPhone = items.filter(i => i?.contactPhone || i?.phone).length;
+    return res.json({
+      ok: r.status >= 200 && r.status < 300,
+      httpStatus: r.status,
+      elapsedMs,
+      input,
+      items_count: items.length,
+      items_with_phone: withPhone,
+      success_rate: items.length ? `${Math.round(100 * withPhone / items.length)}%` : 'N/A',
+      sample_items: items.slice(0, 5).map(i => ({
+        source_listing_id: i?.id || i?.adNumber || i?.token || null,
+        city: i?.city,
+        address: i?.address || i?.street,
+        price: i?.price,
+        rooms: i?.rooms,
+        contactPhone: i?.contactPhone || null,
+        contactName: i?.contactName || null,
+        url: i?.url
+      })),
+      estimated_cost_usd: +(items.length * 0.005).toFixed(3),
+      error_body: r.status >= 400 ? r.data : null
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = router;
