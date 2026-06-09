@@ -5,6 +5,7 @@
 const pool = require('../db/pool');
 const { logger } = require('./logger');
 const axios = require('axios');
+const { getCreditBalances } = require('./creditBalanceService');
 
 const PERSONAL_EMAIL = process.env.PERSONAL_EMAIL || 'hemi.michaeli@gmail.com';
 const OFFICE_EMAIL = process.env.OFFICE_EMAIL || 'Office@u-r-quantum.com';
@@ -122,7 +123,45 @@ function buildDigestSectionHtml(d) {
   </div>`;
 }
 
-function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum, digest, digestHtml }) {
+// ── Credit balances: prominent banner (only when something hit zero/blocked) ──
+function buildCreditBannerHtml(credit) {
+  if (!credit || !credit.hasEmpty) return '';
+  const empties = credit.results.filter((r) => r.level === 'empty');
+  const names = empties.map((r) => r.name).join(', ');
+  const lines = empties.map((r) => `${r.name}: ${r.detail}`).join('<br>');
+  return `
+  <div style="background:#3a1f24; border:2px solid #f87171; border-radius:10px; padding:18px 22px; margin-bottom:20px;">
+    <div style="font-size:18px; font-weight:800; color:#f87171; margin-bottom:8px;">🔴 התראת יתרה — ${names}</div>
+    <div style="font-size:14px; color:#f3b6b6; line-height:1.7;">${lines}</div>
+    <div style="font-size:12px; color:#d99b9b; margin-top:10px;">יש להטעין credit / לעדכן אמצעי תשלום כדי שההעשרה והסריקות ימשיכו לפעול.</div>
+  </div>`;
+}
+
+// ── Credit balances: detailed per-service section (always shown) ──────────────
+function buildCreditBalancesHtml(credit) {
+  if (!credit || !Array.isArray(credit.results) || credit.results.length === 0) return '';
+  const meta = {
+    ok:      { color: '#4ade80', icon: '✅' },
+    warn:    { color: '#e8b84b', icon: '⚠️' },
+    empty:   { color: '#f87171', icon: '🔴' },
+    unknown: { color: '#9aa0b0', icon: '❔' },
+  };
+  const rows = credit.results.map((r, i) => {
+    const m = meta[r.level] || meta.unknown;
+    return `
+      <tr style="background:${i % 2 === 0 ? '#2a2d35' : '#32363f'}; border-bottom:1px solid #3a3f4a;">
+        <td style="padding:10px 14px; font-weight:700; color:#e8eaf0; white-space:nowrap;">${m.icon} ${r.name}</td>
+        <td style="padding:10px 14px; color:${m.color}; font-size:13px;">${r.detail || ''}</td>
+      </tr>`;
+  }).join('');
+  return `
+  <div style="background:#2a2d35; border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:16px; overflow:hidden;">
+    <div style="padding:16px 20px; border-bottom:1px solid rgba(255,255,255,0.08); font-weight:700; font-size:15px;">💳 יתרות שירותים בתשלום</div>
+    <table style="width:100%; border-collapse:collapse;"><tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum, digest, digestHtml, creditBanner, creditHtml }) {
   const linkStyle = 'color:#4ecdc4; text-decoration:none; font-weight:600;';
   const rowStyle = (bg) => `background:${bg}; border-bottom:1px solid #3a3f4a;`;
 
@@ -180,6 +219,8 @@ function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats,
 <body style="margin:0; padding:0; background:#1e2128; font-family:Arial,sans-serif; color:#e8eaf0;">
 <div style="max-width:700px; margin:0 auto; padding:24px 16px;">
 
+  ${creditBanner || ''}
+
   <div style="background:#2a2d35; border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:24px 28px; margin-bottom:20px; text-align:center;">
     <div style="font-size:11px; color:#4ecdc4; letter-spacing:3px; text-transform:uppercase; margin-bottom:8px;">QUANTUM ANALYZER</div>
     <div style="font-size:22px; font-weight:800; letter-spacing:2px; color:#e8eaf0;">דוח בוקר יומי</div>
@@ -204,6 +245,8 @@ function buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats,
       <div style="font-size:11px; color:#9aa0b0; margin-top:4px;">אישורי ועדה</div>
     </a>
   </div>
+
+  ${creditHtml || ''}
 
   ${opportunities.length > 0 ? `
   <div style="background:#2a2d35; border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:16px; overflow:hidden;">
@@ -402,19 +445,36 @@ async function sendMorningReport() {
       logger.warn('[MorningReport] Digest build failed (continuing without):', digErr.message);
     }
 
+    // Credit balances (Perplexity / Apify / 2captcha). Never throws — a failed
+    // provider check yields level:'unknown' and the report still goes out.
+    let credit = { results: [], hasEmpty: false, hasWarn: false };
+    try {
+      credit = await getCreditBalances();
+    } catch (creditErr) {
+      logger.warn('[MorningReport] Credit balance check failed (continuing without):', creditErr.message);
+    }
+    const creditBanner = buildCreditBannerHtml(credit);
+    const creditHtml = buildCreditBalancesHtml(credit);
+
+    // Surface a $0/blocked balance in the subject line so it's visible without
+    // even opening the email.
+    const subject = credit.hasEmpty
+      ? `🔴 [QUANTUM] התראת יתרה + דוח בוקר ${today}`
+      : `🌅 [QUANTUM] דוח בוקר ${today}`;
+
     let emailResult = { sent: false };
     try {
       emailResult = await sendEmail({
-        subject: `🌅 [QUANTUM] דוח בוקר ${today}`,
-        html: buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum, digest, digestHtml })
+        subject,
+        html: buildEmailHtml({ opportunities, sellers, priceDrops, committees, stats, today, scanNum, digest, digestHtml, creditBanner, creditHtml })
       });
     } catch (emailErr) {
       logger.warn('[MorningReport] Email failed:', emailErr.message);
       emailResult = { sent: false, error: emailErr.message };
     }
 
-    logger.info('[MorningReport] Complete', { stats, digest });
-    return { success: true, stats, digest, email: emailResult, generated_at: new Date().toISOString() };
+    logger.info('[MorningReport] Complete', { stats, digest, credit: credit.results });
+    return { success: true, stats, digest, credit, email: emailResult, generated_at: new Date().toISOString() };
 
   } catch (err) {
     logger.error('[MorningReport] Fatal:', err.message);
