@@ -461,14 +461,14 @@ async function getWhatsAppTemplate(templateId) {
 
 async function pullIncomingWhatsApp(batchSize = 100) {
   try {
-    const response = await axios.post(`${INFORU_CAPI_BASE}/PullData`, { Data: { Type: 'IncomingMessagesWhatsapp', BatchSize: batchSize } }, { headers: { 'Content-Type': 'application/json', 'Authorization': getBasicAuth() }, timeout: 15000 });
+    const response = await axios.post(`${INFORU_CAPI_BASE}/PullData`, { Data: { Type: 'IncomingMessagesWhatsapp', BatchSize: batchSize } }, { headers: { 'Content-Type': 'application/json', 'Authorization': getBasicAuth() }, timeout: 30000 });
     return response.data;
   } catch (err) { logger.error('Failed to pull WA messages', { error: err.message }); throw err; }
 }
 
 async function pullWhatsAppDLR(batchSize = 100) {
   try {
-    const response = await axios.post(`${INFORU_CAPI_BASE}/PullData`, { Data: { Type: 'DeliveryNotificationWhatsapp', BatchSize: batchSize } }, { headers: { 'Content-Type': 'application/json', 'Authorization': getBasicAuth() }, timeout: 15000 });
+    const response = await axios.post(`${INFORU_CAPI_BASE}/PullData`, { Data: { Type: 'DeliveryNotificationWhatsapp', BatchSize: batchSize } }, { headers: { 'Content-Type': 'application/json', 'Authorization': getBasicAuth() }, timeout: 30000 });
     return response.data;
   } catch (err) { logger.error('Failed to pull WA DLR', { error: err.message }); throw err; }
 }

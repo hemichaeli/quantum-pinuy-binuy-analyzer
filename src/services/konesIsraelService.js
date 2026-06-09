@@ -123,7 +123,7 @@ class KonesIsraelService {
    */
   async scrapeKonesonline() {
     const axios = getAxios();
-    const client = axios.create({
+    const clientConfig = {
       timeout: 20000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
@@ -133,7 +133,28 @@ class KonesIsraelService {
         'Cache-Control': 'no-cache'
       },
       maxRedirects: 5
-    });
+    };
+
+    // konesonline returns 403 to datacenter IPs (Railway). Route through the
+    // 2captcha residential proxy when configured so we present a residential IP.
+    // Falls back to a direct connection if the proxy isn't set up or fails to
+    // load — no worse than the current behaviour.
+    try {
+      const { TWOCAPTCHA_PROXY_USER, TWOCAPTCHA_PROXY_PASS, TWOCAPTCHA_PROXY_HOST, TWOCAPTCHA_PROXY_PORT } = process.env;
+      if (TWOCAPTCHA_PROXY_USER && TWOCAPTCHA_PROXY_PASS && TWOCAPTCHA_PROXY_HOST && TWOCAPTCHA_PROXY_PORT) {
+        const { HttpsProxyAgent } = require('https-proxy-agent');
+        const proxyUrl = `http://${encodeURIComponent(TWOCAPTCHA_PROXY_USER)}:${encodeURIComponent(TWOCAPTCHA_PROXY_PASS)}@${TWOCAPTCHA_PROXY_HOST}:${TWOCAPTCHA_PROXY_PORT}`;
+        const agent = new HttpsProxyAgent(proxyUrl);
+        clientConfig.httpsAgent = agent;
+        clientConfig.httpAgent = agent;
+        clientConfig.proxy = false; // let the agent handle tunnelling
+        logger.info('[KonesonlineScraper] Using 2captcha residential proxy');
+      }
+    } catch (proxyErr) {
+      logger.warn(`[KonesonlineScraper] Proxy setup failed, using direct connection: ${proxyErr.message}`);
+    }
+
+    const client = axios.create(clientConfig);
 
     logger.info('[KonesonlineScraper] Fetching konesonline.co.il/RealEstates...');
     const response = await client.get(this.konesonlineUrl);
