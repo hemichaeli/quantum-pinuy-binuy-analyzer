@@ -40,7 +40,7 @@ const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
-const PIPELINE_CRON = process.env.MASTER_PIPELINE_CRON || '0 6 * * *'; // 06:00 daily Israel time
+const PIPELINE_CRON = process.env.MASTER_PIPELINE_CRON || '0 18 * * 4'; // Thursday 18:00 Israel time (weekly)
 const STATUTORY_BATCH_SIZE = parseInt(process.env.STATUTORY_BATCH_SIZE) || 30; // complexes per run
 const SYNTHESIS_BATCH_SIZE = parseInt(process.env.SYNTHESIS_BATCH_SIZE) || 20;
 const SLEEP_BETWEEN_SCRAPERS_MS = 3000;
@@ -943,7 +943,7 @@ function getStatus() {
     isRunning,
     lastResult,
     cron: PIPELINE_CRON,
-    nextRun: '06:00 Israel time daily'
+    nextRun: 'Thursday 18:00 Israel time (weekly)'
   };
 }
 
