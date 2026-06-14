@@ -183,6 +183,7 @@ function loadAllRoutes() {
     { path: '/api',                    file: 'routes/hotOpportunitiesRoutes.js' },
     { path: '/api/appointments',       file: 'routes/appointmentRoutes.js' },
     { path: '/api/news',               file: 'routes/newsRoutes.js' },
+    { path: '/api/ai-usage',           file: 'routes/aiUsageRoutes.js' },
     { path: '/api/publish',            file: 'routes/publishRoutes.js' },
     { path: '/api/reminders',          file: 'routes/reminderRoutes.js' },
     { path: '/api/settings',           file: 'routes/settingsRoutes.js' },
@@ -418,7 +419,13 @@ async function start() {
   await runMigrationFile('phone blocklist (034)', path.join(__dirname, 'db', 'migrations', '034_phone_blocklist.sql'));
   // 2026-05-25: AI bot fetch logging (GPTBot/ClaudeBot/PerplexityBot/etc.)
   await runMigrationFile('Bot fetches (033)', path.join(__dirname, 'db', 'migrations', '033_bot_fetches.sql'));
+  // 2026-06-14: cumulative Claude/Perplexity token-usage log
+  await runMigrationFile('AI usage log (035)', path.join(__dirname, 'db', 'migrations', '035_ai_usage_log.sql'));
   if (isQuantum) await runOutreachMigration();
+
+  // Record every Claude/Perplexity API call's token usage (global axios interceptor).
+  try { require('./services/aiUsageLogger').installAiUsageInterceptor(); }
+  catch (e) { logger.error('[AIUsage] interceptor install failed:', e.message); }
 
   loadAllRoutes();
   loadBackupRoutes();
