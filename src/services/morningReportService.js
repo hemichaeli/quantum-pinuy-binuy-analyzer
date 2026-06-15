@@ -34,8 +34,14 @@ async function sendEmail({ subject, html }) {
     }
     return { sent: false, error: JSON.stringify(response.data) };
   } catch (err) {
-    logger.warn('[MorningReport] Email error:', err.message);
-    return { sent: false, error: err.message };
+    // Surface the real Resend error — axios buries the useful detail in
+    // err.response.data, and the logger only prints the first string arg, so
+    // fold status + body into one message instead of passing err as arg 2.
+    const detail = err.response
+      ? `HTTP ${err.response.status} ${JSON.stringify(err.response.data)}`
+      : err.message;
+    logger.warn(`[MorningReport] Email error: ${detail}`);
+    return { sent: false, error: detail };
   }
 }
 

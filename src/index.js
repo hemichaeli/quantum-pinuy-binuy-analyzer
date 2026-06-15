@@ -567,21 +567,24 @@ async function start() {
       logger.info('[MasterPipeline] ACTIVE');
     } catch (e) { logger.warn('[MasterPipeline] Failed:', e.message); }
 
+    // 2026-06-15: consolidated into the weekly Thursday scan (were daily) — staggered
+    // across Thu evening to avoid hammering the same sources at once. Govmap stays
+    // weekly Monday (it populates the COMPLEXES table, not listings).
     const scraperDefs = [
-      { name: 'Komo',           module: './services/komoScraper',           cron: '0 8 * * *',   fn: 'scanAll' },
-      { name: 'BankNadlan',     module: './services/bankNadlanScraper',     cron: '15 8 * * *',  fn: 'scanAll' },
+      { name: 'Komo',           module: './services/komoScraper',           cron: '30 19 * * 4', fn: 'scanAll' },
+      { name: 'BankNadlan',     module: './services/bankNadlanScraper',     cron: '40 19 * * 4', fn: 'scanAll' },
       // Yad1 retired 2026-04-30 — yad1.co.il returns HTTP 404 (platform defunct).
       // { name: 'Yad1',           module: './services/yad1Scraper',           cron: '30 8 * * *',  fn: 'scanAll' },
-      { name: 'Dira',           module: './services/diraScraper',           cron: '45 8 * * *',  fn: 'scanAll' },
-      { name: 'Kones2',         module: './services/kones2Scraper',         cron: '0 9 * * *',   fn: 'scanAll' },
+      { name: 'Dira',           module: './services/diraScraper',           cron: '50 19 * * 4', fn: 'scanAll' },
+      { name: 'Kones2',         module: './services/kones2Scraper',         cron: '0 20 * * 4',  fn: 'scanAll' },
       // BidSpirit disabled 2026-04-30 — produces 0 listings in production. Re-enable when investigated.
       // { name: 'BidSpirit',      module: './services/bidspiritScraper',      cron: '15 9 * * *',  fn: 'scanAll' },
       // Govmap stays — it populates the COMPLEXES table with pinuy-binuy zone data
       // and planning info, NOT listings. So the listings-tab cleanup didn't need to
       // touch this cron. Keeping it active.
       { name: 'Govmap',         module: './services/govmapScraper',         cron: '0 7 * * 1',   fn: 'scanAll' },
-      { name: 'ComplexAddress', module: './services/complexAddressScraper', cron: '30 9 * * *',  fn: 'scanAll' },
-      { name: 'KonesIsrael',    module: './services/konesIsraelService',    cron: '15 7 * * *',  fn: 'runKonesonlineScrape' },
+      { name: 'ComplexAddress', module: './services/complexAddressScraper', cron: '10 20 * * 4', fn: 'scanAll' },
+      { name: 'KonesIsrael',    module: './services/konesIsraelService',    cron: '20 20 * * 4', fn: 'runKonesonlineScrape' },
     ];
     for (const def of scraperDefs) {
       try {
