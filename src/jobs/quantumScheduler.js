@@ -456,8 +456,8 @@ function initScheduler() {
   // owns both jobs (prevents double-sweeps from multiple Railway services).
   if (process.env.ENABLE_MORNING_REPORT === 'true') {
     schedulerState.scheduledTasks.push(
-      cron.schedule('15 7 * * *', async () => {
-        logger.info('[SCHEDULER] Staleness Sweeper - running...');
+      cron.schedule('45 20 * * 4', async () => {
+        logger.info('[SCHEDULER] Staleness Sweeper - running (weekly Thursday)...');
         try {
           const { runSweep } = require('../services/stalenessSweeper');
           const result = await runSweep();
@@ -465,15 +465,16 @@ function initScheduler() {
         } catch (e) { logger.warn('[SCHEDULER] Staleness Sweeper failed:', e.message); }
       }, { timezone: 'Asia/Jerusalem' })
     );
-    logger.info('[SCHEDULER] Staleness Sweeper cron registered (07:15 IL daily)');
+    logger.info('[SCHEDULER] Staleness Sweeper cron registered (Thursday 20:45 IL, before the weekly report)');
   }
 
-  // Morning Intelligence Report: Daily 07:30 (after listings scan at 07:00)
+  // Intelligence Report: Weekly Thursday 21:00 — sent only on scan days, after the
+  // weekly scan + staleness sweep complete, so the email reflects fresh data (was daily 07:30).
   // Only runs if ENABLE_MORNING_REPORT=true to prevent duplicate sends from multiple Railway services
   if (process.env.ENABLE_MORNING_REPORT === 'true') {
     schedulerState.scheduledTasks.push(
-      cron.schedule('30 7 * * *', async () => {
-        logger.info('[SCHEDULER] Morning Intelligence Report - generating...');
+      cron.schedule('0 21 * * 4', async () => {
+        logger.info('[SCHEDULER] Weekly Intelligence Report (Thursday) - generating...');
         try {
           const { sendMorningReport } = require('../services/morningReportService');
           const result = await sendMorningReport();
