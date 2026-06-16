@@ -303,10 +303,10 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
-  // Listings: Daily 07:00
+  // Listings: Weekly Thursday 18:45 (was daily 07:00) — consolidated into the weekly scan
   schedulerState.scheduledTasks.push(
-    cron.schedule('0 7 * * *', async () => {
-      logger.info('[SCHEDULER] Daily listings scan');
+    cron.schedule('45 18 * * 4', async () => {
+      logger.info('[SCHEDULER] Weekly listings scan (Thursday)');
       try { const y = require('../services/yad2Scraper'); if (y?.scrapeAll) await y.scrapeAll(); } catch (e) { logger.warn('[SCHEDULER] Yad2 failed', { error: e.message }); }
       try { const k = require('../services/konesIsraelService'); if (k?.fetchListings) await k.fetchListings(); } catch (e) { logger.warn('[SCHEDULER] Kones failed', { error: e.message }); }
       // Send pending alerts immediately after listings scan
@@ -346,11 +346,11 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
-  // Tier 1 Express Scan: Every 4h during business hours (checks for urgent new listings)
+  // Tier 1 Express Scan: Weekly Thursday 19:00 (was every 4h) — consolidated into the weekly scan
   schedulerState.scheduledTasks.push(
-    cron.schedule('0 11,15,19 * * 0-4', async () => {
+    cron.schedule('0 19 * * 4', async () => {
       if (!isEnrichmentDay()) return;
-      logger.info('[SCHEDULER] Tier 1 express yad2 scan (4h cycle)');
+      logger.info('[SCHEDULER] Tier 1 express yad2 scan (weekly Thursday)');
       try {
         const y = require('../services/yad2Scraper');
         // scanAllByCities makes 1 Worker call per city (≈40 total) instead of
@@ -388,12 +388,12 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
-  // Complex Address Scan: Daily 06:00 (Homeless/Yad1/Winwin - before morning report)
+  // Complex Address Scan: Weekly Thursday 18:00 (Homeless/Yad1/Winwin) — was daily 06:00
   // limit=80 (was 729) + onlyNew=true — completes in ~15min, prevents stuck scan
   schedulerState.scheduledTasks.push(
-    cron.schedule('0 6 * * *', async () => {
+    cron.schedule('0 18 * * 4', async () => {
       if (!isEnrichmentDay()) return;
-      logger.info('[SCHEDULER] Daily complex address scan (Homeless/Yad1/Winwin) — batch 80');
+      logger.info('[SCHEDULER] Weekly complex address scan (Homeless/Yad1/Winwin) — batch 80 (Thursday)');
       try {
         const complexScraper = require('../services/complexAddressScraper');
         const result = await complexScraper.scanAll({ limit: 80, minIai: 0, onlyNew: true });
@@ -402,15 +402,15 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
-  // KomoDirect Scan: Daily 06:20 — discovers REAL komo.co.il listings via HTML
+  // KomoDirect Scan: Weekly Thursday 18:20 (was daily 06:20) — discovers REAL komo.co.il listings via HTML
   // (vs masterPipeline's komoScraper which only hits the dead JSON API and
   // falls to Perplexity hallucinations). komo.co.il is reachable from Railway
   // — no ShieldSquare, no anti-bot — so this is free incremental volume.
   // Uses the ₪-direction + HTML-entity regex fixes from commit 8218bc1.
   schedulerState.scheduledTasks.push(
-    cron.schedule('20 6 * * *', async () => {
+    cron.schedule('20 18 * * 4', async () => {
       if (!isEnrichmentDay()) return;
-      logger.info('[SCHEDULER] Daily komoDirect HTML scan (real komo.co.il listings)');
+      logger.info('[SCHEDULER] Weekly komoDirect HTML scan — Thursday (real komo.co.il listings)');
       try {
         const komoDirect = require('../services/komoDirectScraper');
         if (komoDirect?.scanAll) {
@@ -421,11 +421,11 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
-  // Facebook Marketplace Scan: Every 3 days at 05:00 (Apify - before complex scan)
+  // Facebook Marketplace Scan: Weekly Thursday 19:15 (Apify) — was every 3 days at 05:00
   schedulerState.scheduledTasks.push(
-    cron.schedule('0 5 */3 * *', async () => {
+    cron.schedule('15 19 * * 4', async () => {
       if (!isEnrichmentDay()) return;
-      logger.info('[SCHEDULER] Facebook Marketplace scan (Apify - every 3 days)');
+      logger.info('[SCHEDULER] Facebook Marketplace scan (Apify - weekly Thursday)');
       try {
         const fbScraper = require('../services/facebookScraper');
         const result = await fbScraper.scanAll({ staleOnly: false, limit: 34 });
@@ -434,11 +434,11 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
-  // Facebook Groups Scan: Daily 05:30 (Perplexity - pinuy-binuy groups)
+  // Facebook Groups Scan: Weekly Thursday 18:30 (Perplexity - pinuy-binuy groups) — was daily 05:30
   schedulerState.scheduledTasks.push(
-    cron.schedule('30 5 * * *', async () => {
+    cron.schedule('30 18 * * 4', async () => {
       if (!isEnrichmentDay()) return;
-      logger.info('[SCHEDULER] Facebook Groups scan (Perplexity - pinuy-binuy groups)');
+      logger.info('[SCHEDULER] Facebook Groups scan (Perplexity - weekly Thursday)');
       try {
         const fbGroups = require('../services/facebookGroupsScraper');
         const result = await fbGroups.scanAll();
@@ -456,8 +456,8 @@ function initScheduler() {
   // owns both jobs (prevents double-sweeps from multiple Railway services).
   if (process.env.ENABLE_MORNING_REPORT === 'true') {
     schedulerState.scheduledTasks.push(
-      cron.schedule('15 7 * * *', async () => {
-        logger.info('[SCHEDULER] Staleness Sweeper - running...');
+      cron.schedule('45 20 * * 4', async () => {
+        logger.info('[SCHEDULER] Staleness Sweeper - running (weekly Thursday)...');
         try {
           const { runSweep } = require('../services/stalenessSweeper');
           const result = await runSweep();
@@ -465,15 +465,16 @@ function initScheduler() {
         } catch (e) { logger.warn('[SCHEDULER] Staleness Sweeper failed:', e.message); }
       }, { timezone: 'Asia/Jerusalem' })
     );
-    logger.info('[SCHEDULER] Staleness Sweeper cron registered (07:15 IL daily)');
+    logger.info('[SCHEDULER] Staleness Sweeper cron registered (Thursday 20:45 IL, before the weekly report)');
   }
 
-  // Morning Intelligence Report: Daily 07:30 (after listings scan at 07:00)
+  // Intelligence Report: Weekly Thursday 21:00 — sent only on scan days, after the
+  // weekly scan + staleness sweep complete, so the email reflects fresh data (was daily 07:30).
   // Only runs if ENABLE_MORNING_REPORT=true to prevent duplicate sends from multiple Railway services
   if (process.env.ENABLE_MORNING_REPORT === 'true') {
     schedulerState.scheduledTasks.push(
-      cron.schedule('30 7 * * *', async () => {
-        logger.info('[SCHEDULER] Morning Intelligence Report - generating...');
+      cron.schedule('0 21 * * 4', async () => {
+        logger.info('[SCHEDULER] Weekly Intelligence Report (Thursday) - generating...');
         try {
           const { sendMorningReport } = require('../services/morningReportService');
           const result = await sendMorningReport();
