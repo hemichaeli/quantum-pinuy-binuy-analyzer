@@ -758,4 +758,36 @@ router.get('/top-agents', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Generic actor POC — test ANY Apify actor + input before integrating.
+// GET /api/debug/actor-poc?actor=inovaflow~ai-brand-monitoring&input=<json>&sync=1
+router.get('/actor-poc', async (req, res) => {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return res.status(500).json({ ok: false, error: 'APIFY_API_TOKEN not set' });
+  const actor = req.query.actor;
+  if (!actor) return res.status(400).json({ ok: false, error: 'actor required (e.g. inovaflow~ai-brand-monitoring)' });
+  let input = {};
+  if (req.query.input) { try { input = JSON.parse(req.query.input); } catch (e) { return res.status(400).json({ ok: false, error: 'bad input json: ' + e.message }); } }
+  const t0 = Date.now();
+  try {
+    const r = await axios.post(
+      `https://api.apify.com/v2/acts/${actor}/run-sync-get-dataset-items`,
+      input,
+      { headers: { Authorization: `Bearer ${token}` }, params: { timeout: 200 }, timeout: 220000, validateStatus: () => true }
+    );
+    const items = Array.isArray(r.data) ? r.data : [];
+    return res.json({
+      ok: r.status >= 200 && r.status < 300,
+      httpStatus: r.status,
+      elapsedMs: Date.now() - t0,
+      actor, input,
+      items_count: items.length,
+      sample_keys: items[0] ? Object.keys(items[0]).slice(0, 40) : [],
+      sample_items: items.slice(0, 3),
+      error_body: r.status >= 400 ? r.data : null
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = router;
