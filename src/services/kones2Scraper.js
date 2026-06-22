@@ -161,19 +161,8 @@ async function queryKones2Perplexity() {
 }`;
 
   try {
-    const response = await axios.post(
-      'https://api.perplexity.ai/chat/completions',
-      {
-        model: 'sonar',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 2000
-      },
-      {
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        timeout: 30000
-      }
-    );
-    const text = response.data?.choices?.[0]?.message?.content || '';
+    const { searchLLM } = require('./llmSearch');
+    const text = (await searchLLM('Return ONLY valid JSON. No markdown.', prompt, { maxTokens: 2000 })) || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return [];
     const parsed = JSON.parse(jsonMatch[0]);

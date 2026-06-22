@@ -107,20 +107,8 @@ async function queryWinwinPerplexity(city) {
 רק דירות למכירה. מחירים בשקלים. החזר JSON בלבד.`;
 
   try {
-    const res = await axios.post(PERPLEXITY_API, {
-      model: 'sonar',
-      messages: [
-        { role: 'system', content: 'Return ONLY valid JSON. No markdown, no explanations.' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 2000,
-      temperature: 0.1
-    }, {
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      timeout: 30000
-    });
-
-    const content = res.data.choices?.[0]?.message?.content || '';
+    const { searchLLM } = require('./llmSearch');
+    const content = (await searchLLM('Return ONLY valid JSON. No markdown, no explanations.', prompt, { maxTokens: 2000 })) || '';
     return parseJsonListings(content);
   } catch (err) {
     logger.warn(`[WinWin] Perplexity fallback failed for ${city}: ${err.message}`);
