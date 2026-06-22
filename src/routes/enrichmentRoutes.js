@@ -978,4 +978,45 @@ router.post('/activate-quantum-v4-8', async (req, res) => {
   }
 });
 
+// ====================================================================
+// PROVIDER COMPARISON — Gemini vs Perplexity on the SAME statutory query
+//   GET /api/enrichment/compare-providers/:id   (read-only, no DB writes)
+// ====================================================================
+router.get('/compare-providers/:id', async (req, res) => {
+  try {
+    const pool = require('../db/pool');
+    const { rows } = await pool.query(
+      'SELECT id, name, city, addresses, address, status, iai_score FROM complexes WHERE id = $1',
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'complex not found' });
+    const c = rows[0];
+
+    const prompt = `חפש מידע סטטוטורי עדכני על מתחם פינוי-בינוי "${c.name}" ב${c.city}. כתובות: ${c.addresses || c.address || ''}.
+החזר JSON בלבד במבנה: {"planning_status":{"current_stage":"...","stage_details":"...","last_update_date":"YYYY-MM-DD|null","plan_number":"..."},"local_committee":{"decision":"approved|rejected|pending|unknown","decision_date":"YYYY-MM-DD|null"},"district_committee":{"decision":"approved|rejected|pending|unknown","decision_date":"YYYY-MM-DD|null"},"vatmal":{"is_vatmal":false,"status":"...","next_hearing_date":"YYYY-MM-DD|null"},"objections":{"filed":false,"details":"..."},"confidence":"high|medium|low","sources":["..."]}
+חפש ב: mavat.moin.gov.il, iplan.gov.il, globes.co.il, calcalist.co.il. החזר JSON בלבד.`;
+    const system = 'You are an expert in Israeli urban renewal (פינוי-בינוי) planning law. Return ONLY valid JSON. Search Hebrew government sources. Use null for unknown values.';
+
+    const out = { complex: { id: c.id, name: c.name, city: c.city, status: c.status, iai_score: c.iai_score }, providers: {} };
+
+    const t0 = Date.now();
+    try {
+      const perplexity = require('../services/perplexityService');
+      const raw = await perplexity.queryPerplexity(prompt, system);
+      out.providers.perplexity = { ms: Date.now() - t0, ok: true, raw };
+    } catch (e) { out.providers.perplexity = { ms: Date.now() - t0, ok: false, error: e.message }; }
+
+    const t1 = Date.now();
+    try {
+      const gemini = require('../services/geminiEnrichmentService');
+      const raw = await gemini.queryGemini(prompt, system, true);
+      out.providers.gemini = { ms: Date.now() - t1, ok: true, raw };
+    } catch (e) { out.providers.gemini = { ms: Date.now() - t1, ok: false, error: e.message }; }
+
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

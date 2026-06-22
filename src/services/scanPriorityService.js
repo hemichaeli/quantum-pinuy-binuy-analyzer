@@ -82,22 +82,29 @@ async function calculateAllPriorities() {
 
   scored.sort((a, b) => b.pss - a.pss);
 
-  const hot = scored.slice(0, 50);
-  const dormantStatuses = ['unknown', 'cancelled', 'frozen'];
-  const dormant = scored.filter(c => 
-    dormantStatuses.includes(c.status) || 
-    (!c.last_scan && c.iai_score === 0) ||
-    c.pss < 10
-  );
+  // Tier classification by investment signal (env-tunable):
+  //   HOT    = ready opportunities (IAI >= HOT_IAI)
+  //   ACTIVE = mid-signal, still in planning (ACTIVE_IAI <= IAI < HOT_IAI)
+  //   DORMANT= already-built / junk-status / low-IAI long tail (scan rarely)
+  const HOT_IAI = parseInt(process.env.TIER_HOT_IAI || '70', 10);
+  const ACTIVE_IAI = parseInt(process.env.TIER_ACTIVE_IAI || '40', 10);
+  const BUILT_OR_JUNK = (c) => {
+    const s = String(c.status || '').toLowerCase();
+    return /construction|completed|marketing|not_found|no_valid|not_urban|cancelled|frozen|rejected|^unknown$/.test(s);
+  };
+
+  const top_50 = scored.slice(0, 50); // literal top-50 by PSS (cost endpoint / express paths)
+  const dormant = scored.filter(c => BUILT_OR_JUNK(c) || (Number(c.iai_score) || 0) < ACTIVE_IAI);
   const dormantIds = new Set(dormant.map(c => c.id));
+  const hot = scored.filter(c => !dormantIds.has(c.id) && (Number(c.iai_score) || 0) >= HOT_IAI);
   const hotIds = new Set(hot.map(c => c.id));
   const active = scored.filter(c => !hotIds.has(c.id) && !dormantIds.has(c.id));
 
-  logger.info(`[PRIORITY] Calculated: ${hot.length} hot, ${active.length} active, ${dormant.length} dormant`);
+  logger.info(`[PRIORITY] Tiers: ${hot.length} hot, ${active.length} active, ${dormant.length} dormant (HOT_IAI>=${HOT_IAI}, ACTIVE_IAI>=${ACTIVE_IAI})`);
 
   return {
     total: scored.length,
-    top_50: hot,
+    top_50,
     tiers: {
       hot: { count: hot.length, complexes: hot },
       active: { count: active.length, complexes: active },

@@ -83,13 +83,13 @@ async function launchTierScan(tier, modeOverride = null) {
 
     switch (tier) {
       case '1': case '1standard':
-        ids = ranking.top_50.map(c => c.id); mode = mode || 'standard'; tierLabel = 'Tier 1 HOT'; break;
+        ids = (ranking.tiers.hot.complexes || []).slice(0, parseInt(process.env.TIER1_BATCH || '50', 10)).map(c => c.id); mode = mode || 'standard'; tierLabel = 'Tier 1 HOT'; break;
       case '1full':
-        ids = ranking.top_50.map(c => c.id); mode = mode || 'full'; tierLabel = 'Tier 1 HOT (FULL)'; break;
+        ids = (ranking.tiers.hot.complexes || []).slice(0, parseInt(process.env.TIER1_BATCH || '50', 10)).map(c => c.id); mode = mode || 'full'; tierLabel = 'Tier 1 HOT (FULL)'; break;
       case '2':
-        ids = ranking.active.map(c => c.id); mode = mode || 'standard'; tierLabel = 'Tier 2 ACTIVE'; break;
+        ids = (ranking.tiers.active.complexes || []).slice(0, parseInt(process.env.TIER2_BATCH || '40', 10)).map(c => c.id); mode = mode || 'standard'; tierLabel = 'Tier 2 ACTIVE'; break;
       case '3':
-        ids = ranking.dormant.map(c => c.id); mode = mode || 'fast'; tierLabel = 'Tier 3 DORMANT'; break;
+        ids = (ranking.tiers.dormant.complexes || []).slice(0, parseInt(process.env.TIER3_BATCH || '20', 10)).map(c => c.id); mode = mode || 'fast'; tierLabel = 'Tier 3 DORMANT'; break;
       default: logger.warn(`[SCHEDULER] Unknown tier: ${tier}`); return null;
     }
 
