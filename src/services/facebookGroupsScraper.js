@@ -144,7 +144,77 @@ async function enrichMissingPhones(listingIds) {
 // ============================================================
 // PERPLEXITY: search a specific FB group
 // ============================================================
+// ============================================================
+// APIFY: fetch REAL group posts (logical_scrapers/facebook-group-posts-scraper)
+// then extract structured listings via Gemini. Flag: FB_APIFY=1.
+// Replaces Perplexity's hallucinated "search the group" with actual post text.
+// ============================================================
+async function searchGroupViaApify(group) {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return [];
+  const maxPosts = parseInt(process.env.FB_APIFY_MAX || '30', 10);
+  let posts = [];
+  try {
+    const r = await axios.post(
+      'https://api.apify.com/v2/acts/logical_scrapers~facebook-group-posts-scraper/run-sync-get-dataset-items',
+      { groupUrls: [group.url], maxPosts, resultsLimit: maxPosts },
+      { headers: { Authorization: `Bearer ${token}` }, params: { timeout: 170 }, timeout: 190000, validateStatus: () => true }
+    );
+    if (!Array.isArray(r.data)) { logger.warn(`[FBGroups:apify] "${group.name}": status=${r.status}`); return []; }
+    posts = r.data;
+  } catch (e) { logger.warn(`[FBGroups:apify] "${group.name}": ${e.message}`); return []; }
+
+  const candidates = posts
+    .map(p => ({ text: p.message || p.text || '', url: p.post_url || p.url || group.url, author: p.author?.name || null, post_id: p.post_id || null }))
+    .filter(p => p.text && /למכירה|מכירה|פינוי|בינוי|התחדשות|חתומ|תמ"?א/.test(p.text));
+  logger.info(`[FBGroups:apify] "${group.name}": ${posts.length} posts, ${candidates.length} sale candidates`);
+  if (!candidates.length) return [];
+  return await extractListingsFromPosts(candidates, group);
+}
+
+async function extractListingsFromPosts(candidates, group) {
+  try {
+    const { queryGemini } = require('./geminiEnrichmentService');
+    const blob = candidates.slice(0, 40).map((p, i) => `#${i} url=${p.url} author=${p.author || ''}\n${p.text}`).join('\n---\n');
+    const prompt = `להלן פוסטים מקבוצת פייסבוק נדל"ן. חלץ אך ורק מודעות של דירות למכירה במתחמי פינוי-בינוי/התחדשות עירונית/תמ"א (לא שכירות, לא ביקוש/דרושה, לא יזמים שמחפשים). החזר JSON בלבד:
+{"listings":[{"post_index":0,"address":"רחוב ומספר","city":"עיר","price":1500000,"rooms":3,"area_sqm":75,"floor":2,"phone":"05XXXXXXXX או null","contact_name":"שם או null","is_pinuy_binuy":true}]}
+אם אין מודעות מתאימות החזר {"listings":[]}.
+פוסטים:
+${blob}`;
+    const raw = await queryGemini(prompt, 'Return ONLY valid JSON. Extract Israeli pinui-binui apartments FOR SALE from these Facebook posts. Use null for unknown fields.', false);
+    if (!raw) return [];
+    const m = raw.replace(/```json\s*/g, '').replace(/```/g, '').match(/\{[\s\S]*\}/);
+    if (!m) return [];
+    const parsed = JSON.parse(m[0]);
+    return (parsed.listings || []).filter(l => l && l.is_pinuy_binuy !== false).map(l => {
+      const src = candidates[l.post_index] || {};
+      const regexPhone = (src.text.match(IL_PHONE_REGEX) || [])[0];
+      return {
+        source: 'facebook_group',
+        listing_id: src.post_id || src.url || `fb_${group.id}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        url: src.url || group.url,
+        address: l.address || null,
+        city: l.city || (group.cities ? group.cities[0] : null),
+        price: l.price ? parseFloat(l.price) : null,
+        rooms: l.rooms ? parseFloat(l.rooms) : null,
+        area_sqm: l.area_sqm ? parseFloat(l.area_sqm) : null,
+        floor: l.floor != null ? parseInt(l.floor) : null,
+        phone: cleanPhone(l.phone) || (regexPhone ? cleanPhone(regexPhone) : null),
+        contact_name: l.contact_name || src.author || null,
+        description: (src.text || '').substring(0, 500),
+        group_id: group.id, group_name: group.name
+      };
+    });
+  } catch (e) { logger.warn(`[FBGroups:apify] extract error "${group.name}": ${e.message}`); return []; }
+}
+
 async function searchGroup(group) {
+  // 2026-06-22: prefer real Apify posts + Gemini extraction (FB_APIFY=1); Perplexity fallback.
+  if (process.env.FB_APIFY === '1' && process.env.APIFY_API_TOKEN) {
+    const viaApify = await searchGroupViaApify(group);
+    if (viaApify && viaApify.length) return viaApify;
+    // fall through to Perplexity only if Apify returned nothing
+  }
   const apiKey = process.env.SONAR_API_KEY || process.env.PERPLEXITY_API_KEY;
   if (!apiKey) { logger.warn('[FBGroups] No Perplexity API key'); return []; }
 
