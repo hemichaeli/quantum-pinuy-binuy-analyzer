@@ -205,6 +205,40 @@ async function queryYad2NextData(cityCode, opts = {}) {
   if (opts.neighborhood) params.neighborhood = opts.neighborhood;
   if (opts.street) params.street = opts.street;
 
+  // 2026-06-22: Apify residential-browser path. yad2 sits behind ShieldSquare
+  // (validate.perfdrive.com) which blocks plain HTTP from ANY IP (verified) —
+  // only a real browser solving the JS challenge gets through. apify/puppeteer-scraper
+  // through IL residential proxy renders the page and returns the SSR __NEXT_DATA__.
+  // Flag-gated (YAD2_APIFY=1) + fail-open: any error falls through to the legacy paths.
+  if (process.env.YAD2_APIFY === '1' && process.env.APIFY_API_TOKEN) {
+    try {
+      const startUrl = `${YAD2_PUBLIC_SEARCH}?city=${cityCode}&page=${opts.page || 1}`;
+      const r = await axios.post(
+        `https://api.apify.com/v2/acts/apify~puppeteer-scraper/run-sync-get-dataset-items?token=${process.env.APIFY_API_TOKEN}&timeout=120`,
+        {
+          startUrls: [{ url: startUrl }],
+          proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'], apifyProxyCountryCode: 'IL' },
+          headless: true,
+          maxRequestRetries: 2,
+          pageFunction: "async function pageFunction(ctx){const {page}=ctx;await page.waitForSelector('#__NEXT_DATA__',{timeout:35000}).catch(()=>{});const t=await page.evaluate(()=>{const e=document.getElementById('__NEXT_DATA__');return e?e.textContent:null;});return {nextData:t};}"
+        },
+        { timeout: 130000, validateStatus: () => true }
+      );
+      if (r.status >= 200 && r.status < 300 && Array.isArray(r.data) && r.data[0] && r.data[0].nextData) {
+        const data = JSON.parse(r.data[0].nextData);
+        const feed = data?.props?.pageProps?.feed || {};
+        const buckets = [...(feed.private || []), ...(feed.agency || []), ...(feed.platinum || []), ...(feed.booster || [])];
+        if (buckets.length > 0) { logger.info(`[yad2-next:apify] got ${buckets.length} for city ${cityCode}`); return buckets; }
+        logger.debug(`[yad2-next:apify] empty feed for city ${cityCode}`);
+      } else {
+        logger.warn(`[yad2-next:apify] actor status=${r.status} for city ${cityCode}`);
+      }
+    } catch (e) {
+      logger.warn(`[yad2-next:apify] error city=${cityCode}: ${e.message}`);
+    }
+    // fall through to proxy/direct/perplexity below if Apify did not return data
+  }
+
   // Prefer the CF Worker proxy when configured — yad2 blocks Railway egress
   // IPs but trusts Cloudflare. The Worker returns the parsed feed buckets
   // directly so we skip the HTML-extraction step entirely.

@@ -186,6 +186,12 @@ function buildStatutoryQuery(complex) {
  * Enrich a single complex with statutory data via Perplexity
  */
 async function enrichComplexStatutory(complex) {
+  // 2026-06-22: Gemini-primary (cheaper + grounded; quality verified equivalent to Perplexity).
+  // Set STATUTORY_PROVIDER=perplexity to revert. Perplexity remains the fallback below.
+  if ((process.env.STATUTORY_PROVIDER || 'gemini') === 'gemini') {
+    const g = await enrichComplexStatutoryGemini(complex);
+    if (g) return g;
+  }
   try {
     const perplexityService = require('../services/perplexityService');
     const query = buildStatutoryQuery(complex);
