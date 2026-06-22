@@ -434,6 +434,19 @@ function initScheduler() {
     }, { timezone: 'Asia/Jerusalem' })
   );
 
+  // AEO visibility: daily actor run 04:00 + ingest finished runs hourly (:20)
+  schedulerState.scheduledTasks.push(
+    cron.schedule('0 4 * * *', async () => {
+      logger.info('[SCHEDULER] AEO visibility run');
+      try { const aeo = require('../routes/aeoRoutes'); await aeo.startRun(); } catch (e) { logger.warn('[SCHEDULER] AEO run failed', { error: e.message }); }
+    }, { timezone: 'Asia/Jerusalem' })
+  );
+  schedulerState.scheduledTasks.push(
+    cron.schedule('20 * * * *', async () => {
+      try { const aeo = require('../routes/aeoRoutes'); await aeo.ingestFinished(); } catch (e) { logger.warn('[SCHEDULER] AEO ingest failed', { error: e.message }); }
+    }, { timezone: 'Asia/Jerusalem' })
+  );
+
   // Facebook Groups Scan: Weekly Thursday 18:30 (Perplexity - pinuy-binuy groups) — was daily 05:30
   schedulerState.scheduledTasks.push(
     cron.schedule('30 18 * * 4', async () => {

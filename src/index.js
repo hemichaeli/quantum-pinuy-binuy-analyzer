@@ -184,6 +184,7 @@ function loadAllRoutes() {
     { path: '/api/appointments',       file: 'routes/appointmentRoutes.js' },
     { path: '/api/news',               file: 'routes/newsRoutes.js' },
     { path: '/api/ai-usage',           file: 'routes/aiUsageRoutes.js' },
+    { path: '/api/aeo',                file: 'routes/aeoRoutes.js' },
     { path: '/api/publish',            file: 'routes/publishRoutes.js' },
     { path: '/api/reminders',          file: 'routes/reminderRoutes.js' },
     { path: '/api/settings',           file: 'routes/settingsRoutes.js' },
