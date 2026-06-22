@@ -205,40 +205,6 @@ async function queryYad2NextData(cityCode, opts = {}) {
   if (opts.neighborhood) params.neighborhood = opts.neighborhood;
   if (opts.street) params.street = opts.street;
 
-  // 2026-06-22: Apify residential-browser path. yad2 sits behind ShieldSquare
-  // (validate.perfdrive.com) which blocks plain HTTP from ANY IP (verified) —
-  // only a real browser solving the JS challenge gets through. apify/puppeteer-scraper
-  // through IL residential proxy renders the page and returns the SSR __NEXT_DATA__.
-  // Flag-gated (YAD2_APIFY=1) + fail-open: any error falls through to the legacy paths.
-  if (process.env.YAD2_APIFY === '1' && process.env.APIFY_API_TOKEN) {
-    try {
-      const startUrl = `${YAD2_PUBLIC_SEARCH}?city=${cityCode}&page=${opts.page || 1}`;
-      const r = await axios.post(
-        `https://api.apify.com/v2/acts/apify~puppeteer-scraper/run-sync-get-dataset-items?token=${process.env.APIFY_API_TOKEN}&timeout=120`,
-        {
-          startUrls: [{ url: startUrl }],
-          proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'], apifyProxyCountryCode: 'IL' },
-          headless: true,
-          maxRequestRetries: 2,
-          pageFunction: "async function pageFunction(ctx){const {page}=ctx;await page.waitForSelector('#__NEXT_DATA__',{timeout:35000}).catch(()=>{});const t=await page.evaluate(()=>{const e=document.getElementById('__NEXT_DATA__');return e?e.textContent:null;});return {nextData:t};}"
-        },
-        { timeout: 130000, validateStatus: () => true }
-      );
-      if (r.status >= 200 && r.status < 300 && Array.isArray(r.data) && r.data[0] && r.data[0].nextData) {
-        const data = JSON.parse(r.data[0].nextData);
-        const feed = data?.props?.pageProps?.feed || {};
-        const buckets = [...(feed.private || []), ...(feed.agency || []), ...(feed.platinum || []), ...(feed.booster || [])];
-        if (buckets.length > 0) { logger.info(`[yad2-next:apify] got ${buckets.length} for city ${cityCode}`); return buckets; }
-        logger.debug(`[yad2-next:apify] empty feed for city ${cityCode}`);
-      } else {
-        logger.warn(`[yad2-next:apify] actor status=${r.status} for city ${cityCode}`);
-      }
-    } catch (e) {
-      logger.warn(`[yad2-next:apify] error city=${cityCode}: ${e.message}`);
-    }
-    // fall through to proxy/direct/perplexity below if Apify did not return data
-  }
-
   // Prefer the CF Worker proxy when configured — yad2 blocks Railway egress
   // IPs but trusts Cloudflare. The Worker returns the parsed feed buckets
   // directly so we skip the HTML-extraction step entirely.
@@ -1178,6 +1144,49 @@ async function scanAll(options = {}) {
  * then use complexMatcher to identify which listings belong to a complex.
  * This reduces scan time from ~70 minutes to ~1 minute.
  */
+/**
+ * Fetch yad2 listings for a city via the rented Apify actor swerve/yad2-scraper
+ * (a real browser through IL residential proxy — defeats the ShieldSquare JS
+ * challenge that blocks plain HTTP from any IP). Returns listings already mapped
+ * to the same shape the Perplexity-fallback branch consumes. Flag: YAD2_APIFY=1.
+ */
+async function queryYad2ViaSwerve(cityName) {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return [];
+  const maxItems = parseInt(process.env.YAD2_SWERVE_MAX || '40', 10);
+  try {
+    const r = await axios.post(
+      'https://api.apify.com/v2/acts/swerve~yad2-scraper/run-sync-get-dataset-items',
+      { city: cityName, dealType: 'buy', maxItems, enrichListings: process.env.YAD2_SWERVE_ENRICH === '1' },
+      { headers: { Authorization: `Bearer ${token}` }, params: { timeout: 110 }, timeout: 125000, validateStatus: () => true }
+    );
+    if (r.status < 200 || r.status >= 300 || !Array.isArray(r.data)) {
+      logger.warn(`[yad2-swerve] ${cityName}: status=${r.status}`);
+      return [];
+    }
+    const items = r.data.map(i => ({
+      street: i.address || i.street || '',
+      house_number: i.house_number || '',
+      address: i.address || '',
+      asking_price: i.price || null,
+      rooms: i.rooms || null,
+      area_sqm: i.area_sqm || i.square_meters || null,
+      floor: i.floor || null,
+      description: i.description || null,
+      url: i.url || null,
+      listing_id: i.id || i.adNumber || i.token || null,
+      phone: i.contactPhone || i.phone || null,
+      contact_name: i.contactName || null,
+      is_urgent: false, is_foreclosure: false, is_inheritance: false
+    }));
+    logger.info(`[yad2-swerve] ${cityName}: got ${items.length} listings`);
+    return items;
+  } catch (e) {
+    logger.warn(`[yad2-swerve] ${cityName}: ${e.message}`);
+    return [];
+  }
+}
+
 async function scanAllByCities(options = {}) {
   const { staleOnly = false } = options;
   const { findMatchingComplex, loadComplexCache } = require('./complexMatcher');
@@ -1240,8 +1249,14 @@ async function scanAllByCities(options = {}) {
         // Fallback to Perplexity if API was blocked or returned no results
         let perplexityListings = [];
         if (apiBlocked || allListings.length === 0) {
-          logger.info(`[yad2-city-scan] ${cityName}: using Perplexity fallback (API blocked=${apiBlocked}, direct=${allListings.length})`);
-          perplexityListings = await queryYad2PerplexityByCity(cityName);
+          if (process.env.YAD2_APIFY === '1' && process.env.APIFY_API_TOKEN) {
+            logger.info(`[yad2-city-scan] ${cityName}: using Apify swerve fallback (API blocked=${apiBlocked}, direct=${allListings.length})`);
+            perplexityListings = await queryYad2ViaSwerve(cityName);
+          }
+          if (perplexityListings.length === 0) {
+            logger.info(`[yad2-city-scan] ${cityName}: using Perplexity fallback (API blocked=${apiBlocked}, direct=${allListings.length})`);
+            perplexityListings = await queryYad2PerplexityByCity(cityName);
+          }
         }
 
         logger.info(`[yad2-city-scan] ${cityName}: direct=${allListings.length}, perplexity=${perplexityListings.length}`);
