@@ -698,8 +698,9 @@ router.get('/fbgroup-poc', async (req, res) => {
   const url = req.query.url || 'https://www.facebook.com/groups/374280285021074';
   const max = Math.min(parseInt(req.query.max || '5', 10), 20);
 
-  // Try a couple of common input shapes; extra keys are typically ignored.
-  const input = { startUrls: [{ url }], resultsLimit: max, maxPosts: max, onlyPostsNewerThanDays: 30 };
+  // Input shape can be overridden via ?input=<json> to iterate without redeploying.
+  let input = { groupUrls: [url], maxPosts: max, resultsLimit: max };
+  if (req.query.input) { try { input = JSON.parse(req.query.input); } catch (e) { return res.status(400).json({ ok: false, error: 'bad input json: ' + e.message }); } }
   const t0 = Date.now();
   try {
     const r = await axios.post(
