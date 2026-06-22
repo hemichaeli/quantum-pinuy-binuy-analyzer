@@ -688,4 +688,44 @@ router.get('/parse-debug', async (req, res) => {
   }
 });
 
+// POC for logical_scrapers/facebook-group-posts-scraper as a replacement for the
+// Perplexity-based facebookGroupsScraper. Verifies the actor is accessible with
+// our token AND can actually read a given group (public vs closed). Read-only.
+// GET /api/debug/fbgroup-poc?url=<groupUrl>&max=5
+router.get('/fbgroup-poc', async (req, res) => {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) return res.status(500).json({ ok: false, error: 'APIFY_API_TOKEN not set' });
+  const url = req.query.url || 'https://www.facebook.com/groups/374280285021074';
+  const max = Math.min(parseInt(req.query.max || '5', 10), 20);
+
+  // Try a couple of common input shapes; extra keys are typically ignored.
+  const input = { startUrls: [{ url }], resultsLimit: max, maxPosts: max, onlyPostsNewerThanDays: 30 };
+  const t0 = Date.now();
+  try {
+    const r = await axios.post(
+      'https://api.apify.com/v2/acts/logical_scrapers~facebook-group-posts-scraper/run-sync-get-dataset-items',
+      input,
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 180000, params: { timeout: 160 }, validateStatus: () => true }
+    );
+    const items = Array.isArray(r.data) ? r.data : [];
+    return res.json({
+      ok: r.status >= 200 && r.status < 300,
+      httpStatus: r.status,
+      elapsedMs: Date.now() - t0,
+      input,
+      items_count: items.length,
+      sample_keys: items[0] ? Object.keys(items[0]).slice(0, 30) : [],
+      sample_items: items.slice(0, 5).map(i => ({
+        text: (i?.text || i?.message || i?.postText || '').slice(0, 240),
+        author: i?.user?.name || i?.author || i?.authorName || null,
+        time: i?.time || i?.date || i?.timestamp || null,
+        url: i?.url || i?.postUrl || i?.permalink || null
+      })),
+      error_body: r.status >= 400 ? r.data : null
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = router;
