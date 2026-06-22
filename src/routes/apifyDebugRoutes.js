@@ -729,4 +729,33 @@ router.get('/fbgroup-poc', async (req, res) => {
   }
 });
 
+// Research: which brokers/agents (contact_name) have the most listings inside
+// pinui-binui complexes — i.e. the dominant agents to watch / partner with.
+// GET /api/debug/top-agents?limit=40
+router.get('/top-agents', async (req, res) => {
+  const pool = require('../db/pool');
+  const limit = Math.min(parseInt(req.query.limit || '40', 10), 100);
+  try {
+    const inComplexes = await pool.query(`
+      SELECT contact_name,
+             COUNT(*)::int AS listings,
+             COUNT(DISTINCT complex_id)::int AS complexes,
+             COUNT(*) FILTER (WHERE phone IS NOT NULL)::int AS with_phone,
+             (array_agg(DISTINCT city))[1:6] AS cities
+      FROM listings
+      WHERE contact_name IS NOT NULL AND btrim(contact_name) <> ''
+        AND complex_id IS NOT NULL AND is_active = TRUE
+      GROUP BY contact_name
+      HAVING COUNT(*) >= 2
+      ORDER BY listings DESC, complexes DESC
+      LIMIT $1`, [limit]);
+    const overall = await pool.query(`
+      SELECT contact_name, COUNT(*)::int AS listings, COUNT(DISTINCT city)::int AS cities
+      FROM listings
+      WHERE contact_name IS NOT NULL AND btrim(contact_name) <> '' AND is_active = TRUE
+      GROUP BY contact_name ORDER BY listings DESC LIMIT $1`, [limit]);
+    res.json({ ok: true, in_pinui_binui_complexes: inComplexes.rows, top_overall: overall.rows });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 module.exports = router;
