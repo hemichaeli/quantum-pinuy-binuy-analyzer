@@ -45,7 +45,11 @@ const SEED_PROMPTS = [
   ['How to find a buyers agent for Israeli urban renewal property', 'vendor', 'BOFU', 'yes'],
   ['מה זה פינוי בינוי ולמה זו השקעה טובה?', 'concept', 'HE', 'maybe'],
   ['איך יהודי תושב חוץ קונה דירה בפינוי בינוי בישראל?', 'process', 'HE', 'yes'],
-  ['חברות שמלוות משקיעים מחו"ל בנדל"ן פינוי בינוי', 'vendor', 'HE', 'yes']
+  ['חברות שמלוות משקיעים מחו"ל בנדל"ן פינוי בינוי', 'vendor', 'HE', 'yes'],
+  // Council additions 2026-06-23 — wedge asset, geo-specific BOFU, alternate spelling
+  ['What is the pinui-binui mispricing index for Israeli urban-renewal apartments?', 'thesis', 'BOFU', 'yes'],
+  ['How can an American buy a pinui-binui apartment in Israel from the USA?', 'process', 'BOFU', 'yes'],
+  ['Is pinuy binuy a good real estate investment for foreign buyers?', 'thesis', 'MOFU', 'yes']
 ];
 
 // dominant pinui-binui agents found in our scraped data (research 2026-06-22)
