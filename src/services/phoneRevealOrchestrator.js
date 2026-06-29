@@ -948,10 +948,15 @@ async function enrichAllPhones(options = {}) {
         listing.source_listing_id = urlId;
         listing.url = `https://www.yad2.co.il/item/${urlId}`;
         if (!dryRun) {
-          await pool.query(
-            `UPDATE listings SET source_listing_id = $1, url = $2, updated_at = NOW() WHERE id = $3`,
-            [urlId, listing.url, listing.id]
-          );
+          try {
+            await pool.query(
+              `UPDATE listings SET source_listing_id = $1, url = $2, updated_at = NOW() WHERE id = $3`,
+              [urlId, listing.url, listing.id]
+            );
+          } catch (e) {
+            if (e.code === '23505') { logger.debug(`[PhoneOrch] Pass 2.5: dup item ${urlId} already on another listing — skipping ${listing.id}`); continue; }
+            throw e;
+          }
         }
         results.passes.yad2_id_resolve.resolved++;
       }
@@ -967,10 +972,15 @@ async function enrichAllPhones(options = {}) {
           listing.source_listing_id = info.itemId;
           listing.url = info.url;
           if (!dryRun) {
-            await pool.query(
-              `UPDATE listings SET source_listing_id = $1, url = $2, updated_at = NOW() WHERE id = $3`,
-              [info.itemId, info.url, listingId]
-            );
+            try {
+              await pool.query(
+                `UPDATE listings SET source_listing_id = $1, url = $2, updated_at = NOW() WHERE id = $3`,
+                [info.itemId, info.url, listingId]
+              );
+            } catch (e) {
+              if (e.code === '23505') { logger.debug(`[PhoneOrch] Pass 2.5: dup item ${info.itemId} already on another listing — skipping ${listingId}`); continue; }
+              throw e;
+            }
           }
           results.passes.yad2_id_resolve.resolved++;
         }
