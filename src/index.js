@@ -186,6 +186,7 @@ function loadAllRoutes() {
     { path: '/api/ai-usage',           file: 'routes/aiUsageRoutes.js' },
     { path: '/api/aeo',                file: 'routes/aeoRoutes.js' },
     { path: '/api/referrals',          file: 'routes/referralRoutes.js' },
+    { path: '/api/fbads',              file: 'routes/fbAdsRoutes.js' },
     { path: '/api/publish',            file: 'routes/publishRoutes.js' },
     { path: '/api/reminders',          file: 'routes/reminderRoutes.js' },
     { path: '/api/settings',           file: 'routes/settingsRoutes.js' },
