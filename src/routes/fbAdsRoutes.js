@@ -22,9 +22,10 @@ const { logger } = require('../services/logger');
 const APIFY_BASE = 'https://api.apify.com/v2';
 const FBADS_ACTOR = process.env.APIFY_FBADS_ACTOR || 'curious_coder~facebook-ads-library-scraper';
 const TERMS = (process.env.FBADS_TERMS || [
-  'pinui binui', 'פינוי בינוי', 'israel real estate investment', 'buy apartment israel', 'urban renewal israel'
+  'pinui binui', 'israel real estate', 'buy apartment israel', 'israeli real estate investment', 'aliyah real estate'
 ].join('|')).split('|').map(s => s.trim()).filter(Boolean);
-const COUNTRY = process.env.FBADS_COUNTRY || 'IL';
+// Where the ads are shown — target diaspora markets, not IL (avoids Israeli political noise).
+const COUNTRIES = (process.env.FBADS_COUNTRIES || 'US|GB|CA|AU').split('|').map(s => s.trim()).filter(Boolean);
 const MAX_ADS = Number(process.env.FBADS_MAX || 50);
 
 let _ready = null;
@@ -50,10 +51,11 @@ async function startRun() {
   const token = process.env.APIFY_API_TOKEN;
   if (!token) throw new Error('APIFY_API_TOKEN not set');
   await ensureTables();
-  // This actor expects FB Ad Library search URLs. Build one per term.
-  const urls = TERMS.map(t => ({
-    url: `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=${encodeURIComponent(COUNTRY)}&q=${encodeURIComponent(t)}&search_type=keyword_unordered&media_type=all`
-  }));
+  // This actor expects FB Ad Library search URLs. Build one per term x diaspora country.
+  const urls = [];
+  for (const c of COUNTRIES) for (const t of TERMS) urls.push({
+    url: `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=${encodeURIComponent(c)}&q=${encodeURIComponent(t)}&search_type=keyword_unordered&media_type=all`
+  });
   const input = { urls, count: MAX_ADS, "scrapePageAds.activeStatus": "all", "scrapeAdDetails": true };
   const r = await axios.post(`${APIFY_BASE}/acts/${FBADS_ACTOR}/runs`, input, {
     headers: { Authorization: `Bearer ${token}` }, timeout: 30000, validateStatus: () => true
