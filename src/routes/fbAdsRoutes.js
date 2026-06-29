@@ -50,15 +50,11 @@ async function startRun() {
   const token = process.env.APIFY_API_TOKEN;
   if (!token) throw new Error('APIFY_API_TOKEN not set');
   await ensureTables();
-  // Generic input covering common FB-Ad-Library actor schemas (searchTerms / count / country).
-  const input = {
-    searchTerms: TERMS,
-    count: MAX_ADS,
-    'scrapePageAds.activeStatus': 'all',
-    country: COUNTRY,
-    countryCode: COUNTRY,
-    adActiveStatus: 'all'
-  };
+  // This actor expects FB Ad Library search URLs. Build one per term.
+  const urls = TERMS.map(t => ({
+    url: `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=${encodeURIComponent(COUNTRY)}&q=${encodeURIComponent(t)}&search_type=keyword_unordered&media_type=all`
+  }));
+  const input = { urls, count: MAX_ADS, "scrapePageAds.activeStatus": "all", "scrapeAdDetails": true };
   const r = await axios.post(`${APIFY_BASE}/acts/${FBADS_ACTOR}/runs`, input, {
     headers: { Authorization: `Bearer ${token}` }, timeout: 30000, validateStatus: () => true
   });
