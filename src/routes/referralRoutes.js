@@ -142,6 +142,19 @@ router.get('/results', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+router.get('/export', async (req, res) => {
+  try {
+    await ensureTables();
+    const { rows } = await pool.query(`SELECT name, role, city, phone, email, website, address, maps_url, rating, reviews, outreach_status FROM referral_partners ORDER BY city, role, name`);
+    const cols = ['name','role','city','phone','email','website','address','maps_url','rating','reviews','outreach_status'];
+    const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const csv = [cols.join(',')].concat(rows.map(r => cols.map(c => esc(r[c])).join(','))).join('\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="referral_partners.csv"');
+    res.send(csv);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 module.exports = router;
 module.exports.startRun = startRun;
 module.exports.ingestFinished = ingestFinished;
