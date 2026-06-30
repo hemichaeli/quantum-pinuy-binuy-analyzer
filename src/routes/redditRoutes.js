@@ -42,8 +42,8 @@ async function startRun() {
   const token = process.env.APIFY_API_TOKEN;
   if (!token) throw new Error('APIFY_API_TOKEN not set');
   await ensureTables();
-  const startUrls = TERMS.map(t => ({ url: `https://www.reddit.com/search/?q=${encodeURIComponent(t)}&sort=relevance&t=year` }));
-  const input = { startUrls, searches: TERMS, type: 'posts', sort: 'relevance', maxItems: MAX_ITEMS, maxPostCount: MAX_ITEMS, skipComments: true };
+  // trudax/reddit-scraper-lite documented schema: searches[] + type + sort + time + maxItems.
+  const input = { searches: TERMS, type: 'posts', sort: 'RELEVANCE', time: 'year', maxItems: MAX_ITEMS, skipComments: true };
   const r = await axios.post(`${APIFY_BASE}/acts/${REDDIT_ACTOR}/runs`, input, {
     headers: { Authorization: `Bearer ${token}` }, timeout: 30000, validateStatus: () => true });
   if (r.status < 200 || r.status >= 300 || !r.data?.data?.id) throw new Error(`actor start failed status=${r.status} (actor=${REDDIT_ACTOR}): ${JSON.stringify(r.data?.error || r.data).slice(0,200)}`);
