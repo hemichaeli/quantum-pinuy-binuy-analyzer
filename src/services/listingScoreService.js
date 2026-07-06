@@ -23,7 +23,11 @@ const { logger } = require('./logger');
 const ELIGIBLE_STATUSES = ['declared', 'deposited', 'approved', 'permit', 'pre_deposit', 'planning'];
 const LOW_CONF_STATUSES = ['pre_deposit', 'planning'];
 
-const MIN_COMPS = 3;
+const MIN_COMPS = 4;
+// Comp-outlier trim: within a compound, drop comps whose price/sqm is more than
+// +/-35% from the compound's own median. Removes new-build/luxury/garbage comps that
+// otherwise inflate P_fair and make ordinary old units look 60%+ "underpriced".
+const COMP_TRIM = 0.35;
 // Realistic Israeli apartment price/sqm band. Drops garbage rows (rent, per-meter,
 // mis-scraped) on both ends. Genuine underpriced old units still sit well inside this.
 const PSM_FLOOR = 7000;
@@ -57,6 +61,10 @@ function buildCtes(single) {
         AND rooms IS NOT NULL AND area_sqm > 0
         AND price_per_sqm BETWEEN ${PSM_FLOOR} AND ${PSM_CEIL}
     ),
+    comp_center AS (
+      SELECT complex_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY psm) AS med
+      FROM comps GROUP BY complex_id
+    ),
     targets AS (
       SELECT l.id, l.complex_id, l.rooms, l.area_sqm, l.asking_price,
              c.status,
@@ -75,11 +83,13 @@ function buildCtes(single) {
              COUNT(cp.psm) AS comps_used,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY cp.psm) AS p_fair_psm
       FROM targets t
+      JOIN comp_center cc ON cc.complex_id = t.complex_id
       LEFT JOIN comps cp
         ON cp.complex_id = t.complex_id
        AND (cp.lid IS NULL OR cp.lid <> t.id)
        AND cp.rooms BETWEEN t.rooms - 0.5 AND t.rooms + 0.5
        AND cp.area_sqm BETWEEN t.area_sqm * 0.85 AND t.area_sqm * 1.15
+       AND cp.psm BETWEEN cc.med * (1 - ${COMP_TRIM}) AND cc.med * (1 + ${COMP_TRIM})
       GROUP BY t.id, t.complex_id, t.rooms, t.area_sqm, t.asking_price, t.status, t.p_ask_psm
     )`;
 }
@@ -98,8 +108,8 @@ const CONFIDENCE_SQL = `
 // same-compound comparable median. Outside this, it is a data error or a non-comparable
 // unit (garbage price, parking/storage, old-vs-new mix), NOT a real deal. Tunable.
 // LOW=0.6 caps the max believable discount at ~67%; HIGH=1.3 keeps small premiums.
-const COMP_LOW = 0.6;
-const COMP_HIGH = 1.3;
+const COMP_LOW = 0.74;
+const COMP_HIGH = 1.2;
 
 // Phase 1: opportunity = B (discount_pct). future_uplift_pct stays NULL.
 function buildUpdateSql(single) {
@@ -204,6 +214,7 @@ async function getTopListings(limit = 20) {
       AND c.status = ANY($1)
       AND l.comps_used >= $2
       AND l.opportunity_pct IS NOT NULL
+      AND l.confidence >= 0.5
     ORDER BY l.opportunity_pct DESC NULLS LAST, l.confidence DESC NULLS LAST
     LIMIT $3
   `, [ELIGIBLE_STATUSES, MIN_COMPS, lim]);
