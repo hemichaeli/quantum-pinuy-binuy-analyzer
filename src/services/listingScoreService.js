@@ -118,6 +118,14 @@ const COMP_HIGH = 1.2;
 // TODO: replace with real new-build transaction comps per area (pipeline task).
 const NEWBUILD_FACTOR = Number(process.env.NEWBUILD_FACTOR) || 1.35;
 const DEFAULT_UPLIFT = 25; // % floor-area gain on the replacement unit, if not set per-complex
+// Credibility clamp for the future-uplift term A. The v1 newbuild_psm proxy is the CITY
+// average * factor, which overshoots badly for compounds whose own stock sits well below
+// their city average (produced A ~145%, not believable). Bound the effective new-build
+// psm to [p_fair, p_fair * NEWBUILD_PREMIUM_CAP] so A stays in a credible gross band:
+//   A_min = (1 * (1+uplift) - 1)              -> pure floor-area gain (e.g. 25%)
+//   A_max = (CAP * (1+uplift) - 1)            -> e.g. 1.4 * 1.25 - 1 = 75%
+// A real new-build transaction comp (pipeline) can widen or remove this cap later.
+const NEWBUILD_PREMIUM_CAP = Number(process.env.NEWBUILD_PREMIUM_CAP) || 1.4;
 
 // Phase 2: opportunity = A + B. A (future_uplift, GROSS) from the newbuild valuation:
 // V_end/area = newbuild_psm * (1 + uplift/100); A = (V_end - P_fair) / P_fair * 100.
@@ -125,8 +133,12 @@ const DEFAULT_UPLIFT = 25; // % floor-area gain on the replacement unit, if not 
 function buildUpdateSql(single) {
   const discountExpr = `((s.p_fair_psm - s.p_ask_psm) / s.p_ask_psm * 100)::numeric`;
   const upl = `(1 + COALESCE(s.apartment_area_uplift_pct, ${DEFAULT_UPLIFT}) / 100.0)`;
-  const upliftExpr = `((s.newbuild_psm * ${upl} - s.p_fair_psm) / s.p_fair_psm * 100)::numeric`;
-  const vEndIls = `s.newbuild_psm * s.area_sqm * ${upl}`;
+  // Effective new-build psm, clamped to a believable band around the compound's own
+  // fair value (never below fair, never above fair * CAP). Keeps A credible while the
+  // v1 city-average proxy is noisy.
+  const effNb = `LEAST(GREATEST(s.newbuild_psm, s.p_fair_psm), s.p_fair_psm * ${NEWBUILD_PREMIUM_CAP})`;
+  const upliftExpr = `((${effNb} * ${upl} - s.p_fair_psm) / s.p_fair_psm * 100)::numeric`;
+  const vEndIls = `${effNb} * s.area_sqm * ${upl}`;
   const hasA = `s.newbuild_psm IS NOT NULL AND s.newbuild_psm > 0`;
   const scorable = `s.comps_used >= ${MIN_COMPS} AND s.p_fair_psm IS NOT NULL AND s.p_ask_psm > 0`
     + ` AND s.p_ask_psm >= ${COMP_LOW} * s.p_fair_psm AND s.p_ask_psm <= ${COMP_HIGH} * s.p_fair_psm`;
