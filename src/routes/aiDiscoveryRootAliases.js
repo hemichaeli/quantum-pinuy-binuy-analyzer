@@ -25,6 +25,7 @@ const proxyTo = (subPath) => (req, res, next) => {
 router.get('/llms.txt',              proxyTo('/llms.txt'));
 router.get('/feed.atom',             proxyTo('/feed.atom'));
 router.get('/opportunities.json',    proxyTo('/opportunities.json'));
+router.get('/listings.json',         proxyTo('/listings.json'));
 router.get('/changelog.json',        proxyTo('/changelog.json'));
 router.get('/.well-known/agents.json',  proxyTo('/agents.json'));
 router.get('/.well-known/openapi.json', proxyTo('/openapi.json'));

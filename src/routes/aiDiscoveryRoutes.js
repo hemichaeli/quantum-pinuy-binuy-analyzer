@@ -23,6 +23,7 @@ const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
 const pool = require('../db/pool');
+const listingScoreService = require('../services/listingScoreService');
 
 const VERSION = '1.0.0';
 const SITE_URL = process.env.QUANTUM_SITE_URL || 'https://u-r-quantum.com';
@@ -602,6 +603,67 @@ router.get('/opportunities.json', async (req, res) => {
     const [top, agg] = await Promise.all([fetchTopMispriced(limit), fetchGlobalAggregates()]);
     const generatedAt = new Date().toISOString();
     const payload = buildOpportunitiesJson(top, agg, generatedAt);
+    const body = JSON.stringify(payload, null, 2);
+    const etag = hashContent(body);
+    if (maybe304(req, res, etag)) return;
+    setDiscoveryHeaders(res, etag, new Date(agg.last_data_update || Date.now()), 'application/json; charset=utf-8');
+    res.send(body);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Listing-level opportunity feed (the metric the founder locked): each row is a
+// SPECIFIC for-sale apartment whose price does not yet reflect that a pinui-binui
+// project exists in its compound and how far it has progressed.
+//   B = discount vs project-aware comparables in the SAME compound (now)
+//   A = gross value uplift at project completion (new larger unit at new-build psm)
+//   opportunity_pct = A + B
+// Compound name is masked and the direct listing URL is withheld (lead-magnet teaser).
+function maskCompound(name) {
+  if (!name) return null;
+  const first = String(name).trim().split(/\s+/)[0];
+  return first ? `${first} …` : null;
+}
+
+router.get('/listings.json', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const [rows, agg] = await Promise.all([
+      listingScoreService.getTopListings(limit),
+      fetchGlobalAggregates(),
+    ]);
+    const generatedAt = new Date().toISOString();
+    const num = (v) => (v === null || v === undefined ? null : Number(v));
+    const payload = {
+      generated_at: generatedAt,
+      data_as_of: agg.last_data_update,
+      license: 'CC-BY-4.0',
+      publisher: { name: 'QUANTUM', url: SITE_URL },
+      methodology: {
+        description: 'Listing-level opportunity = A + B. B = discount of the asking price versus project-aware comparable listings and Land Registry (nadlan) transactions in the SAME compound. A = gross value uplift at pinui-binui completion (the replacement unit is larger and priced at the local new-build price per sqm), measured from fair value so it does not double-count B.',
+        formula: 'opportunity_pct = future_uplift_pct (A) + discount_pct (B)',
+        gross_note: 'A is gross (undiscounted) future uplift, not a present value.',
+      },
+      count: rows.length,
+      opportunities: rows.map((r, i) => ({
+        rank: i + 1,
+        city: r.city,
+        compound: maskCompound(r.compound_name),
+        statutory_stage: r.status,
+        statutory_stage_he: STATUS_HE[r.status] || r.status,
+        rooms: num(r.rooms),
+        area_sqm: num(r.area_sqm),
+        asking_price: num(r.asking_price),
+        scoring: {
+          discount_pct: num(r.discount_pct),            // B: below comparables now
+          future_uplift_pct: num(r.future_uplift_pct),  // A: gross uplift at completion
+          opportunity_pct: num(r.opportunity_pct),      // A + B
+          confidence: num(r.confidence),
+          comps_used: num(r.comps_used),
+        },
+      })),
+    };
     const body = JSON.stringify(payload, null, 2);
     const etag = hashContent(body);
     if (maybe304(req, res, etag)) return;
