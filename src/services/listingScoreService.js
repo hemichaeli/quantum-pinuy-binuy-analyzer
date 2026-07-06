@@ -67,7 +67,7 @@ function buildCtes(single) {
     ),
     targets AS (
       SELECT l.id, l.complex_id, l.rooms, l.area_sqm, l.asking_price,
-             c.status,
+             c.status, c.newbuild_psm, c.apartment_area_uplift_pct,
              ${LISTING_PSM_L} AS p_ask_psm
       FROM listings l
       JOIN complexes c ON c.id = l.complex_id
@@ -80,6 +80,7 @@ function buildCtes(single) {
     ),
     scored AS (
       SELECT t.id, t.complex_id, t.rooms, t.area_sqm, t.asking_price, t.status, t.p_ask_psm,
+             t.newbuild_psm, t.apartment_area_uplift_pct,
              COUNT(cp.psm) AS comps_used,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY cp.psm) AS p_fair_psm
       FROM targets t
@@ -90,7 +91,8 @@ function buildCtes(single) {
        AND cp.rooms BETWEEN t.rooms - 0.5 AND t.rooms + 0.5
        AND cp.area_sqm BETWEEN t.area_sqm * 0.85 AND t.area_sqm * 1.15
        AND cp.psm BETWEEN cc.med * (1 - ${COMP_TRIM}) AND cc.med * (1 + ${COMP_TRIM})
-      GROUP BY t.id, t.complex_id, t.rooms, t.area_sqm, t.asking_price, t.status, t.p_ask_psm
+      GROUP BY t.id, t.complex_id, t.rooms, t.area_sqm, t.asking_price, t.status, t.p_ask_psm,
+               t.newbuild_psm, t.apartment_area_uplift_pct
     )`;
 }
 
@@ -111,9 +113,21 @@ const CONFIDENCE_SQL = `
 const COMP_LOW = 0.74;
 const COMP_HIGH = 1.2;
 
-// Phase 1: opportunity = B (discount_pct). future_uplift_pct stays NULL.
+// Phase 2 (A, future uplift): rough v1 proxy for the delivered new-build price/sqm.
+// newbuild_psm = city_avg_price_sqm * NEWBUILD_FACTOR. Tunable via env.
+// TODO: replace with real new-build transaction comps per area (pipeline task).
+const NEWBUILD_FACTOR = Number(process.env.NEWBUILD_FACTOR) || 1.35;
+const DEFAULT_UPLIFT = 25; // % floor-area gain on the replacement unit, if not set per-complex
+
+// Phase 2: opportunity = A + B. A (future_uplift, GROSS) from the newbuild valuation:
+// V_end/area = newbuild_psm * (1 + uplift/100); A = (V_end - P_fair) / P_fair * 100.
+// When newbuild_psm is missing, A is null and opportunity falls back to B alone.
 function buildUpdateSql(single) {
   const discountExpr = `((s.p_fair_psm - s.p_ask_psm) / s.p_ask_psm * 100)::numeric`;
+  const upl = `(1 + COALESCE(s.apartment_area_uplift_pct, ${DEFAULT_UPLIFT}) / 100.0)`;
+  const upliftExpr = `((s.newbuild_psm * ${upl} - s.p_fair_psm) / s.p_fair_psm * 100)::numeric`;
+  const vEndIls = `s.newbuild_psm * s.area_sqm * ${upl}`;
+  const hasA = `s.newbuild_psm IS NOT NULL AND s.newbuild_psm > 0`;
   const scorable = `s.comps_used >= ${MIN_COMPS} AND s.p_fair_psm IS NOT NULL AND s.p_ask_psm > 0`
     + ` AND s.p_ask_psm >= ${COMP_LOW} * s.p_fair_psm AND s.p_ask_psm <= ${COMP_HIGH} * s.p_fair_psm`;
   return `
@@ -122,10 +136,11 @@ function buildUpdateSql(single) {
       p_fair_psm        = ROUND(s.p_fair_psm::numeric),
       comps_used        = s.comps_used,
       discount_pct      = CASE WHEN ${scorable} THEN ROUND(${discountExpr}, 2) END,
-      future_uplift_pct = NULL,
-      opportunity_pct   = CASE WHEN ${scorable} THEN ROUND(${discountExpr}, 2) END,
+      future_uplift_pct = CASE WHEN ${scorable} AND ${hasA} THEN ROUND(${upliftExpr}, 2) END,
+      opportunity_pct   = CASE WHEN ${scorable}
+                               THEN ROUND(${discountExpr} + CASE WHEN ${hasA} THEN ${upliftExpr} ELSE 0 END, 2) END,
       opportunity_ils   = CASE WHEN ${scorable}
-                               THEN ROUND((s.p_fair_psm * s.area_sqm - s.asking_price)::numeric) END,
+                               THEN ROUND((CASE WHEN ${hasA} THEN ${vEndIls} ELSE s.p_fair_psm * s.area_sqm END - s.asking_price)::numeric) END,
       confidence        = ${CONFIDENCE_SQL},
       scored_at         = NOW()
     FROM scored s
@@ -161,6 +176,17 @@ async function getCoverage() {
   return out;
 }
 
+// Phase 2 input: fill complexes.newbuild_psm from the city average * NEWBUILD_FACTOR
+// wherever it is missing. Rough v1 proxy for the delivered new-build price/sqm; a real
+// new-build transaction comp replaces it later. Idempotent (only fills NULLs).
+async function populateNewbuildPsm() {
+  const res = await pool.query(`
+    UPDATE complexes SET newbuild_psm = ROUND((city_avg_price_sqm * ${NEWBUILD_FACTOR})::numeric)
+    WHERE newbuild_psm IS NULL AND city_avg_price_sqm IS NOT NULL AND city_avg_price_sqm > 0`);
+  if (res.rowCount) logger.info(`[ListingScore] populated newbuild_psm for ${res.rowCount} complexes`);
+  return res.rowCount;
+}
+
 // Rescore every eligible listing. Returns { updated, ms, coverage }.
 async function scoreAllListings() {
   const t0 = Date.now();
@@ -171,6 +197,7 @@ async function scoreAllListings() {
       p_fair_psm = NULL, discount_pct = NULL, future_uplift_pct = NULL,
       opportunity_pct = NULL, opportunity_ils = NULL, confidence = NULL, comps_used = NULL
     WHERE opportunity_pct IS NOT NULL OR comps_used IS NOT NULL OR p_fair_psm IS NOT NULL`);
+  await populateNewbuildPsm();
   const res = await pool.query(buildUpdateSql(false), [ELIGIBLE_STATUSES, LOW_CONF_STATUSES]);
   const coverage = await getCoverage();
   const ms = Date.now() - t0;
@@ -226,6 +253,7 @@ module.exports = {
   scoreListing,
   getTopListings,
   getCoverage,
+  populateNewbuildPsm,
   ELIGIBLE_STATUSES,
   MIN_COMPS,
 };
