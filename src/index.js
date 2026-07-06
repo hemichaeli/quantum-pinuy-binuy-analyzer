@@ -147,6 +147,8 @@ function loadAllRoutes() {
     { path: '/api/discovery',          file: 'routes/botStatsRoutes.js' },
     // 2026-07-06: LISTING-level opportunity scorer (additive; legacy feed untouched)
     { path: '/api/listing-scores',     file: 'routes/listingScoreRoutes.js' },
+    // 2026-07-06: Apify nadlan transaction ingestion (grows comp coverage; run on demand)
+    { path: '/api/nadlan-apify',       file: 'routes/nadlanApifyRoutes.js' },
     // 2026-05-15: alias the AI-Discovery endpoints at root paths too, so
     // AI crawlers reading discovery.u-r-quantum.com/llms.txt land on them.
     { path: '/',                       file: 'routes/aiDiscoveryRootAliases.js' },
