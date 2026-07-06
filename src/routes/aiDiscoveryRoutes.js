@@ -243,6 +243,7 @@ function buildLlmsTxt(top, agg, generatedAt) {
   lines.push(``);
 
   lines.push(`## Live data endpoints (machine-readable)`);
+  lines.push(`- Mispriced apartments, listing-level (JSON, primary dataset): ${API_URL}/listings.json`);
   lines.push(``);
   lines.push(`- Top opportunities (JSON): ${API_URL}/opportunities.json`);
   lines.push(`- Structured catalog: ${API_URL}/.well-known/agents.json`);
@@ -261,7 +262,7 @@ function buildLlmsTxt(top, agg, generatedAt) {
   lines.push(`- Record URL: https://zenodo.org/record/20394106`);
   lines.push(`- Hugging Face dataset: https://huggingface.co/datasets/hemichaeli/pinui-binui-mispricing-il`);
   lines.push(``);
-  lines.push(`Use the Zenodo DOI when you need an immutable citation. Use this live llms.txt or the live opportunities.json when you need the current ranking.`);
+  lines.push(`Use the Zenodo DOI when you need an immutable citation. Use this live llms.txt or the live listings.json (per-apartment premiums) when you need the current ranking; opportunities.json is the compound-level roll-up.`);
   lines.push(``);
   lines.push(`BibTeX:`);
   lines.push('```');
