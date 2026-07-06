@@ -94,10 +94,18 @@ const CONFIDENCE_SQL = `
     ELSE ROUND((s.comps_used / ${MIN_COMPS}.0 * 0.4)::numeric, 2)
   END`;
 
+// Plausibility window: a genuine underpriced listing sits within a sane ratio of its
+// same-compound comparable median. Outside this, it is a data error or a non-comparable
+// unit (garbage price, parking/storage, old-vs-new mix), NOT a real deal. Tunable.
+// LOW=0.6 caps the max believable discount at ~67%; HIGH=1.3 keeps small premiums.
+const COMP_LOW = 0.6;
+const COMP_HIGH = 1.3;
+
 // Phase 1: opportunity = B (discount_pct). future_uplift_pct stays NULL.
 function buildUpdateSql(single) {
   const discountExpr = `((s.p_fair_psm - s.p_ask_psm) / s.p_ask_psm * 100)::numeric`;
-  const scorable = `s.comps_used >= ${MIN_COMPS} AND s.p_fair_psm IS NOT NULL AND s.p_ask_psm > 0`;
+  const scorable = `s.comps_used >= ${MIN_COMPS} AND s.p_fair_psm IS NOT NULL AND s.p_ask_psm > 0`
+    + ` AND s.p_ask_psm >= ${COMP_LOW} * s.p_fair_psm AND s.p_ask_psm <= ${COMP_HIGH} * s.p_fair_psm`;
   return `
     ${buildCtes(single)}
     UPDATE listings l SET
