@@ -23,6 +23,19 @@ const ACTOR = 'swerve~nadlan-deals';
 const API = 'https://api.apify.com/v2';
 const SOURCE = 'apify_nadlan';
 const PSM_MIN = 3000, PSM_MAX = 250000;
+// dealDateRange valid enum: 'all' | '3' | '6' | '12' | '60' (months). '60' covers the
+// scorer's 24-month comp window (the scorer trims by date anyway).
+const DEAL_RANGE_DEFAULT = '60';
+
+// The actor's `cities` field is an enum of 81 supported cities (exact Hebrew spelling).
+// For any other city, `customCities` accepts free-text Hebrew and geocodes it.
+const CITY_ENUM = new Set(['ירושלים','תל אביב -יפו','חיפה','ראשון לציון','פתח תקווה','אשדוד','באר שבע','נתניה','חולון','בני ברק','רמת גן','בת ים','רחובות','אשקלון','בית שמש','כפר סבא','הרצלייה','מודיעין-מכבים-רעות','חדרה','נצרת','לוד','רעננה','רמלה','מודיעין עילית','רהט','גבעתיים','קריית אתא','נהרייה','הוד השרון','אום אל-פחם','קריית גת','אילת','עכו','ביתר עילית','נס ציונה','כרמיאל','רמת השרון','עפולה','אלעד','טבריה','ראש העין','נצרת עילית','טייבה','קריית מוצקין','שפרעם','קריית ים','קריית ביאליק','מעלה אדומים','יבנה','פרדס חנה-כרכור','קריית אונו','אור יהודה','דימונה','צפת','טמרה','נתיבות','יהוד-מונוסון',"סח'נין",'באקה אל-גרביה','גדרה','אופקים','מגדל העמק','מבשרת ציון','ערד','גבעת שמואל','טירה','ערערה','נשר','קריית שמונה','עראבה','שדרות','זכרון יעקב','קריית מלאכי','גן יבנה','מעלות-תרשיחא','מגאר','כפר קאסם','יקנעם עילית','קלנסווה','כפר יונה','כפר כנא']);
+const CITY_ALIAS = { 'תל אביב': 'תל אביב -יפו', 'תל אביב יפו': 'תל אביב -יפו', 'תל אביב-יפו': 'תל אביב -יפו', 'הרצליה': 'הרצלייה', 'נהריה': 'נהרייה', 'יהוד': 'יהוד-מונוסון' };
+function cityInput(city) {
+  const c = String(city || '').trim();
+  const mapped = CITY_ALIAS[c] || c;
+  return CITY_ENUM.has(mapped) ? { cities: [mapped] } : { customCities: [c] };
+}
 
 const num = (v) => {
   if (v === null || v === undefined || v === '') return null;
@@ -46,14 +59,21 @@ function normalizeDeal(raw) {
   const house = pick(raw, ['houseNumber', 'house_number', 'ASSETHOUSENUMBER', 'buildingNumber', 'mispar']);
   const address = pick(raw, ['address', 'fullAddress', 'displayAddress', 'ktovet'])
     || [street, house].filter(Boolean).join(' ').trim() || null;
-  const city = pick(raw, ['city', 'cityName', 'ASSETCITYNAME', 'settlement', 'yishuv']);
-  const neighborhood = pick(raw, ['neighborhood', 'neighbourhood', 'quarter', 'shchuna']);
+  const city = pick(raw, ['cityName', 'city', 'ASSETCITYNAME', 'settlement', 'yishuv']);
+  const neighborhood = pick(raw, ['neighborhoodName', 'neighborhood', 'neighbourhood', 'quarter', 'shchuna']);
+  const gush = pick(raw, ['gush', 'block']);
+  const helka = pick(raw, ['helka', 'parcel']);
+  const lat = num(pick(raw, ['lat', 'latitude']));
+  const lng = num(pick(raw, ['lng', 'lon', 'longitude']));
   let ppsm = num(pick(raw, ['pricePerSqm', 'price_per_sqm', 'pricePerSquareMeter', 'mchirLemeter']));
   if (!ppsm && price && area > 0) ppsm = Math.round(price / area);
-  const sid = pick(raw, ['id', 'dealId', 'objectId', 'KEYVALUE', 'OBJECTID'])
+  const sid = pick(raw, ['assetId', 'id', 'dealId', 'objectId', 'KEYVALUE', 'OBJECTID'])
     || (date && price ? `${date}-${price}-${area || ''}` : null);
+  // The actor's `address` is frequently null; fall back to the cadastral parcel so the row is identifiable.
+  const addr = address || (gush && helka ? `gush ${gush} helka ${helka}` : null);
   return { transaction_date: date || null, price, area_sqm: area, rooms, floor, price_per_sqm: ppsm,
-           address, street: street || null, house: house || null, city: city || null, neighborhood, source_id: sid };
+           address: addr, street: street || null, house: house || null, city: city || null,
+           neighborhood: neighborhood || null, gush: gush || null, helka: helka || null, lat, lng, source_id: sid };
 }
 
 // ---------- Apify run (async start + poll, so big cities do not hit HTTP timeouts) ----------
@@ -80,7 +100,7 @@ async function runActor(input, { waitMs = 480000 } = {}) {
 
 // First-run helper: fetch a handful and report the raw keys + a normalized sample.
 async function probeShape(city, maxItems = 8) {
-  const raw = await runActor({ cities: [city], dealDateRange: '1', maxItems });
+  const raw = await runActor({ ...cityInput(city), dealDateRange: '12', maxItems });
   const sample = raw[0] || null;
   return {
     fetched: raw.length,
@@ -151,8 +171,8 @@ async function storeDeal(complexId, d) {
 }
 
 // Ingest all deals for a city: run actor -> normalize -> link -> store.
-async function ingestCity(city, { dealDateRange = '2', maxItems = 800, rooms } = {}) {
-  const input = { cities: [city], dealDateRange, maxItems };
+async function ingestCity(city, { dealDateRange = DEAL_RANGE_DEFAULT, maxItems = 800, rooms } = {}) {
+  const input = { ...cityInput(city), dealDateRange, maxItems };
   if (rooms) input.rooms = rooms;
   const raw = await runActor(input);
   const byStreet = await loadCompoundIndex(city);
