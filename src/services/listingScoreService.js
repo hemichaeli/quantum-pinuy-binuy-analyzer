@@ -146,6 +146,13 @@ async function getCoverage() {
 // Rescore every eligible listing. Returns { updated, ms, coverage }.
 async function scoreAllListings() {
   const t0 = Date.now();
+  // Reset stale scores first, so rows that no longer qualify (garbage data filtered
+  // out of the target set) do not keep a stale opportunity_pct in the feed.
+  await pool.query(`
+    UPDATE listings SET
+      p_fair_psm = NULL, discount_pct = NULL, future_uplift_pct = NULL,
+      opportunity_pct = NULL, opportunity_ils = NULL, confidence = NULL, comps_used = NULL
+    WHERE opportunity_pct IS NOT NULL OR comps_used IS NOT NULL OR p_fair_psm IS NOT NULL`);
   const res = await pool.query(buildUpdateSql(false), [ELIGIBLE_STATUSES, LOW_CONF_STATUSES]);
   const coverage = await getCoverage();
   const ms = Date.now() - t0;
