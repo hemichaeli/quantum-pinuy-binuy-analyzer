@@ -24,8 +24,12 @@ const ELIGIBLE_STATUSES = ['declared', 'deposited', 'approved', 'permit', 'pre_d
 const LOW_CONF_STATUSES = ['pre_deposit', 'planning'];
 
 const MIN_COMPS = 3;
-const PSM_FLOOR = 1000;      // drop obviously broken price/sqm rows
-const PSM_CEIL = 300000;
+// Realistic Israeli apartment price/sqm band. Drops garbage rows (rent, per-meter,
+// mis-scraped) on both ends. Genuine underpriced old units still sit well inside this.
+const PSM_FLOOR = 7000;
+const PSM_CEIL = 120000;
+const ASK_FLOOR = 300000;    // a real apartment is not 3,900 or 12,700 shekels
+const ASK_CEIL = 30000000;
 
 // price/sqm expression for the listings table (unaliased, and l.-aliased variants)
 const LISTING_PSM = `COALESCE(price_per_sqm, CASE WHEN area_sqm > 0 THEN asking_price / area_sqm END)`;
@@ -62,7 +66,8 @@ function buildCtes(single) {
       WHERE l.is_active = TRUE
         AND c.status = ANY($1)
         AND l.rooms IS NOT NULL AND l.area_sqm > 0
-        AND ${LISTING_PSM_L} > 0
+        AND l.asking_price BETWEEN ${ASK_FLOOR} AND ${ASK_CEIL}
+        AND ${LISTING_PSM_L} BETWEEN ${PSM_FLOOR} AND ${PSM_CEIL}
         ${single ? 'AND l.id = $3' : ''}
     ),
     scored AS (
