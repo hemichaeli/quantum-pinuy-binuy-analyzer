@@ -65,6 +65,9 @@ function normalizeDeal(raw) {
   const helka = pick(raw, ['helka', 'parcel']);
   const lat = num(pick(raw, ['lat', 'latitude']));
   const lng = num(pick(raw, ['lng', 'lon', 'longitude']));
+  // First-hand = new-build first sale (the replacement units). Not a comp for old-stock
+  // fair value; exclude so it does not inflate P_fair.
+  const firstHand = raw.isFirstHand === true || raw.isFirstHand === 'true' || raw.isFirstHand === 1;
   let ppsm = num(pick(raw, ['pricePerSqm', 'price_per_sqm', 'pricePerSquareMeter', 'mchirLemeter']));
   if (!ppsm && price && area > 0) ppsm = Math.round(price / area);
   const sid = pick(raw, ['assetId', 'id', 'dealId', 'objectId', 'KEYVALUE', 'OBJECTID'])
@@ -73,7 +76,8 @@ function normalizeDeal(raw) {
   const addr = address || (gush && helka ? `gush ${gush} helka ${helka}` : null);
   return { transaction_date: date || null, price, area_sqm: area, rooms, floor, price_per_sqm: ppsm,
            address: addr, street: street || null, house: house || null, city: city || null,
-           neighborhood: neighborhood || null, gush: gush || null, helka: helka || null, lat, lng, source_id: sid };
+           neighborhood: neighborhood || null, gush: gush || null, helka: helka || null, lat, lng,
+           is_first_hand: firstHand, source_id: sid };
 }
 
 // ---------- Apify run (async start + poll, so big cities do not hit HTTP timeouts) ----------
@@ -110,45 +114,73 @@ async function probeShape(city, maxItems = 8) {
   };
 }
 
-// ---------- Address linking: deal -> compound in the same city ----------
-const normStreet = (s) => (s || '')
-  .replace(/^(רחוב|רח['׳]?|שדרות|שד['׳]?|שדרה)\s+/u, '')
-  .replace(/["'׳״.,]/g, '')
-  .replace(/\d+.*$/, '')      // drop house number and anything after
-  .replace(/\s+/g, ' ')
-  .trim();
-const houseOf = (s) => { const m = String(s || '').match(/(\d+)/); return m ? m[1] : null; };
+// ---------- Geocoding + coordinate-proximity linking ----------
+// The actor's deals carry lat/lng + gush/helka but no street address, and compounds carry
+// only street addresses. So we geocode each compound's address to a point (once), then
+// attach a deal to the nearest compound within a tight radius.
+const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
 
-// Load an index of compounds for a city: street -> [{ id, houses:Set }]
-async function loadCompoundIndex(city) {
-  const { rows } = await pool.query(
-    `SELECT id, addresses FROM complexes WHERE city = $1 AND addresses IS NOT NULL AND addresses <> ''`, [city]);
-  const byStreet = new Map();
-  for (const r of rows) {
-    for (const part of String(r.addresses).split(/[,;]/)) {
-      const st = normStreet(part);
-      if (!st || st.length < 2) continue;
-      const h = houseOf(part);
-      if (!byStreet.has(st)) byStreet.set(st, new Map()); // street -> (complexId -> houses Set)
-      const perComplex = byStreet.get(st);
-      if (!perComplex.has(r.id)) perComplex.set(r.id, new Set());
-      if (h) perComplex.get(r.id).add(h);
-    }
-  }
-  return byStreet;
+function haversineM(aLat, aLng, bLat, bLng) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-// Resolve a deal to a single complex_id, or null if none / ambiguous.
-function linkDeal(deal, byStreet) {
-  const st = normStreet(deal.street || deal.address);
-  if (!st) return null;
-  const perComplex = byStreet.get(st);
-  if (!perComplex) return null;
-  const ids = [...perComplex.keys()];
-  if (ids.length === 1) return ids[0];                 // one compound on this street -> assign
-  const h = houseOf(deal.house || deal.address);       // multiple compounds share the street
-  if (h) { for (const id of ids) if (perComplex.get(id).has(h)) return id; }
-  return null;                                         // ambiguous -> skip (do not pollute comps)
+async function geocodeAddress(q) {
+  const res = await axios.get(NOMINATIM, {
+    params: { format: 'json', q, countrycodes: 'il', limit: 1 },
+    headers: { 'User-Agent': 'QUANTUM-pinuy-binuy-analyzer/1.0 (hemi@u-r-quantum.com)' },
+    timeout: 15000,
+  });
+  const hit = Array.isArray(res.data) ? res.data[0] : null;
+  if (!hit) return null;
+  const lat = Number(hit.lat), lng = Number(hit.lon);
+  return (Number.isFinite(lat) && Number.isFinite(lng)) ? { lat, lng } : null;
+}
+
+// Geocode compounds in a city that have active listings but no lat/lng yet.
+// Nominatim policy: max 1 req/sec, valid User-Agent. Bounded by `limit`.
+async function geocodeCompounds(city, { limit = 150 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT c.id, c.addresses, c.city FROM complexes c
+       JOIN listings l ON l.complex_id = c.id AND l.is_active = TRUE
+      WHERE c.city = $1 AND c.lat IS NULL AND c.addresses IS NOT NULL AND c.addresses <> ''
+      LIMIT $2`, [city, limit]);
+  let done = 0, failed = 0;
+  for (const r of rows) {
+    const firstAddr = String(r.addresses).split(/[,;]/)[0].trim();
+    if (!firstAddr) { failed++; continue; }
+    try {
+      const pt = await geocodeAddress(`${firstAddr}, ${r.city}, ישראל`);
+      if (pt) { await pool.query('UPDATE complexes SET lat=$1, lng=$2, geocoded_at=NOW() WHERE id=$3', [pt.lat, pt.lng, r.id]); done++; }
+      else failed++;
+    } catch (e) { failed++; }
+    await new Promise(res => setTimeout(res, 1100));
+  }
+  if (rows.length) logger.info(`[nadlanApify] geocoded ${done}/${rows.length} compounds in ${city} (failed ${failed})`);
+  return { city, attempted: rows.length, geocoded: done, failed };
+}
+
+async function loadCompoundGeoIndex(city) {
+  const { rows } = await pool.query(
+    `SELECT id, lat, lng FROM complexes WHERE city = $1 AND lat IS NOT NULL AND lng IS NOT NULL`, [city]);
+  return rows.map(r => ({ id: r.id, lat: Number(r.lat), lng: Number(r.lng) }));
+}
+
+// Nearest compound within maxMeters, skipped if a second compound is almost as close
+// (ambiguous) unless we are very close (< 90m) to the winner.
+function linkByProximity(deal, geoIndex, maxMeters = 200) {
+  if (!Number.isFinite(deal.lat) || !Number.isFinite(deal.lng) || !geoIndex.length) return null;
+  let best = null, bestD = Infinity, second = Infinity;
+  for (const c of geoIndex) {
+    const d = haversineM(deal.lat, deal.lng, c.lat, c.lng);
+    if (d < bestD) { second = bestD; bestD = d; best = c; }
+    else if (d < second) { second = d; }
+  }
+  if (!best || bestD > maxMeters) return null;
+  if (bestD > 90 && second < bestD * 1.35) return null;
+  return best.id;
 }
 
 async function storeDeal(complexId, d) {
@@ -159,34 +191,34 @@ async function storeDeal(complexId, d) {
       [complexId, SOURCE, d.source_id]);
     if (ex.rows.length) return false;
   }
-  const dup = await pool.query(
-    'SELECT 1 FROM transactions WHERE complex_id=$1 AND transaction_date=$2 AND price=$3 AND COALESCE(address,\'\')=COALESCE($4,\'\')',
-    [complexId, d.transaction_date, d.price, d.address]);
-  if (dup.rows.length) return false;
   await pool.query(
-    `INSERT INTO transactions (complex_id, transaction_date, price, area_sqm, rooms, floor, price_per_sqm, address, city, source, source_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [complexId, d.transaction_date, d.price, d.area_sqm, d.rooms, d.floor, d.price_per_sqm, d.address, d.city, SOURCE, d.source_id]);
+    `INSERT INTO transactions (complex_id, transaction_date, price, area_sqm, rooms, floor, price_per_sqm,
+                               address, city, neighborhood, gush, helka, lat, lng, source, source_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+    [complexId, d.transaction_date, d.price, d.area_sqm, d.rooms, d.floor, d.price_per_sqm,
+     d.address, d.city, d.neighborhood, d.gush, d.helka, d.lat, d.lng, SOURCE, d.source_id]);
   return true;
 }
 
-// Ingest all deals for a city: run actor -> normalize -> link -> store.
-async function ingestCity(city, { dealDateRange = DEAL_RANGE_DEFAULT, maxItems = 800, rooms } = {}) {
+// Ingest all deals for a city: geocode compounds -> run actor -> proximity-link -> store.
+async function ingestCity(city, { dealDateRange = DEAL_RANGE_DEFAULT, maxItems = 800, rooms, geocodeLimit = 150 } = {}) {
+  const geo = await geocodeCompounds(city, { limit: geocodeLimit });
+  const geoIndex = await loadCompoundGeoIndex(city);
   const input = { ...cityInput(city), dealDateRange, maxItems };
   if (rooms) input.rooms = rooms;
   const raw = await runActor(input);
-  const byStreet = await loadCompoundIndex(city);
-  let linked = 0, stored = 0, unlinked = 0;
+  let linked = 0, stored = 0, unlinked = 0, nogeo = 0, firsthand = 0;
   for (const r of raw) {
     const d = normalizeDeal(r);
-    if (city && d.city && !String(d.city).includes(city) && !city.includes(d.city)) { /* keep, city filter is soft */ }
-    const cid = linkDeal(d, byStreet);
+    if (d.is_first_hand) { firsthand++; continue; }               // new-build, not a resale comp
+    if (!Number.isFinite(d.lat) || !Number.isFinite(d.lng)) { nogeo++; continue; }
+    const cid = linkByProximity(d, geoIndex);
     if (!cid) { unlinked++; continue; }
     linked++;
     if (await storeDeal(cid, d)) stored++;
   }
-  logger.info(`[nadlanApify] ${city}: fetched=${raw.length} linked=${linked} stored=${stored} unlinked=${unlinked}`);
-  return { city, fetched: raw.length, linked, stored, unlinked, compoundsInCity: byStreet.size };
+  logger.info(`[nadlanApify] ${city}: fetched=${raw.length} geoCompounds=${geoIndex.length} linked=${linked} stored=${stored} unlinked=${unlinked} nogeo=${nogeo} firsthand=${firsthand}`);
+  return { city, fetched: raw.length, geocodedNow: geo.geocoded, geoCompounds: geoIndex.length, linked, stored, unlinked, nogeo, firsthand };
 }
 
 async function ingestCities(cities, opts = {}) {
@@ -201,4 +233,4 @@ async function ingestCities(cities, opts = {}) {
   return { totals, results };
 }
 
-module.exports = { probeShape, ingestCity, ingestCities, normalizeDeal, linkDeal, loadCompoundIndex };
+module.exports = { probeShape, ingestCity, ingestCities, geocodeCompounds, normalizeDeal, linkByProximity };

@@ -433,6 +433,7 @@ async function start() {
   // 2026-07-06: listing-level opportunity scorer columns (phase 1: discount_pct = B)
   await runMigrationFile('Listing scores (036)', path.join(__dirname, 'db', 'migrations', '036_listing_opportunity_scores.sql'));
   await runMigrationFile('Complex newbuild cols (037)', path.join(__dirname, 'db', 'migrations', '037_complex_newbuild_columns.sql'));
+  await runMigrationFile('Geo linking cols (038)', path.join(__dirname, 'db', 'migrations', '038_geo_linking_columns.sql'));
   if (isQuantum) await runOutreachMigration();
 
   // Record every Claude/Perplexity API call's token usage (global axios interceptor).
