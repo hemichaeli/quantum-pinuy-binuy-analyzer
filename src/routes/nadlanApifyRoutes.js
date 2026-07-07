@@ -25,9 +25,10 @@ router.post('/ingest', async (req, res) => {
   const cities = req.body?.cities || (req.query.city ? [req.query.city] : null);
   if (!cities || !cities.length) return res.status(400).json({ success: false, error: 'provide cities[] or ?city=' });
   const opts = {
-    dealDateRange: req.body?.dealDateRange || '2',
+    dealDateRange: req.body?.dealDateRange || '60',
     maxItems: Number(req.body?.maxItems) || 800,
     rooms: req.body?.rooms,
+    geocodeLimit: req.body?.geocodeLimit != null ? Number(req.body.geocodeLimit) : 150,
   };
   try { res.json({ success: true, ...(await svc.ingestCities(cities, opts)) }); }
   catch (e) { res.status(500).json({ success: false, error: e.message }); }
