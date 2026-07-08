@@ -44,7 +44,7 @@ router.post('/ingest', async (req, res) => {
     dealDateRange: req.body?.dealDateRange || '60',
     maxItems: Number(req.body?.maxItems) || 800,
     rooms: req.body?.rooms,
-    geocodeLimit: req.body?.geocodeLimit != null ? Number(req.body.geocodeLimit) : 150,
+    gushLimit: req.body?.gushLimit != null ? Number(req.body.gushLimit) : 60,
   };
   try { res.json({ success: true, ...(await svc.ingestCities(cities, opts)) }); }
   catch (e) { res.status(500).json({ success: false, error: e.message }); }
