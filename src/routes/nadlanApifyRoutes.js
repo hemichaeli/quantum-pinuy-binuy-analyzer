@@ -20,6 +20,14 @@ router.post('/geocode', async (req, res) => {
   catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// Populate compound gush via Gemini (grounded on Mavat) for a city. No Google/billing.
+router.post('/populate-gush', async (req, res) => {
+  const city = req.query.city || req.body?.city;
+  if (!city) return res.status(400).json({ success: false, error: 'provide ?city=' });
+  try { res.json({ success: true, ...(await svc.populateCompoundGush(city, { limit: Number(req.query.limit) || 60 })) }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // Mavat cross-check: verify adopted compound gush against Mavat (Gemini, Google-grounded).
 router.post('/crosscheck', async (req, res) => {
   const city = req.query.city || req.body?.city;

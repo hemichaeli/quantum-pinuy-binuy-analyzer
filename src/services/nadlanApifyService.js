@@ -18,6 +18,7 @@ const axios = require('axios');
 const pool = require('../db/pool');
 const { logger } = require('./logger');
 const { queryGemini } = require('./geminiEnrichmentService');
+const { ELIGIBLE_STATUSES } = require('./listingScoreService');
 
 const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
 const ACTOR = 'swerve~nadlan-deals';
@@ -224,34 +225,82 @@ async function storeDeal(complexId, d) {
   return true;
 }
 
-// Ingest all deals for a city: geocode compounds -> run actor -> proximity-link -> store.
-async function ingestCity(city, { dealDateRange = DEAL_RANGE_DEFAULT, maxItems = 800, rooms, geocodeLimit = 150 } = {}) {
-  const geo = await geocodeCompounds(city, { limit: geocodeLimit });
-  const geoIndex = await loadCompoundGeoIndex(city);
+// Fetch a compound's cadastral gush from Mavat / planning via Gemini (Google-Search grounded).
+async function geminiGushFor(c) {
+  const addr = String(c.addresses || '').split(/[,;]/)[0].trim();
+  const prompt = `מהו מספר הגוש (block) של מתחם ההתחדשות העירונית "${c.name}" בכתובת ${addr}, ${c.city}`
+    + `${c.plan_number ? `, תכנית ${c.plan_number}` : ''}? חפש ב-mavat.iplan.gov.il ובאתר נדלן הממשלתי. `
+    + `החזר JSON בלבד: {"gush":"<number or null>"}`;
+  try {
+    const txt = await queryGemini(prompt, 'You return only strict JSON with a numeric gush or null.', true);
+    const m = String(txt).match(/"?gush"?\s*:\s*"?(\d{3,6})"?/);
+    return m ? m[1] : null;
+  } catch (e) { return null; }
+}
+
+// PRIMARY enrichment (no Google, no billing): populate complexes.gush for eligible compounds
+// that have active listings, using Gemini grounded on Mavat. gush is the exact key the
+// nadlan deals already carry, so this replaces coordinate geocoding entirely.
+async function populateCompoundGush(city, { limit = 60 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT c.id, c.name, c.city, c.addresses, c.plan_number FROM complexes c
+       JOIN listings l ON l.complex_id = c.id AND l.is_active = TRUE
+      WHERE c.city = $1 AND c.gush IS NULL AND c.status = ANY($2)
+      ORDER BY c.id LIMIT $3`, [city, ELIGIBLE_STATUSES, limit]);
+  let done = 0;
+  for (const c of rows) {
+    const g = await geminiGushFor(c);
+    if (g) { await pool.query('UPDATE complexes SET gush=$1, gush_verified=TRUE WHERE id=$2 AND gush IS NULL', [g, c.id]); done++; }
+  }
+  if (rows.length) logger.info(`[nadlanApify] populated gush for ${done}/${rows.length} compounds in ${city}`);
+  return { city, attempted: rows.length, populated: done };
+}
+
+async function buildGushIndex(city) {
+  const { rows } = await pool.query(
+    `SELECT id, gush, neighborhood FROM complexes WHERE city = $1 AND gush IS NOT NULL`, [city]);
+  const idx = new Map(); // gush -> [{ id, neighborhood }]
+  for (const r of rows) {
+    const g = String(r.gush).trim();
+    if (!idx.has(g)) idx.set(g, []);
+    idx.get(g).push({ id: r.id, neighborhood: r.neighborhood });
+  }
+  return idx;
+}
+
+// Link a deal to a compound by exact gush. Disambiguate a shared gush by neighborhood; skip if ambiguous.
+function linkByGush(deal, gushIndex) {
+  if (!deal.gush) return null;
+  const arr = gushIndex.get(String(deal.gush).trim());
+  if (!arr || !arr.length) return null;
+  if (arr.length === 1) return arr[0].id;
+  if (deal.neighborhood) {
+    const nb = String(deal.neighborhood);
+    const match = arr.filter(c => c.neighborhood && (String(c.neighborhood).includes(nb) || nb.includes(String(c.neighborhood))));
+    if (match.length === 1) return match[0].id;
+  }
+  return null; // shared gush, cannot disambiguate -> skip
+}
+
+// Ingest all deals for a city: populate gush (Gemini) -> run actor -> gush-link -> store.
+async function ingestCity(city, { dealDateRange = DEAL_RANGE_DEFAULT, maxItems = 800, rooms, gushLimit = 60 } = {}) {
+  const enr = await populateCompoundGush(city, { limit: gushLimit });
+  const gushIndex = await buildGushIndex(city);
   const input = { ...cityInput(city), dealDateRange, maxItems };
   if (rooms) input.rooms = rooms;
   const raw = await runActor(input);
-  let linked = 0, stored = 0, unlinked = 0, nogeo = 0, firsthand = 0;
-  const gushVotes = new Map(); // complexId -> Map(gush -> count)
+  let linked = 0, stored = 0, unlinked = 0, firsthand = 0, nogush = 0;
   for (const r of raw) {
     const d = normalizeDeal(r);
     if (d.is_first_hand) { firsthand++; continue; }               // new-build, not a resale comp
-    if (!Number.isFinite(d.lat) || !Number.isFinite(d.lng)) { nogeo++; continue; }
-    const cid = linkByProximity(d, geoIndex);
+    if (!d.gush) { nogush++; continue; }
+    const cid = linkByGush(d, gushIndex);
     if (!cid) { unlinked++; continue; }
     linked++;
-    if (d.gush) { if (!gushVotes.has(cid)) gushVotes.set(cid, new Map()); const m = gushVotes.get(cid); m.set(d.gush, (m.get(d.gush) || 0) + 1); }
     if (await storeDeal(cid, d)) stored++;
   }
-  // Adopt each compound's modal gush from its linked deals -> the key the Mavat cross-check validates.
-  let gushAdopted = 0;
-  for (const [cid, m] of gushVotes) {
-    let bestG = null, bestC = 0;
-    for (const [g, c] of m) if (c > bestC) { bestC = c; bestG = g; }
-    if (bestG) { const u = await pool.query('UPDATE complexes SET gush=$1 WHERE id=$2 AND gush IS NULL', [bestG, cid]); gushAdopted += u.rowCount; }
-  }
-  logger.info(`[nadlanApify] ${city}: fetched=${raw.length} geoCompounds=${geoIndex.length} linked=${linked} stored=${stored} unlinked=${unlinked} nogeo=${nogeo} firsthand=${firsthand} gushAdopted=${gushAdopted}`);
-  return { city, fetched: raw.length, geocodedNow: geo.geocoded, geoCompounds: geoIndex.length, linked, stored, unlinked, nogeo, firsthand, gushAdopted };
+  logger.info(`[nadlanApify] ${city}: fetched=${raw.length} gushKeys=${gushIndex.size} populated=${enr.populated} linked=${linked} stored=${stored} unlinked=${unlinked} firsthand=${firsthand} nogush=${nogush}`);
+  return { city, fetched: raw.length, gushPopulated: enr.populated, gushKeys: gushIndex.size, linked, stored, unlinked, firsthand, nogush };
 }
 
 // Mavat cross-check: for compounds whose gush was adopted from linked deals, ask Gemini
@@ -264,16 +313,7 @@ async function crossCheckMavat(city, { limit = 20 } = {}) {
       WHERE city = $1 AND gush IS NOT NULL ORDER BY id LIMIT $2`, [city, limit]);
   const results = [];
   for (const c of rows) {
-    const addr = String(c.addresses || '').split(/[,;]/)[0].trim();
-    const prompt = `מהו מספר הגוש (block) של מתחם ההתחדשות העירונית "${c.name}" בכתובת ${addr}, ${c.city}`
-      + `${c.plan_number ? `, תכנית ${c.plan_number}` : ''}? חפש ב-mavat.iplan.gov.il ובאתר נדלן הממשלתי. `
-      + `החזר JSON בלבד: {"gush":"<number or null>"}`;
-    let mavatGush = null;
-    try {
-      const txt = await queryGemini(prompt, 'You return only strict JSON with a numeric gush or null.', true);
-      const m = String(txt).match(/"?gush"?\s*:\s*"?(\d{3,6})"?/);
-      if (m) mavatGush = m[1];
-    } catch (e) { /* soft: leave null */ }
+    const mavatGush = await geminiGushFor(c);
     const agree = mavatGush != null && String(mavatGush) === String(c.gush);
     if (mavatGush != null) {
       await pool.query('UPDATE complexes SET gush_verified = $1 WHERE id = $2', [agree, c.id]).catch(() => {});
@@ -297,4 +337,4 @@ async function ingestCities(cities, opts = {}) {
   return { totals, results };
 }
 
-module.exports = { probeShape, ingestCity, ingestCities, geocodeCompounds, crossCheckMavat, normalizeDeal, linkByProximity };
+module.exports = { probeShape, ingestCity, ingestCities, populateCompoundGush, geocodeCompounds, crossCheckMavat, normalizeDeal, linkByGush, linkByProximity };
