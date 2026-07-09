@@ -125,7 +125,7 @@ const DEFAULT_UPLIFT = 25; // % floor-area gain on the replacement unit, if not 
 //   A_min = (1 * (1+uplift) - 1)              -> pure floor-area gain (e.g. 25%)
 //   A_max = (CAP * (1+uplift) - 1)            -> e.g. 1.4 * 1.25 - 1 = 75%
 // A real new-build transaction comp (pipeline) can widen or remove this cap later.
-const NEWBUILD_PREMIUM_CAP = Number(process.env.NEWBUILD_PREMIUM_CAP) || 1.4;
+const NEWBUILD_PREMIUM_CAP = Number(process.env.NEWBUILD_PREMIUM_CAP) || 1.2;
 
 // Phase 2: opportunity = A + B. A (future_uplift, GROSS) from the newbuild valuation:
 // V_end/area = newbuild_psm * (1 + uplift/100); A = (V_end - P_fair) / P_fair * 100.
