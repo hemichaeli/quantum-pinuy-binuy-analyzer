@@ -2,8 +2,15 @@
 // Pixel URL to embed per recipient (HTML email):
 //   <img src="https://discovery.u-r-quantum.com/api/outreach/o/<key>.gif" width="1" height="1" alt="">
 const express = require('express');
+const path = require('path');
 const router = express.Router();
 const pool = require('../db/pool');
+
+// QUANTUM logo for email signatures (stable hosted URL).
+router.get('/logo.png', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(__dirname, '..', 'assets', 'quantum-logo.png'));
+});
 
 // 1x1 transparent GIF
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
