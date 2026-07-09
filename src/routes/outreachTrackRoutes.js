@@ -6,7 +6,12 @@ const path = require('path');
 const router = express.Router();
 const pool = require('../db/pool');
 
-// QUANTUM logo for email signatures (stable hosted URL).
+// QUANTUM logo for email signatures (stable hosted URL). JPEG = opaque white bg (no
+// transparency checkerboard); png kept for back-compat.
+router.get('/logo.jpg', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.type('image/jpeg').sendFile(path.join(__dirname, '..', 'assets', 'quantum-logo.jpg'));
+});
 router.get('/logo.png', (req, res) => {
   res.set('Cache-Control', 'public, max-age=86400');
   res.sendFile(path.join(__dirname, '..', 'assets', 'quantum-logo.png'));
