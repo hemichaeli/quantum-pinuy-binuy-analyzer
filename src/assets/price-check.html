@@ -53,10 +53,10 @@
   .eyebrow{text-transform:uppercase;letter-spacing:.18em;font-size:11.5px;font-weight:700;color:var(--teal-deep)}
   @media (prefers-color-scheme:dark){.eyebrow{color:var(--teal)}}
   :root[data-theme="dark"] .eyebrow{color:var(--teal)}
-  .hero{margin-bottom:26px;padding-top:6px}
-  h1{font-size:clamp(28px,4.2vw,40px);line-height:1.1;margin:12px 0 14px;
-    letter-spacing:-.02em;font-weight:800;text-wrap:balance;max-width:24ch}
-  .lede{color:var(--muted);font-size:17px;max-width:62ch;margin:0;line-height:1.6}
+  .hero{margin-bottom:26px;padding-top:8px;display:flex;flex-direction:column;gap:17px}
+  h1{font-size:clamp(27px,3.9vw,38px);line-height:1.16;margin:0;
+    letter-spacing:-.015em;font-weight:740;text-wrap:balance;max-width:21ch}
+  .lede{color:var(--muted);font-size:16.5px;max-width:55ch;margin:0;line-height:1.64}
   .lede b{color:var(--ink);font-weight:650}
 
   /* picker */
@@ -141,7 +141,7 @@
   <section class="hero">
     <div class="eyebrow">Before you buy, check the price</div>
     <h1>Is that Israeli renewal apartment fairly priced?</h1>
-    <p class="lede">Buying a home in Israel from abroad is where good families get caught out. This is the same check we run on <b>every</b> project before we bring it to a buyer. Use it on any project, not only ours.</p>
+    <p class="lede">Buying a home in Israel from overseas is a big decision, and getting the price right is a large part of it. This is the same check we run on <b>every</b> project before we bring it to a buyer. Use it on any project, not only ours.</p>
   </section>
 
   <div class="panel picker">
@@ -192,7 +192,7 @@
       : absd===0 ? `At market` : `${absd}% <small>above comparable</small>`;
     const cmp = below
       ? `Asking price sits ${absd}% under recently sold, same-stage units in this compound.`
-      : `Asking price sits ${absd}% over recently sold, same-stage units in this compound. Paying more than the neighbours for the same stage is the classic foreign-buyer trap.`;
+      : `Asking price sits ${absd}% over recently sold, same-stage units in this compound, so it is worth understanding exactly why before you commit.`;
     const stageBars = STAGES.map((s,i)=>`<i class="${i<=p.stageIdx?'on':''}" title="${esc(s)}"></i>`).join("");
 
     document.getElementById("report").innerHTML = `
