@@ -17,6 +17,12 @@ router.get('/logo.png', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'assets', 'quantum-logo.png'));
 });
 
+// Public price-check tool (consumer-facing Mispricing Index mockup).
+router.get('/price-check.html', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.type('text/html').sendFile(path.join(__dirname, '..', 'assets', 'price-check.html'));
+});
+
 // 1x1 transparent GIF
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 

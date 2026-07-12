@@ -1,0 +1,261 @@
+<title>QUANTUM Price Check</title>
+<style>
+  :root{
+    --teal:#2E9E8F; --teal-deep:#217C70; --navy:#172A46; --gold:#E8B23A;
+    --bg:#EEF3F2; --surface:#FFFFFF; --surface-2:#F6F9F8; --line:#DBE5E2;
+    --ink:#172A46; --muted:#5C6B72; --faint:#8A9AA0;
+    --good:#2F9E6B; --warn:#C8901A; --bad:#D45B4E;
+    --shadow:0 1px 2px rgba(23,42,70,.06),0 8px 30px rgba(23,42,70,.08);
+    --radius:14px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0D1922; --surface:#14232F; --surface-2:#0F1E29; --line:#263B49;
+      --ink:#E9EFF0; --muted:#93A6AF; --faint:#6E828C;
+      --teal:#43C1B0; --teal-deep:#2E9E8F; --gold:#F0BF52;
+      --good:#43BC85; --warn:#E0AF3C; --bad:#E9776A;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 40px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#EEF3F2; --surface:#FFFFFF; --surface-2:#F6F9F8; --line:#DBE5E2;
+    --ink:#172A46; --muted:#5C6B72; --faint:#8A9AA0;
+    --teal:#2E9E8F; --teal-deep:#217C70; --gold:#E8B23A;
+    --good:#2F9E6B; --warn:#C8901A; --bad:#D45B4E;
+    --shadow:0 1px 2px rgba(23,42,70,.06),0 8px 30px rgba(23,42,70,.08);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0D1922; --surface:#14232F; --surface-2:#0F1E29; --line:#263B49;
+    --ink:#E9EFF0; --muted:#93A6AF; --faint:#6E828C;
+    --teal:#43C1B0; --teal-deep:#2E9E8F; --gold:#F0BF52;
+    --good:#43BC85; --warn:#E0AF3C; --bad:#E9776A;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 40px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1060px;margin:0 auto;padding:28px 20px 64px}
+  .tnum{font-variant-numeric:tabular-nums}
+
+  /* header */
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:26px}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:800;letter-spacing:.14em;font-size:15px}
+  .brand .mark{width:26px;height:26px;border-radius:7px;
+    background:conic-gradient(from 210deg,var(--teal),var(--teal-deep) 55%,var(--navy));
+    position:relative;box-shadow:inset 0 0 0 1px rgba(255,255,255,.15)}
+  .brand .mark::after{content:"";position:absolute;top:5px;left:50%;transform:translateX(-50%);
+    width:5px;height:5px;border-radius:50%;background:var(--gold)}
+  .brand small{color:var(--muted);font-weight:600;letter-spacing:.04em;margin-left:2px}
+  .themebtn{background:var(--surface);color:var(--muted);border:1px solid var(--line);
+    border-radius:9px;padding:7px 11px;font-size:12.5px;cursor:pointer;font-weight:600}
+  .themebtn:hover{color:var(--ink)}
+  .themebtn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+
+  /* hero */
+  .hero{margin-bottom:26px}
+  .eyebrow{text-transform:uppercase;letter-spacing:.18em;font-size:11.5px;font-weight:700;color:var(--teal-deep)}
+  @media (prefers-color-scheme:dark){.eyebrow{color:var(--teal)}}
+  :root[data-theme="dark"] .eyebrow{color:var(--teal)}
+  h1{font-size:clamp(28px,4.4vw,42px);line-height:1.06;margin:10px 0 12px;
+    letter-spacing:-.02em;font-weight:820;text-wrap:balance;max-width:16ch}
+  .lede{color:var(--muted);font-size:17px;max-width:60ch;margin:0}
+  .lede b{color:var(--ink);font-weight:650}
+
+  /* picker */
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+  .picker{padding:18px 18px 20px;margin:26px 0 20px}
+  .picker h2{margin:0 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+  .picker .sub{color:var(--faint);font-size:13px;margin:0 0 14px}
+  .chips{display:flex;flex-wrap:wrap;gap:9px}
+  .chip{border:1px solid var(--line);background:var(--surface-2);color:var(--ink);
+    padding:9px 13px;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600;
+    display:flex;flex-direction:column;gap:1px;min-width:132px;transition:border-color .15s,transform .05s}
+  .chip span{font-weight:500;font-size:12px;color:var(--muted)}
+  .chip:hover{border-color:var(--teal)}
+  .chip[aria-pressed="true"]{border-color:var(--teal);box-shadow:inset 0 0 0 1px var(--teal);background:var(--surface)}
+  .chip:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+
+  /* report */
+  .report{padding:22px;overflow:hidden}
+  .rtop{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  .rtop .name{font-size:22px;font-weight:780;letter-spacing:-.01em;margin:0}
+  .rtop .loc{color:var(--muted);font-size:14px;margin:2px 0 0}
+  .verdict{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:999px;
+    font-weight:700;font-size:13.5px;border:1px solid transparent;white-space:nowrap}
+  .verdict .dot{width:8px;height:8px;border-radius:50%}
+  .v-good{background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good);border-color:color-mix(in srgb,var(--good) 34%,transparent)}
+  .v-warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn);border-color:color-mix(in srgb,var(--warn) 36%,transparent)}
+  .v-bad{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad);border-color:color-mix(in srgb,var(--bad) 34%,transparent)}
+  .v-good .dot{background:var(--good)}.v-warn .dot{background:var(--warn)}.v-bad .dot{background:var(--bad)}
+
+  .hl{margin:22px 0 6px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+  .bigpct{font-size:clamp(34px,6vw,50px);font-weight:820;letter-spacing:-.03em;line-height:1;margin:2px 0 3px}
+  .bigpct.good{color:var(--good)} .bigpct.bad{color:var(--bad)} .bigpct.warn{color:var(--warn)}
+  .bigpct small{font-size:16px;font-weight:650;color:var(--muted);letter-spacing:0}
+  .cmpnote{color:var(--muted);font-size:14px;margin:0 0 16px}
+
+  /* comparison bar */
+  .bars{display:flex;flex-direction:column;gap:10px;margin:6px 0 4px}
+  .barrow{display:grid;grid-template-columns:150px 1fr auto;align-items:center;gap:12px;font-size:13.5px}
+  .barrow .lab{color:var(--muted)}
+  .track{height:16px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;overflow:hidden;position:relative}
+  .fill{height:100%;border-radius:7px}
+  .fill.base{background:linear-gradient(90deg,var(--faint),var(--muted))}
+  .fill.you{background:linear-gradient(90deg,var(--teal),var(--teal-deep))}
+  .fill.over{background:linear-gradient(90deg,var(--bad),#b8483c)}
+  .barrow .val{font-weight:700;min-width:74px;text-align:right}
+
+  /* facts grid */
+  .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+    background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:22px 0 4px}
+  .fact{background:var(--surface);padding:13px 14px}
+  .fact .k{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);font-weight:700}
+  .fact .v{font-size:15px;font-weight:650;margin-top:3px}
+
+  /* stage stepper */
+  .stage{display:flex;gap:6px;margin-top:6px}
+  .stage i{flex:1;height:6px;border-radius:3px;background:var(--surface-2);border:1px solid var(--line)}
+  .stage i.on{background:var(--teal);border-color:var(--teal)}
+
+  /* projection callout */
+  .proj{margin:20px 0 4px;padding:15px 16px;border-radius:12px;background:var(--surface-2);
+    border:1px solid var(--line);border-left:3px solid var(--gold)}
+  .proj .k{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}
+  .proj .v{font-size:20px;font-weight:750;margin:3px 0 4px}
+  .proj p{margin:0;color:var(--muted);font-size:13px}
+
+  .foot-cta{margin-top:22px;padding-top:18px;border-top:1px solid var(--line);
+    display:flex;gap:14px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:14px}
+  .foot-cta b{color:var(--ink);font-weight:680}
+
+  .disclaimer{margin-top:26px;color:var(--faint);font-size:12px;line-height:1.6;max-width:80ch}
+  .disclaimer strong{color:var(--muted);font-weight:650}
+  @media (max-width:560px){.barrow{grid-template-columns:96px 1fr auto;gap:9px}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand"><span class="mark"></span>QUANTUM <small>Price Check</small></div>
+    <button class="themebtn" id="theme" type="button" aria-label="Toggle color theme">Theme</button>
+  </header>
+
+  <section class="hero">
+    <div class="eyebrow">Before you buy, check the price</div>
+    <h1>Is that Israeli renewal apartment fairly priced?</h1>
+    <p class="lede">Buying a home in Israel from abroad is where good families get caught out. This is the same check we run on <b>every</b> project before we bring it to a buyer. Use it on any project, not only ours.</p>
+  </section>
+
+  <div class="panel picker">
+    <h2>Pick a project</h2>
+    <p class="sub">Sample renewal projects. In the live tool you enter any address or project name.</p>
+    <div class="chips" id="chips" role="group" aria-label="Choose a project"></div>
+  </div>
+
+  <div class="panel report" id="report" aria-live="polite"></div>
+
+  <p class="disclaimer">
+    <strong>How to read this.</strong> The headline compares the asking price to recently transacted, same-stage apartments in the same or a comparable renewal compound, from public data. That comparison is factual. The completion figure is an <strong>estimate</strong> of typical added value once a renewal project is built, based on comparable completed projects; it is a projection, not a promise, and individual projects vary. This tool is general information, not financial, legal, or tax advice, and does not account for a specific developer's covenants, timelines, or risks. Always verify independently and take professional advice before committing. QUANTUM is a buyer-side brokerage and is paid a standard brokerage fee.
+  </p>
+</div>
+
+<script>
+  const PROJECTS = [
+    { id:"rg", name:"Krinitzi Renewal, Building C", city:"Ramat Gan", stageIdx:3, stageLabel:"Building permit approved",
+      units:"96 apartments", dev:"Established developer, 4 delivered projects",
+      entryDelta:-31, verdict:"good", vlabel:"Priced below market", upside:38 },
+    { id:"gv", name:"Borochov Compound, Phase 1", city:"Givatayim", stageIdx:2, stageLabel:"Plan deposited (TABA)",
+      units:"120 apartments", dev:"Established developer, 7 delivered projects",
+      entryDelta:-18, verdict:"good", vlabel:"Priced below market", upside:34 },
+    { id:"pt", name:"Em HaMoshavot Renewal", city:"Petah Tikva", stageIdx:1, stageLabel:"Early planning",
+      units:"210 apartments", dev:"Newer developer, 1 delivered project",
+      entryDelta:-7, verdict:"warn", vlabel:"Fairly priced", upside:29 },
+    { id:"by", name:"Rothschild Towers, Unit block", city:"Bat Yam", stageIdx:2, stageLabel:"Plan deposited (TABA)",
+      units:"64 apartments", dev:"Newer developer, 0 delivered projects",
+      entryDelta:6, verdict:"bad", vlabel:"Above comparable market", upside:22 },
+  ];
+  const STAGES = ["Plan","Deposited","Permit","Construction","Completion"];
+
+  const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+  function render(p){
+    const below = p.entryDelta < 0;
+    const cls = p.verdict==="good"?"good":p.verdict==="warn"?"warn":"bad";
+    const vcls = p.verdict==="good"?"v-good":p.verdict==="warn"?"v-warn":"v-bad";
+    const absd = Math.abs(p.entryDelta);
+    // bar widths: comparable baseline fixed at 78%, this project relative
+    const baseW = 78;
+    const youW = Math.max(8, Math.min(100, baseW * (1 + p.entryDelta/100)));
+    const headline = below
+      ? `${absd}% <small>below comparable</small>`
+      : absd===0 ? `At market` : `${absd}% <small>above comparable</small>`;
+    const cmp = below
+      ? `Asking price sits ${absd}% under recently sold, same-stage units in this compound.`
+      : `Asking price sits ${absd}% over recently sold, same-stage units in this compound. Paying more than the neighbours for the same stage is the classic foreign-buyer trap.`;
+    const stageBars = STAGES.map((s,i)=>`<i class="${i<=p.stageIdx?'on':''}" title="${esc(s)}"></i>`).join("");
+
+    document.getElementById("report").innerHTML = `
+      <div class="rtop">
+        <div>
+          <p class="name">${esc(p.name)}</p>
+          <p class="loc">${esc(p.city)} &middot; Pinui-Binui (urban renewal)</p>
+        </div>
+        <span class="verdict ${vcls}"><span class="dot"></span>${esc(p.vlabel)}</span>
+      </div>
+
+      <div class="hl">Entry price vs comparable same-stage units</div>
+      <div class="bigpct ${cls} tnum">${headline}</div>
+      <p class="cmpnote">${esc(cmp)}</p>
+
+      <div class="bars">
+        <div class="barrow">
+          <div class="lab">Comparable units</div>
+          <div class="track"><div class="fill base" style="width:${baseW}%"></div></div>
+          <div class="val tnum">market</div>
+        </div>
+        <div class="barrow">
+          <div class="lab">This project</div>
+          <div class="track"><div class="fill ${below?'you':'over'}" style="width:${youW}%"></div></div>
+          <div class="val tnum" style="color:${below?'var(--teal-deep)':'var(--bad)'}">${below?'-':'+'}${absd}%</div>
+        </div>
+      </div>
+
+      <div class="facts">
+        <div class="fact"><div class="k">Project stage</div><div class="v">${esc(p.stageLabel)}</div><div class="stage">${stageBars}</div></div>
+        <div class="fact"><div class="k">Size</div><div class="v">${esc(p.units)}</div></div>
+        <div class="fact"><div class="k">Developer track record</div><div class="v">${esc(p.dev)}</div></div>
+      </div>
+
+      <div class="proj">
+        <div class="k">Typical added value at completion &middot; estimate</div>
+        <div class="v tnum">about ${p.upside}%</div>
+        <p>Projection from comparable completed renewals in the area. An estimate over the project life, not a guarantee. Timelines and developer risk vary by project.</p>
+      </div>
+
+      <div class="foot-cta">
+        <b>This is how QUANTUM checks every project before a family commits.</b>
+        <span>Want us to run this on a project you are looking at? We represent the buyer.</span>
+      </div>`;
+  }
+
+  const chips = document.getElementById("chips");
+  PROJECTS.forEach((p,i)=>{
+    const b=document.createElement("button");
+    b.className="chip"; b.type="button"; b.setAttribute("aria-pressed", i===0?"true":"false");
+    b.innerHTML=`${esc(p.city)}<span>${esc(p.name)}</span>`;
+    b.addEventListener("click",()=>{
+      [...chips.children].forEach(c=>c.setAttribute("aria-pressed","false"));
+      b.setAttribute("aria-pressed","true"); render(p);
+    });
+    chips.appendChild(b);
+  });
+  render(PROJECTS[0]);
+
+  // theme toggle
+  const root=document.documentElement, tb=document.getElementById("theme");
+  tb.addEventListener("click",()=>{
+    const cur=root.getAttribute("data-theme")
+      || (matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");
+    root.setAttribute("data-theme", cur==="dark"?"light":"dark");
+  });
+</script>
