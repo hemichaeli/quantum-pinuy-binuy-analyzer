@@ -30,6 +30,40 @@ router.get('/o/:key.gif', async (req, res) => {
   res.end(PIXEL);
 });
 
+// Click beacon + redirect. Wrap outbound links as /api/outreach/c/<key>?u=<encoded url>.
+// High-signal (a real human clicked), unlike opens which mail proxies prefetch.
+router.get('/c/:key', async (req, res) => {
+  const key = req.params.key;
+  const target = req.query.u || '';
+  pool.query(
+    `UPDATE outreach SET click_count = click_count + 1, first_click_at = COALESCE(first_click_at, NOW()) WHERE key = $1`,
+    [key]).catch(() => {});
+  // Only redirect to http/https to avoid open-redirect abuse.
+  if (/^https?:\/\//i.test(target)) return res.redirect(302, target);
+  res.status(204).end();
+});
+
+// Push-monitor feed: high-signal events (clicks + replies) not yet pushed to Claude mobile.
+router.get('/events/new', async (req, res) => {
+  const cur = (await pool.query(`SELECT last_pushed_at FROM outreach_push_cursor WHERE id = 1`)).rows[0];
+  const since = cur ? cur.last_pushed_at : new Date(0).toISOString();
+  const clicks = (await pool.query(
+    `SELECT key, name, email, batch, category, first_click_at AS at, click_count FROM outreach
+     WHERE first_click_at IS NOT NULL AND first_click_at > $1 ORDER BY first_click_at`, [since])).rows;
+  const replies = (await pool.query(
+    `SELECT key, name, email, batch, category, replied_at AS at FROM outreach
+     WHERE replied_at IS NOT NULL AND replied_at > $1 ORDER BY replied_at`, [since])).rows;
+  res.json({ since, clicks, replies, count: clicks.length + replies.length });
+});
+
+// Advance the cursor once events have been delivered. Body: { ts: ISO }
+router.post('/events/ack', async (req, res) => {
+  const ts = req.body?.ts;
+  if (!ts) return res.status(400).json({ success: false, error: 'need ts' });
+  await pool.query(`UPDATE outreach_push_cursor SET last_pushed_at = $1 WHERE id = 1`, [ts]);
+  res.json({ success: true });
+});
+
 // Seed / upsert recipients. Body: { partners: [{ key, name, email, batch, category }] }
 router.post('/seed', async (req, res) => {
   const rows = req.body?.partners || [];
