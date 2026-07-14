@@ -438,6 +438,7 @@ async function start() {
   await runMigrationFile('Geo linking cols (038)', path.join(__dirname, 'db', 'migrations', '038_geo_linking_columns.sql'));
   await runMigrationFile('Outreach tracking (039)', path.join(__dirname, 'db', 'migrations', '039_outreach_tracking.sql'));
   await runMigrationFile('Outreach click tracking (040)', path.join(__dirname, 'db', 'migrations', '040_outreach_click_tracking.sql'));
+  await runMigrationFile('Outreach leads (041)', path.join(__dirname, 'db', 'migrations', '041_outreach_leads.sql'));
   if (isQuantum) await runOutreachMigration();
 
   // Record every Claude/Perplexity API call's token usage (global axios interceptor).

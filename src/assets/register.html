@@ -1,0 +1,87 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QUANTUM community session</title>
+<style>
+  :root{--teal:#2E9E8F;--teal-deep:#217C70;--navy:#172A46;--gold:#E8B23A;
+    --bg:#EEF3F2;--surface:#FFFFFF;--surface-2:#F6F9F8;--line:#DBE5E2;--ink:#172A46;--muted:#5C6B72;--faint:#8A9AA0;
+    --shadow:0 1px 2px rgba(23,42,70,.06),0 10px 34px rgba(23,42,70,.09)}
+  @media (prefers-color-scheme:dark){:root{--bg:#0D1922;--surface:#14232F;--surface-2:#0F1E29;--line:#263B49;
+    --ink:#E9EFF0;--muted:#93A6AF;--faint:#6E828C;--teal:#43C1B0;--teal-deep:#2E9E8F}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.55}
+  .wrap{max-width:620px;margin:0 auto;padding:40px 20px 64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.14em;font-size:14px;margin-bottom:26px}
+  .brand img{height:34px;width:auto;display:block}
+  .brand small{color:var(--muted);font-weight:600;letter-spacing:.03em}
+  h1{font-size:clamp(24px,4vw,32px);line-height:1.18;letter-spacing:-.015em;margin:0 0 12px;font-weight:740;text-wrap:balance;max-width:20ch}
+  .lede{color:var(--muted);font-size:16px;margin:0 0 24px;max-width:52ch}
+  form{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:22px}
+  label{display:block;font-size:13px;font-weight:650;margin:0 0 6px;color:var(--ink)}
+  .field{margin-bottom:16px}
+  input,textarea,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);
+    color:var(--ink);font-size:15px;font-family:inherit}
+  input:focus,textarea,select:focus{outline:2px solid var(--teal);outline-offset:1px}
+  textarea{min-height:76px;resize:vertical}
+  .opts{display:flex;flex-direction:column;gap:8px}
+  .opt{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;
+    background:var(--surface-2);cursor:pointer;font-size:14px}
+  .opt input{width:auto}
+  button{width:100%;padding:13px;border:0;border-radius:11px;background:var(--teal);color:#fff;font-size:16px;
+    font-weight:700;cursor:pointer;margin-top:4px}
+  button:hover{background:var(--teal-deep)}
+  button:disabled{opacity:.6;cursor:default}
+  .fine{color:var(--faint);font-size:12px;margin-top:14px;line-height:1.6}
+  .thanks{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:34px 24px;text-align:center}
+  .thanks h2{margin:0 0 8px;font-size:22px}
+  .thanks p{color:var(--muted);margin:0}
+  .hide{display:none}
+</style></head><body>
+<div class="wrap">
+  <div class="brand"><img src="/api/outreach/logo.jpg" alt="QUANTUM"><small>Community Session</small></div>
+
+  <div id="formview">
+    <h1>A no-sell session on buying a home in Israel</h1>
+    <p class="lede">For your members thinking about a home in Israel, whether for aliyah, children studying or serving there, a shidduch, or the next chapter. We run it under your name, at no cost. Tell us how to help and we will be in touch.</p>
+    <form id="f">
+      <div class="field"><label for="name">Your name</label><input id="name" name="name" autocomplete="name" required></div>
+      <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="org">Community or institution</label><input id="org" name="org" autocomplete="organization"></div>
+      <div class="field"><label for="role">Your role (optional)</label><input id="role" name="role"></div>
+      <div class="field"><label>What would be most useful?</label>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="interest" value="session" checked> A session for our community</label>
+          <label class="opt"><input type="radio" name="interest" value="call"> A short call first</label>
+          <label class="opt"><input type="radio" name="interest" value="outline"> Just send the one-page outline</label>
+        </div>
+      </div>
+      <div class="field"><label for="message">Anything else (optional)</label><textarea id="message" name="message"></textarea></div>
+      <button id="submit" type="submit">Send</button>
+      <p class="fine">We use your details only to arrange this session and will not add you to any list. QUANTUM is a buyer-side brokerage, paid a standard brokerage fee.</p>
+    </form>
+  </div>
+
+  <div id="thanksview" class="thanks hide">
+    <h2>Thank you</h2>
+    <p>We have your note and will be in touch shortly. In the meantime you can try the free price-check tool at <a href="/api/outreach/price-check.html" style="color:var(--teal-deep)">QUANTUM Price Check</a>.</p>
+  </div>
+</div>
+<script>
+  var src = new URLSearchParams(location.search).get('src') || '';
+  var f = document.getElementById('f');
+  f.addEventListener('submit', async function(e){
+    e.preventDefault();
+    var btn = document.getElementById('submit'); btn.disabled = true; btn.textContent = 'Sending...';
+    var data = {
+      name: f.name.value, email: f.email.value, org: f.org.value, role: f.role.value,
+      interest: (f.querySelector('input[name=interest]:checked')||{}).value, message: f.message.value, source_key: src
+    };
+    try {
+      var r = await fetch('/api/outreach/register-lead', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if(!r.ok) throw new Error('bad');
+      document.getElementById('formview').classList.add('hide');
+      document.getElementById('thanksview').classList.remove('hide');
+      window.scrollTo(0,0);
+    } catch(err){ btn.disabled=false; btn.textContent='Send'; alert('Something went wrong. Please email us directly at hemi@u-r-quantum.com'); }
+  });
+</script>
+</body></html>

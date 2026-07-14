@@ -23,6 +23,42 @@ router.get('/price-check.html', (req, res) => {
   res.type('text/html').sendFile(path.join(__dirname, '..', 'assets', 'price-check.html'));
 });
 
+// Community-session registration / interest landing page.
+router.get('/register.html', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=120');
+  res.type('text/html').sendFile(path.join(__dirname, '..', 'assets', 'register.html'));
+});
+
+// Capture a registration/interest lead. Body: { name, email, org, role, interest, message, source_key }
+router.post('/register-lead', async (req, res) => {
+  const b = req.body || {};
+  if (!b.email && !b.name) return res.status(400).json({ success: false, error: 'need name or email' });
+  try {
+    await pool.query(
+      `INSERT INTO outreach_leads (name, email, org, role, interest, message, source_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [b.name || null, b.email || null, b.org || null, b.role || null, b.interest || null, b.message || null, b.source_key || null]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: 'could not save' }); }
+});
+
+// Simple registrations dashboard.
+router.get('/leads', async (req, res) => {
+  const rows = (await pool.query(
+    `SELECT name, email, org, role, interest, message, source_key, created_at FROM outreach_leads ORDER BY created_at DESC`)).rows;
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const fmt = (d) => (d ? new Date(d).toISOString().slice(0, 16).replace('T', ' ') : '');
+  const tr = rows.map(r => `<tr><td>${fmt(r.created_at)}</td><td>${esc(r.name)}</td><td>${esc(r.email)}</td>
+    <td>${esc(r.org)}</td><td>${esc(r.interest)}</td><td>${esc(r.source_key)}</td><td>${esc(r.message)}</td></tr>`).join('');
+  res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QUANTUM registrations</title><style>body{font-family:Arial,sans-serif;margin:16px;color:#222}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f4f4f4}</style><h1>QUANTUM registrations (${rows.length})</h1>
+<table><thead><tr><th>When</th><th>Name</th><th>Email</th><th>Community/Org</th><th>Interest</th><th>Source</th><th>Message</th></tr></thead>
+<tbody>${tr}</tbody></table>`);
+});
+
 // 1x1 transparent GIF
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
