@@ -1,10 +1,10 @@
 /**
  * Gemini Enrichment Service
- * 
+ *
  * Uses Google Gemini Flash with Google Search grounding for fast, cheap enrichment.
  * Best for: pricing data, addresses, madlan/yad2 listings, location data.
  * Complements Claude (which handles complex Hebrew analysis).
- * 
+ *
  * Model fallback order (Feb 2026):
  * 1. gemini-2.5-flash (stable, current)
  * 2. gemini-3-flash-preview (newest preview)
@@ -27,14 +27,36 @@ function sleep(ms) {
  * Query Gemini API with Google Search grounding.
  * Includes automatic model fallback if primary model is unavailable.
  */
+// Retry a Gemini POST on 429 (rate limit) with exponential backoff, so heavy
+// enrichment bursts wait for free Gemini instead of spilling to paid Perplexity.
+async function postGeminiWithRetry(url, body, tries = 4) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: 60000 });
+    } catch (err) {
+      lastErr = err;
+      if (err.response?.status === 429 && i < tries - 1) {
+        const wait = Math.min(1500 * 2 ** i, 15000);
+        logger.warn(`[Gemini] 429 rate-limited, backoff ${wait}ms (retry ${i + 1}/${tries - 1})`);
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 async function queryGemini(prompt, systemPrompt, useGrounding = true) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY not set');
   }
 
-  // Current model hierarchy (Feb 2026): 2.5 stable > 3.0 preview > 2.5 lite
-  const models = [GEMINI_MODEL, 'gemini-3-flash-preview', 'gemini-2.5-flash-lite'];
+  // Current model hierarchy: 2.5-flash stable > 3.0 preview. (2.5-flash-lite is
+  // 404 for new users, removed 2026-07.)
+  const models = [GEMINI_MODEL, 'gemini-3-flash-preview'];
 
   for (const model of models) {
     try {
@@ -66,10 +88,7 @@ async function queryGemini(prompt, systemPrompt, useGrounding = true) {
 
       logger.info(`[Gemini] Calling ${model} (grounding=${useGrounding})`);
 
-      const response = await axios.post(url, body, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 60000
-      });
+      const response = await postGeminiWithRetry(url, body);
 
       // Extract text from response
       const candidates = response.data.candidates || [];
@@ -91,13 +110,13 @@ async function queryGemini(prompt, systemPrompt, useGrounding = true) {
     } catch (err) {
       const status = err.response?.status;
       const errMsg = err.response?.data?.error?.message || err.message;
-      
+
       // If model not found or deprecated, try next
       if (status === 404 || status === 400) {
         logger.warn(`[Gemini] ${model}: ${status} - ${errMsg.substring(0, 150)}. Trying next model...`);
         continue;
       }
-      
+
       // For other errors (429 quota, 403 auth), throw immediately
       throw err;
     }
