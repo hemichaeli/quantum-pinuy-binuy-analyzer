@@ -10,6 +10,23 @@ const { logger } = require('./logger');
 
 const PERPLEXITY_API = 'https://api.perplexity.ai/chat/completions';
 
+// Hard daily brake on the paid Perplexity fallback. When Gemini fails, every
+// enrichment call spills here; without a cap that is a runaway credit burn
+// (1,100+ sonar calls/day observed 2026-07). In-process counter, resets daily.
+// Override with PPLX_DAILY_CAP (0 = disable Perplexity entirely).
+let _pplxDay = null, _pplxCount = 0, _pplxWarned = false;
+function pplxAllowed() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_pplxDay !== today) { _pplxDay = today; _pplxCount = 0; _pplxWarned = false; }
+  const cap = parseInt(process.env.PPLX_DAILY_CAP || '300', 10);
+  if (_pplxCount >= cap) {
+    if (!_pplxWarned) { logger.warn(`[llmSearch] Perplexity daily cap ${cap} reached; suppressing further sonar calls today`); _pplxWarned = true; }
+    return false;
+  }
+  _pplxCount++;
+  return true;
+}
+
 async function searchLLM(systemPrompt, userPrompt, opts = {}) {
   const maxTokens = opts.maxTokens || 3000;
   const provider = process.env.SCRAPER_LLM || 'gemini';
@@ -26,6 +43,7 @@ async function searchLLM(systemPrompt, userPrompt, opts = {}) {
 
   const apiKey = process.env.PERPLEXITY_API_KEY || process.env.SONAR_API_KEY;
   if (!apiKey) return null;
+  if (!pplxAllowed()) return null;
   try {
     const res = await axios.post(PERPLEXITY_API, {
       model: 'sonar',
