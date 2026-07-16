@@ -78,10 +78,46 @@ function recordAiUsage(row) {
   ).catch((e) => { /* swallow — logging must never break a provider call */ void e; });
 }
 
+// ── Universal daily brake on paid Perplexity ─────────────────────────────────
+// A REQUEST interceptor that blocks every outbound call to api.perplexity.ai once
+// the day's count hits PPLX_DAILY_CAP. This is the single chokepoint that covers
+// ALL ~24 direct callers (scanComplex, scrapers, enrichment, etc.). Seeds the
+// day's count from ai_usage_log on rollover so it survives process restarts.
+// PPLX_DAILY_CAP=0 disables Perplexity entirely (Gemini-only).
+const _pplx = { day: null, count: 0, warned: false };
+async function pplxRequestGate(config) {
+  const url = (config?.url || '').toLowerCase();
+  if (!url.includes('api.perplexity.ai')) return config;
+
+  const cap = parseInt(process.env.PPLX_DAILY_CAP || '150', 10);
+  const today = new Date().toISOString().slice(0, 10);
+  if (_pplx.day !== today) {
+    _pplx.day = today; _pplx.count = 0; _pplx.warned = false;
+    try {
+      const { rows } = await pool.query(
+        `SELECT COUNT(*)::int c FROM ai_usage_log WHERE provider='perplexity'
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Jerusalem') AT TIME ZONE 'Asia/Jerusalem'`);
+      _pplx.count = rows[0]?.c || 0;
+    } catch (e) { /* best-effort seed */ }
+  }
+  if (cap <= 0 || _pplx.count >= cap) {
+    if (!_pplx.warned) {
+      logger.warn(`[AIUsage] Perplexity daily cap reached (cap=${cap}, count=${_pplx.count}) — blocking further sonar calls today`);
+      _pplx.warned = true;
+    }
+    const err = new Error(`Perplexity daily cap ${cap} reached — call blocked`);
+    err.__pplxBlocked = true;
+    throw err;
+  }
+  _pplx.count++;
+  return config;
+}
+
 // Register the global interceptor once.
 function installAiUsageInterceptor() {
   if (installed) return;
   installed = true;
+  axios.interceptors.request.use(pplxRequestGate, (e) => Promise.reject(e));
   axios.interceptors.response.use(
     (response) => {
       try {
